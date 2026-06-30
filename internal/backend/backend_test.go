@@ -791,6 +791,297 @@ func TestAssociationCreateQueuesCurrentVersion(t *testing.T) {
 	}
 }
 
+func TestAssociationSecretKeyQueuesAndSyncsPerSourceKey(t *testing.T) {
+	b := Backend(&logical.BackendConfig{})
+	storage := &logical.InmemStorage{}
+
+	writeAppDBSecretData(t, b, storage, map[string]interface{}{
+		"password": "initial",
+		"username": "appuser",
+	})
+	createFakeDestination(t, b, storage, "default")
+	markAppDBSyncable(t, b, storage)
+
+	planResp := handleRequest(t, b, storage, logical.UpdateOperation, "associations/app/db/plan", map[string]interface{}{
+		"destination_type": providerTypeFake,
+		"destination_name": "default",
+		"name_template":    "prod/{{ path }}/{{ key }}",
+		"granularity":      syncGranularitySecretKey,
+		"format":           defaultAssociationFormat,
+	})
+	assertNoErrorResponse(t, planResp)
+	if got := planResp.Data["action"]; got != providers.PlanActionCreate {
+		t.Fatalf("secret-key plan action = %v, want %s", got, providers.PlanActionCreate)
+	}
+	if got := planResp.Data["granularity"]; got != syncGranularitySecretKey {
+		t.Fatalf("secret-key plan granularity = %v, want %s", got, syncGranularitySecretKey)
+	}
+	planObjects := objectsByIDFromRaw(t, planResp.Data["objects"])
+	assertPlanObject(t, planObjects, "password", "prod/app/db/password")
+	assertPlanObject(t, planObjects, "username", "prod/app/db/username")
+	if strings.Contains(fmt.Sprint(planResp.Data), "initial") || strings.Contains(fmt.Sprint(planResp.Data), "appuser") {
+		t.Fatalf("secret-key plan response contains secret value: %#v", planResp.Data)
+	}
+
+	associationResp := createFakeSecretKeyAssociation(t, b, storage, deleteModeRetain)
+	associationID := associationIDFromResponse(t, associationResp)
+	operationIDs := operationIDsFromResponse(t, associationResp)
+	if len(operationIDs) != 2 {
+		t.Fatalf("secret-key association operation IDs = %v, want two operations", operationIDs)
+	}
+	assertOperationObjectIDs(t, storage, operationIDs, 1, outboxStatePending, []string{"password", "username"})
+
+	runPeriodicAllowed(t, b, storage, "periodic")
+	statusResp := handleRequest(t, b, storage, logical.ReadOperation, "status/app/db", nil)
+	assertNoErrorResponse(t, statusResp)
+	if got := statusResp.Data["state"]; got != string(domain.SyncStateSynced) {
+		t.Fatalf("secret-key status state = %v, want %s", got, domain.SyncStateSynced)
+	}
+	statusObjects := objectsByIDFromRaw(t, statusResp.Data["objects"])
+	assertSecretKeySyncedStatusObject(
+		t,
+		statusObjects,
+		"password",
+		associationID,
+		"prod/app/db/password",
+		operationIDs[0],
+	)
+	assertSecretKeySyncedStatusObject(
+		t,
+		statusObjects,
+		"username",
+		associationID,
+		"prod/app/db/username",
+		operationIDs[1],
+	)
+
+	updateResp := writeAppDBSecretData(t, b, storage, map[string]interface{}{
+		"password": "rotated",
+		"username": "appuser",
+	})
+	updateMetadata := updateResp.Data["metadata"].(map[string]interface{})
+	updateOperationIDs := operationIDsFromMetadata(t, updateMetadata)
+	if len(updateOperationIDs) != 2 {
+		t.Fatalf("secret-key update operation IDs = %v, want two operations", updateOperationIDs)
+	}
+	assertOperationObjectIDs(t, storage, updateOperationIDs, 2, outboxStatePending, []string{"password", "username"})
+}
+
+func TestAssociationSecretKeyDeleteModeQueuesPerSourceKeyDeletes(t *testing.T) {
+	b := Backend(&logical.BackendConfig{})
+	storage := &logical.InmemStorage{}
+
+	writeAppDBSecretData(t, b, storage, map[string]interface{}{
+		"password": "initial",
+		"username": "appuser",
+	})
+	createFakeDestination(t, b, storage, "default")
+	createFakeSecretKeyAssociation(t, b, storage, deleteModeDelete)
+	runPeriodicAllowed(t, b, storage, "periodic upsert")
+
+	deleteResp := handleRequest(t, b, storage, logical.DeleteOperation, "data/app/db", nil)
+	assertNoErrorResponse(t, deleteResp)
+	deleteOperationIDs := operationIDsFromMetadata(t, deleteResp.Data["metadata"].(map[string]interface{}))
+	if len(deleteOperationIDs) != 2 {
+		t.Fatalf("secret-key delete operation IDs = %v, want two operations", deleteOperationIDs)
+	}
+	for _, operationID := range deleteOperationIDs {
+		operation := assertOutboxOperation(t, storage, operationID, 1, outboxStatePending)
+		if got := operation.Type; got != outbox.OperationTypeDelete {
+			t.Fatalf("secret-key delete operation type = %s, want %s", got, outbox.OperationTypeDelete)
+		}
+	}
+	assertOperationObjectIDs(t, storage, deleteOperationIDs, 1, outboxStatePending, []string{"password", "username"})
+
+	runPeriodicAllowed(t, b, storage, "periodic delete")
+	statusResp := handleRequest(t, b, storage, logical.ReadOperation, "status/app/db", nil)
+	assertNoErrorResponse(t, statusResp)
+	statusObjects := objectsByIDFromRaw(t, statusResp.Data["objects"])
+	for _, objectID := range []string{"password", "username"} {
+		object := statusObjects[objectID]
+		if got := object["state"]; got != string(domain.SyncStateRemoteMissing) {
+			t.Fatalf("%s status state = %v, want %s", objectID, got, domain.SyncStateRemoteMissing)
+		}
+		if got := object["remote_version"]; got != "deleted" {
+			t.Fatalf("%s remote version = %v, want deleted", objectID, got)
+		}
+	}
+}
+
+func TestAssociationSecretKeyValidation(t *testing.T) {
+	b := Backend(&logical.BackendConfig{})
+	storage := &logical.InmemStorage{}
+
+	writeAppDBSecretData(t, b, storage, map[string]interface{}{
+		"password": "initial",
+	})
+	createFakeDestination(t, b, storage, "default")
+	markAppDBSyncable(t, b, storage)
+
+	resolvedNameResp := handleRequest(
+		t,
+		b,
+		storage,
+		logical.UpdateOperation,
+		"associations/app/db",
+		map[string]interface{}{
+			"destination_type": providerTypeFake,
+			"destination_name": "default",
+			"resolved_name":    "prod/app/db/password",
+			"name_template":    "prod/{{ path }}/{{ key }}",
+			"granularity":      syncGranularitySecretKey,
+			"format":           defaultAssociationFormat,
+		},
+	)
+	if resolvedNameResp == nil || !resolvedNameResp.IsError() {
+		t.Fatalf("secret-key resolved_name response = %#v, want error", resolvedNameResp)
+	}
+
+	missingKeyResp := handleRequest(t, b, storage, logical.UpdateOperation, "associations/app/db", map[string]interface{}{
+		"destination_type": providerTypeFake,
+		"destination_name": "default",
+		"name_template":    "prod/static",
+		"granularity":      syncGranularitySecretKey,
+		"format":           defaultAssociationFormat,
+	})
+	if missingKeyResp == nil || !missingKeyResp.IsError() {
+		t.Fatalf("secret-key template without key response = %#v, want error", missingKeyResp)
+	}
+
+	kubernetesResp := handleRequest(
+		t,
+		b,
+		storage,
+		logical.UpdateOperation,
+		"destinations/k8s/prod",
+		map[string]interface{}{
+			"description":                          "kubernetes production",
+			kubernetessecrets.ConfigKeyNamespace:   "apps",
+			kubernetessecrets.ConfigKeyAuthMode:    kubernetessecrets.AuthModeInCluster,
+			kubernetessecrets.ConfigKeyKubeContext: "",
+		},
+	)
+	if kubernetesResp != nil && kubernetesResp.IsError() {
+		t.Fatalf("unexpected kubernetes destination write error: %v", kubernetesResp.Error())
+	}
+	unsupportedResp := handleRequest(t, b, storage, logical.UpdateOperation, "associations/app/db", map[string]interface{}{
+		"destination_type": kubernetessecrets.ProviderType,
+		"destination_name": "prod",
+		"name_template":    "prod/{{ path }}/{{ key }}",
+		"granularity":      syncGranularitySecretKey,
+		"format":           defaultAssociationFormat,
+	})
+	if unsupportedResp == nil || !unsupportedResp.IsError() {
+		t.Fatalf("secret-key unsupported provider response = %#v, want error", unsupportedResp)
+	}
+}
+
+func TestAssociationSecretKeyRejectsUnsupportedSourceKey(t *testing.T) {
+	b := Backend(&logical.BackendConfig{})
+	storage := &logical.InmemStorage{}
+
+	writeAppDBSecretData(t, b, storage, map[string]interface{}{
+		"password": "initial",
+	})
+	createFakeDestination(t, b, storage, "default")
+	createFakeSecretKeyAssociation(t, b, storage, deleteModeRetain)
+
+	blockedResp := writeAppDBSecretDataNoAssert(t, b, storage, map[string]interface{}{
+		"bad/key":  "blocked",
+		"password": "rotated",
+	})
+	if blockedResp == nil || !blockedResp.IsError() {
+		t.Fatalf("secret-key unsupported key write response = %#v, want error", blockedResp)
+	}
+	readResp := handleRequest(t, b, storage, logical.ReadOperation, "data/app/db", nil)
+	assertNoErrorResponse(t, readResp)
+	readMetadata := readResp.Data["metadata"].(map[string]interface{})
+	if got := readMetadata["version"]; got != 1 {
+		t.Fatalf("blocked secret-key write committed version = %v, want 1", got)
+	}
+}
+
+func TestAssociationSecretKeyReconcileAppliesPerSourceKeyStatus(t *testing.T) {
+	b := Backend(&logical.BackendConfig{})
+	storage := &logical.InmemStorage{}
+
+	writeAppDBSecretData(t, b, storage, map[string]interface{}{
+		"password": "secret-canary",
+		"username": "appuser",
+	})
+	createFakeDestination(t, b, storage, "default")
+	associationResp := createFakeSecretKeyAssociation(t, b, storage, deleteModeRetain)
+	associationID := associationIDFromResponse(t, associationResp)
+
+	resp := handleRequest(t, b, storage, logical.UpdateOperation, "reconcile/app/db", nil)
+	assertNoErrorResponse(t, resp)
+	if got := resp.Data["state"]; got != string(domain.SyncStateSynced) {
+		t.Fatalf("secret-key reconcile state = %v, want %s", got, domain.SyncStateSynced)
+	}
+	reconcileObjects := objectsByIDFromRaw(t, resp.Data["objects"])
+	for _, objectID := range []string{"password", "username"} {
+		object := reconcileObjects[objectID]
+		if got := object["state"]; got != string(domain.SyncStateSynced) {
+			t.Fatalf("%s reconcile state = %v, want %s", objectID, got, domain.SyncStateSynced)
+		}
+		if got := object["association_id"]; got != associationID {
+			t.Fatalf("%s reconcile association_id = %v, want %s", objectID, got, associationID)
+		}
+	}
+	if strings.Contains(fmt.Sprint(resp.Data), "secret-canary") || strings.Contains(fmt.Sprint(resp.Data), "appuser") {
+		t.Fatalf("secret-key reconcile response contains secret value: %#v", resp.Data)
+	}
+
+	statusResp := handleRequest(t, b, storage, logical.ReadOperation, "status/app/db", nil)
+	assertNoErrorResponse(t, statusResp)
+	statusObjects := objectsByIDFromRaw(t, statusResp.Data["objects"])
+	for _, objectID := range []string{"password", "username"} {
+		object := statusObjects[objectID]
+		if got := object["state"]; got != string(domain.SyncStateSynced) {
+			t.Fatalf("%s status state = %v, want %s", objectID, got, domain.SyncStateSynced)
+		}
+	}
+}
+
+func TestAssociationSecretKeyDisableMarksPerSourceKeyStatus(t *testing.T) {
+	b := Backend(&logical.BackendConfig{})
+	storage := &logical.InmemStorage{}
+
+	writeAppDBSecretData(t, b, storage, map[string]interface{}{
+		"password": "initial",
+		"username": "appuser",
+	})
+	createFakeDestination(t, b, storage, "default")
+	associationResp := createFakeSecretKeyAssociation(t, b, storage, deleteModeRetain)
+	associationID := associationIDFromResponse(t, associationResp)
+	operationIDs := operationIDsFromResponse(t, associationResp)
+
+	disableResp := handleRequest(
+		t,
+		b,
+		storage,
+		logical.UpdateOperation,
+		"associations/app/db/"+associationID+"/disable",
+		nil,
+	)
+	assertNoErrorResponse(t, disableResp)
+	assertAssociationEnabled(t, disableResp, false)
+	assertStringSlice(t, stringSliceFromResponse(t, disableResp, "canceled_operation_ids"), operationIDs)
+
+	statusResp := handleRequest(t, b, storage, logical.ReadOperation, "status/app/db", nil)
+	assertNoErrorResponse(t, statusResp)
+	statusObjects := objectsByIDFromRaw(t, statusResp.Data["objects"])
+	for _, objectID := range []string{"password", "username"} {
+		object := statusObjects[objectID]
+		if got := object["state"]; got != string(domain.SyncStateDisabled) {
+			t.Fatalf("%s status state = %v, want %s", objectID, got, domain.SyncStateDisabled)
+		}
+	}
+	if _, ok := statusObjects[syncObjectIDSecretPath]; ok {
+		t.Fatalf("secret-key status must not include %s object: %#v", syncObjectIDSecretPath, statusObjects)
+	}
+}
+
 func TestAssociationRequiresSyncableMetadata(t *testing.T) {
 	b := Backend(&logical.BackendConfig{})
 	storage := &logical.InmemStorage{}
@@ -1695,7 +1986,7 @@ func TestRecoveryCompletesIntentWithoutCommittedVersion(t *testing.T) {
 		t.Fatalf("read association: %v", err)
 	}
 	now := nowUTC().Format(timeFormatRFC3339)
-	operation := newAssociationOutboxRecord(*association, 99, now)
+	operation := newAssociationOutboxRecord(*association, 99, syncObjectIDSecretPath, now)
 	intent := newEnqueueIntentRecord("app/db", 99, []outboxRecord{operation}, now)
 	if err := putEnqueueIntent(context.Background(), storage, intent); err != nil {
 		t.Fatalf("write enqueue intent: %v", err)
@@ -1896,6 +2187,111 @@ func assertDisabledStatusObject(t *testing.T, b logical.Backend, storage logical
 	}
 }
 
+func objectsByIDFromRaw(t *testing.T, raw interface{}) map[string]map[string]interface{} { //nolint:forbidigo
+	t.Helper()
+	objects, ok := raw.([]map[string]interface{})
+	if !ok {
+		t.Fatalf("objects = %T, want []map[string]interface{}", raw)
+	}
+	byID := make(map[string]map[string]interface{}, len(objects)) //nolint:forbidigo
+	for _, object := range objects {
+		objectID, ok := object["object_id"].(string)
+		if !ok || objectID == "" {
+			t.Fatalf("object id = %v, want non-empty string", object["object_id"])
+		}
+		if _, exists := byID[objectID]; exists {
+			t.Fatalf("duplicate object id %q in %#v", objectID, objects)
+		}
+		byID[objectID] = object
+	}
+	return byID
+}
+
+func assertPlanObject(
+	t *testing.T,
+	objects map[string]map[string]interface{}, //nolint:forbidigo
+	objectID string,
+	resolvedName string,
+) {
+	t.Helper()
+	object, ok := objects[objectID]
+	if !ok {
+		t.Fatalf("plan object %q missing in %#v", objectID, objects)
+	}
+	if got := object["resolved_name"]; got != resolvedName {
+		t.Fatalf("%s resolved_name = %v, want %s", objectID, got, resolvedName)
+	}
+	if got := object["action"]; got != providers.PlanActionCreate {
+		t.Fatalf("%s action = %v, want %s", objectID, got, providers.PlanActionCreate)
+	}
+	if got := object["payload_sha256"].(string); !strings.HasPrefix(got, "sha256:") {
+		t.Fatalf("%s payload_sha256 = %q, want sha256 prefix", objectID, got)
+	}
+	if got := object["payload_bytes"].(int); got <= 0 {
+		t.Fatalf("%s payload_bytes = %d, want positive", objectID, got)
+	}
+}
+
+func assertOperationObjectIDs(
+	t *testing.T,
+	storage logical.Storage,
+	operationIDs []string,
+	version int,
+	state string,
+	wantObjectIDs []string,
+) {
+	t.Helper()
+	if len(operationIDs) != len(wantObjectIDs) {
+		t.Fatalf("operation IDs = %v, want %d entries", operationIDs, len(wantObjectIDs))
+	}
+	got := make(map[string]struct{}, len(operationIDs))
+	for _, operationID := range operationIDs {
+		operation := assertOutboxOperation(t, storage, operationID, version, state)
+		got[operation.ObjectID] = struct{}{}
+	}
+	for _, wantObjectID := range wantObjectIDs {
+		if _, ok := got[wantObjectID]; !ok {
+			t.Fatalf("operation object IDs = %v, missing %s", got, wantObjectID)
+		}
+	}
+	if len(got) != len(wantObjectIDs) {
+		t.Fatalf("operation object IDs = %v, want %v", got, wantObjectIDs)
+	}
+}
+
+func assertSecretKeySyncedStatusObject(
+	t *testing.T,
+	objects map[string]map[string]interface{}, //nolint:forbidigo
+	objectID string,
+	associationID string,
+	resolvedName string,
+	operationID string,
+) {
+	t.Helper()
+	object, ok := objects[objectID]
+	if !ok {
+		t.Fatalf("status object %q missing in %#v", objectID, objects)
+	}
+	if got := object["association_id"]; got != associationID {
+		t.Fatalf("%s association_id = %v, want %s", objectID, got, associationID)
+	}
+	if got := object["resolved_name"]; got != resolvedName {
+		t.Fatalf("%s resolved_name = %v, want %s", objectID, got, resolvedName)
+	}
+	if got := object["state"]; got != string(domain.SyncStateSynced) {
+		t.Fatalf("%s state = %v, want %s", objectID, got, domain.SyncStateSynced)
+	}
+	if got := object["last_operation_id"]; got != operationID {
+		t.Fatalf("%s last_operation_id = %v, want %s", objectID, got, operationID)
+	}
+	if got := object["remote_version"]; got != "fake" {
+		t.Fatalf("%s remote_version = %v, want fake", objectID, got)
+	}
+	if got := object["payload_sha256"].(string); !strings.HasPrefix(got, "sha256:") {
+		t.Fatalf("%s payload_sha256 = %q, want sha256 prefix", objectID, got)
+	}
+}
+
 func assertStatusObjectErrorClass(
 	t *testing.T,
 	b logical.Backend,
@@ -2049,13 +2445,33 @@ func writeAppDBSecret(
 	password string,
 ) *logical.Response {
 	t.Helper()
-	resp := handleRequest(t, b, storage, logical.UpdateOperation, "data/app/db", map[string]interface{}{
-		"data": map[string]interface{}{
-			"password": password,
-		},
+	return writeAppDBSecretData(t, b, storage, map[string]interface{}{
+		"password": password,
 	})
+}
+
+func writeAppDBSecretData(
+	t *testing.T,
+	b logical.Backend,
+	storage logical.Storage,
+	data map[string]interface{},
+) *logical.Response {
+	t.Helper()
+	resp := writeAppDBSecretDataNoAssert(t, b, storage, data)
 	assertNoErrorResponse(t, resp)
 	return resp
+}
+
+func writeAppDBSecretDataNoAssert(
+	t *testing.T,
+	b logical.Backend,
+	storage logical.Storage,
+	data map[string]interface{},
+) *logical.Response {
+	t.Helper()
+	return handleRequest(t, b, storage, logical.UpdateOperation, "data/app/db", map[string]interface{}{
+		"data": data,
+	})
 }
 
 func createFakeDestination(t *testing.T, b logical.Backend, storage logical.Storage, name string) {
@@ -2078,6 +2494,26 @@ func createDefaultFakeAssociation(t *testing.T, b logical.Backend, storage logic
 		"granularity":      syncObjectIDSecretPath,
 		"format":           defaultAssociationFormat,
 	})
+}
+
+func createFakeSecretKeyAssociation(
+	t *testing.T,
+	b logical.Backend,
+	storage logical.Storage,
+	deleteMode string,
+) *logical.Response {
+	t.Helper()
+	markAppDBSyncable(t, b, storage)
+	resp := handleRequest(t, b, storage, logical.UpdateOperation, "associations/app/db", map[string]interface{}{
+		"destination_type": providerTypeFake,
+		"destination_name": "default",
+		"name_template":    "prod/{{ path }}/{{ key }}",
+		"granularity":      syncGranularitySecretKey,
+		"format":           defaultAssociationFormat,
+		"delete_mode":      deleteMode,
+	})
+	assertNoErrorResponse(t, resp)
+	return resp
 }
 
 func createFakeAssociationWithDeleteMode(

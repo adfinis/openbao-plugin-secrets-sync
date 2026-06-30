@@ -298,7 +298,14 @@ Later format:
 Granularity:
 
 - `secret-path`: one destination secret per OpenBao secret path.
-- `secret-key`: one destination secret per key in OpenBao secret data.
+- `secret-key`: one destination secret per top-level key in OpenBao secret
+  data.
+
+Core dispatch supports both granularities when the destination provider
+advertises the matching capability. For `secret-key` and `json` format, each
+remote payload is canonical JSON containing only that source key. Source keys
+used as `secret-key` object identifiers must be non-empty, have no surrounding
+whitespace, and must not contain `/`, `.`, or `..`.
 
 Canonical JSON requirements:
 
@@ -370,7 +377,7 @@ combinations needed by unit and integration tests, including:
 - validation, authentication, authorization, rate-limit, unavailable,
   ownership, collision, and validation error classes;
 - unhealthy destination diagnostics;
-- partial success for `secret-key` in a later slice;
+- `secret-path` and `secret-key` granularity;
 - delayed read-after-write consistency in a later slice.
 
 ### AWS Secrets Manager
@@ -384,6 +391,10 @@ assume-role auth, seal-wrapped external ID handling, explicit custom endpoint
 policies, an SDK-backed client boundary, LocalStack e2e coverage, and mocked
 behavior tests for health, plan, upsert, owned delete, read-state, ownership
 checks, and AWS error classification.
+
+Current granularity support: `secret-path` only. The provider advertises
+`SupportsSecretKey: false` until AWS naming, collision, and cleanup semantics
+are implemented and covered by tests.
 
 Required implementation behavior:
 
@@ -425,8 +436,10 @@ create/update/delete/read-state/health behavior, ownership labels and
 annotations, payload hash metadata, Kubernetes API error classification, and a
 provider conformance lifecycle test using the client-go fake client.
 
-The current backend still only dispatches `secret-path` granularity. Kubernetes
-Secret `secret-key` granularity and per-key partial status remain later work.
+Current granularity support: `secret-path` only. The core engine now expands
+`secret-key` associations for providers that opt in, but Kubernetes Secret
+`secret-key` support remains later work because it needs a clear provider-level
+model for Secret name, data key, ownership metadata, and cleanup semantics.
 
 ## Provider Test Expectations
 

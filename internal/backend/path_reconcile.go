@@ -97,12 +97,14 @@ func (b *secretSyncBackend) reconcilePath(
 	results := make([]reconcileObjectResult, 0, len(associations))
 	now := nowUTC().Format(timeFormatRFC3339)
 	for _, association := range associations {
-		result := b.reconcileAssociation(ctx, storage, association, *metadata, *version)
-		results = append(results, result)
-		b.recordReconcileRun(ctx, result)
-		if apply {
-			if err := putReconcileStatus(ctx, storage, result, now); err != nil {
-				return nil, err
+		associationResults := b.reconcileAssociation(ctx, storage, association, *metadata, *version)
+		for _, result := range associationResults {
+			results = append(results, result)
+			b.recordReconcileRun(ctx, result)
+			if apply {
+				if err := putReconcileStatus(ctx, storage, result, now); err != nil {
+					return nil, err
+				}
 			}
 		}
 	}
@@ -125,49 +127,128 @@ func (b *secretSyncBackend) reconcileAssociation(
 	association associationRecord,
 	metadata metadataRecord,
 	version versionRecord,
-) reconcileObjectResult {
-	result := reconcileObjectResult{
-		association: association,
-		version:     metadata.CurrentVersion,
-		state:       domain.SyncStateUnknown,
+) []reconcileObjectResult {
+	objectIDs, objectErr := associationObjectIDs(association, version.Data)
+	if objectErr != nil {
+		return []reconcileObjectResult{newReconcileObjectResult(
+			association,
+			metadata.CurrentVersion,
+			"",
+			"",
+			domain.SyncStateValidationError,
+			providers.ErrorClassValidation,
+			objectErr.Error(),
+		)}
 	}
 	if !association.Enabled {
-		result.state = domain.SyncStateDisabled
-		result.message = "association is disabled"
-		return result
-	}
-	if association.Granularity != syncObjectIDSecretPath {
-		result.state = domain.SyncStateValidationError
-		result.errorClass = providers.ErrorClassValidation
-		result.message = "reconcile supports secret-path granularity"
-		return result
+		return reconcileStaticResults(
+			association,
+			metadata.CurrentVersion,
+			objectIDs,
+			domain.SyncStateDisabled,
+			"",
+			"association is disabled",
+		)
 	}
 	provider, err := b.providerRegistry.MustGet(association.DestinationType)
 	if err != nil {
-		result.state = domain.SyncStateValidationError
-		result.errorClass = providers.ErrorClassValidation
-		result.message = "destination provider is unsupported"
-		return result
+		return reconcileStaticResults(
+			association,
+			metadata.CurrentVersion,
+			objectIDs,
+			domain.SyncStateValidationError,
+			providers.ErrorClassValidation,
+			"destination provider is unsupported",
+		)
 	}
 	destination, err := getDestination(ctx, storage, association.DestinationType, association.DestinationName)
 	if err != nil {
-		result.state = domain.SyncStateInternalError
-		result.errorClass = providers.ErrorClassInternal
-		result.message = "destination lookup failed"
-		return result
+		return reconcileStaticResults(
+			association,
+			metadata.CurrentVersion,
+			objectIDs,
+			domain.SyncStateInternalError,
+			providers.ErrorClassInternal,
+			"destination lookup failed",
+		)
 	}
 	if destination == nil {
-		result.state = domain.SyncStateValidationError
-		result.errorClass = providers.ErrorClassValidation
-		result.message = "destination is missing"
-		return result
+		return reconcileStaticResults(
+			association,
+			metadata.CurrentVersion,
+			objectIDs,
+			domain.SyncStateValidationError,
+			providers.ErrorClassValidation,
+			"destination is missing",
+		)
 	}
 	if destination.Disabled {
-		result.state = domain.SyncStateDisabled
-		result.message = "destination is disabled"
-		return result
+		return reconcileStaticResults(
+			association,
+			metadata.CurrentVersion,
+			objectIDs,
+			domain.SyncStateDisabled,
+			"",
+			"destination is disabled",
+		)
 	}
-	payload, failure := prepareReconcilePayload(provider, association, version)
+	resolvedDestinationConfig, err := destinationConfig(ctx, storage, *destination)
+	if err != nil {
+		return reconcileStaticResults(
+			association,
+			metadata.CurrentVersion,
+			objectIDs,
+			domain.SyncStateInternalError,
+			providers.ErrorClassInternal,
+			"destination config resolution failed",
+		)
+	}
+	results := make([]reconcileObjectResult, 0, len(objectIDs))
+	for _, objectID := range objectIDs {
+		results = append(results, b.reconcileAssociationObject(
+			ctx,
+			association,
+			provider,
+			resolvedDestinationConfig,
+			metadata.CurrentVersion,
+			version,
+			objectID,
+		))
+	}
+	return results
+}
+
+func (b *secretSyncBackend) reconcileAssociationObject(
+	ctx context.Context,
+	association associationRecord,
+	provider providers.Provider,
+	destinationConfig providers.DestinationConfig,
+	sourceVersion int,
+	version versionRecord,
+	objectID string,
+) reconcileObjectResult {
+	resolvedName, err := associationResolvedNameForObject(association, objectID)
+	if err != nil {
+		return newReconcileObjectResult(
+			association,
+			sourceVersion,
+			objectID,
+			"",
+			domain.SyncStateValidationError,
+			providers.ErrorClassValidation,
+			err.Error(),
+		)
+	}
+	result := newReconcileObjectResult(
+		association,
+		sourceVersion,
+		objectID,
+		resolvedName,
+		domain.SyncStateUnknown,
+		"",
+		"",
+	)
+	payload, failure := prepareReconcilePayload(provider, association, version, objectID)
 	if failure != nil {
 		result.state = syncStateForFailureClass(failure.class)
 		result.errorClass = failure.class
@@ -176,19 +257,14 @@ func (b *secretSyncBackend) reconcileAssociation(
 		return result
 	}
 	result.payload = payload
-	resolvedDestinationConfig, err := destinationConfig(ctx, storage, *destination)
-	if err != nil {
-		result.state = domain.SyncStateInternalError
-		result.errorClass = providers.ErrorClassInternal
-		result.message = "destination config resolution failed"
-		return result
-	}
 	providerStart := time.Now()
 	remoteState, err := provider.ReadState(ctx, providerReadStateRequest(
 		association,
-		resolvedDestinationConfig,
-		metadata.CurrentVersion,
+		destinationConfig,
+		sourceVersion,
 		payload,
+		objectID,
+		resolvedName,
 	))
 	b.recordProviderRequest(ctx, provider.Type(), observability.OperationReadState, err, time.Since(providerStart))
 	if err != nil {
@@ -205,7 +281,7 @@ func (b *secretSyncBackend) reconcileAssociation(
 	}
 	result.remoteState = remoteState
 	result.state, result.errorClass, result.message = reconcileStateForRemoteState(
-		metadata.CurrentVersion,
+		sourceVersion,
 		payload,
 		*remoteState,
 	)
@@ -216,8 +292,9 @@ func prepareReconcilePayload(
 	provider providers.Provider,
 	association associationRecord,
 	version versionRecord,
+	objectID string,
 ) (payloadpkg.CanonicalPayload, *operationFailure) {
-	payload, err := buildCanonicalPayload(association.Format, version.Data)
+	payload, err := buildCanonicalPayloadForObject(association.Format, version.Data, association.Granularity, objectID)
 	if err != nil {
 		return payloadpkg.CanonicalPayload{}, &operationFailure{
 			class:   providers.ErrorClassValidation,
@@ -238,15 +315,17 @@ func providerReadStateRequest(
 	destination providers.DestinationConfig,
 	version int,
 	payload payloadpkg.CanonicalPayload,
+	objectID string,
+	resolvedName string,
 ) providers.ReadStateRequest {
 	return providers.ReadStateRequest{
 		Destination:   destination,
-		ResolvedName:  association.ResolvedName,
+		ResolvedName:  resolvedName,
 		PayloadSHA256: payload.SHA256,
 		SourcePath:    association.Path,
 		SourceVersion: version,
 		AssociationID: association.ID,
-		ObjectID:      association.Granularity,
+		ObjectID:      objectID,
 	}
 }
 
@@ -289,9 +368,9 @@ func putReconcileStatus(
 		Path:           result.association.Path,
 		Version:        result.version,
 		AssociationID:  result.association.ID,
-		ObjectID:       syncObjectIDSecretPath,
+		ObjectID:       result.objectID,
 		DestinationRef: result.association.DestinationRef,
-		ResolvedName:   result.association.ResolvedName,
+		ResolvedName:   result.resolvedName,
 		State:          string(result.state),
 		PayloadSHA256:  result.payload.SHA256,
 		LastErrorClass: string(result.errorClass),
@@ -303,7 +382,7 @@ func putReconcileStatus(
 	if result.errorClass != "" {
 		status.LastError = "reconcile failed: " + result.message
 	}
-	existing, err := getStatus(ctx, storage, result.association.Path, result.association.ID, syncObjectIDSecretPath)
+	existing, err := getStatus(ctx, storage, result.association.Path, result.association.ID, result.objectID)
 	if err != nil {
 		return err
 	}
@@ -348,13 +427,65 @@ func reconcileObservabilityResult(result reconcileObjectResult) string {
 }
 
 type reconcileObjectResult struct {
-	association associationRecord
-	version     int
-	payload     payloadpkg.CanonicalPayload
-	remoteState *providers.RemoteState
-	state       domain.SyncState
-	errorClass  providers.ErrorClass
-	message     string
+	association  associationRecord
+	version      int
+	objectID     string
+	resolvedName string
+	payload      payloadpkg.CanonicalPayload
+	remoteState  *providers.RemoteState
+	state        domain.SyncState
+	errorClass   providers.ErrorClass
+	message      string
+}
+
+func newReconcileObjectResult(
+	association associationRecord,
+	version int,
+	objectID string,
+	resolvedName string,
+	state domain.SyncState,
+	errorClass providers.ErrorClass,
+	message string,
+) reconcileObjectResult {
+	if objectID == "" {
+		objectID = syncObjectIDSecretPath
+	}
+	if resolvedName == "" {
+		resolvedName, _ = associationResolvedNameForObject(association, objectID)
+	}
+	return reconcileObjectResult{
+		association:  association,
+		version:      version,
+		objectID:     objectID,
+		resolvedName: resolvedName,
+		state:        state,
+		errorClass:   errorClass,
+		message:      message,
+	}
+}
+
+func reconcileStaticResults(
+	association associationRecord,
+	version int,
+	objectIDs []string,
+	state domain.SyncState,
+	errorClass providers.ErrorClass,
+	message string,
+) []reconcileObjectResult {
+	results := make([]reconcileObjectResult, 0, len(objectIDs))
+	for _, objectID := range objectIDs {
+		resolvedName, _ := associationResolvedNameForObject(association, objectID)
+		results = append(results, newReconcileObjectResult(
+			association,
+			version,
+			objectID,
+			resolvedName,
+			state,
+			errorClass,
+			message,
+		))
+	}
+	return results
 }
 
 func reconcileObjectResponse(result reconcileObjectResult) map[string]interface{} { //nolint:forbidigo
@@ -374,9 +505,9 @@ func reconcileObjectResponse(result reconcileObjectResult) map[string]interface{
 	}
 	return newResponseData(
 		responseField("association_id", result.association.ID),
-		responseField("object_id", syncObjectIDSecretPath),
+		responseField("object_id", result.objectID),
 		responseField("destination_ref", result.association.DestinationRef),
-		responseField("resolved_name", result.association.ResolvedName),
+		responseField("resolved_name", result.resolvedName),
 		responseField("state", string(result.state)),
 		responseField("version", result.version),
 		responseField("payload_sha256", result.payload.SHA256),

@@ -28,11 +28,14 @@ const (
 	outboxStateFailedTerminal  = "failed_terminal"
 	outboxStateSucceeded       = "succeeded"
 	outboxStateCanceled        = "canceled"
-	syncObjectIDSecretPath     = "secret-path"
+	syncGranularitySecretPath  = "secret-path"
+	syncGranularitySecretKey   = "secret-key"
+	syncObjectIDSecretPath     = syncGranularitySecretPath
 	statusStoragePrefix        = "status/"
 	providerTypeFake           = "fake"
 	defaultAssociationFormat   = "json"
 	defaultNameTemplate        = "{{ path }}"
+	defaultPerKeyNameTemplate  = "{{ path }}/{{ key }}"
 	defaultDeleteMode          = deleteModeRetain
 	deleteModeRetain           = "retain"
 	deleteModeDelete           = "delete"

@@ -16,6 +16,9 @@ Implemented backend slices now include:
   Secrets coverage;
 - association creation, planning, deletion, source eligibility checks, name
   reservations, and template rendering;
+- core `secret-key` granularity expansion for providers that advertise support,
+  including per-key operation IDs, per-key status, per-key reconcile, and fake
+  provider coverage;
 - per-association disable, enable, and manual sync controls;
 - association `delete_mode` with source-delete enqueue semantics;
 - durable outbox, enqueue-intent recovery, queue summary, operation read,

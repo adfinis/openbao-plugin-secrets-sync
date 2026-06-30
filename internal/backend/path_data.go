@@ -86,13 +86,16 @@ func pathDataWrite(ctx context.Context, req *logical.Request, data *framework.Fi
 	if err != nil {
 		return nil, err
 	}
-	if err := ensureQueueCapacityFor(ctx, req.Storage, len(associations)); err != nil {
-		return logical.ErrorResponse(err.Error()), nil
-	}
 
 	nextVersion := metadata.CurrentVersion + 1
 	now := nowUTC().Format(timeFormatRFC3339)
-	operations, operationIDs := newAssociationOutboxRecords(associations, nextVersion, now)
+	operations, operationIDs, err := newAssociationOutboxRecords(associations, nextVersion, payload, now)
+	if err != nil {
+		return logical.ErrorResponse(err.Error()), nil
+	}
+	if err := ensureQueueCapacityFor(ctx, req.Storage, len(operations)); err != nil {
+		return logical.ErrorResponse(err.Error()), nil
+	}
 	if err := putPendingEnqueueIntent(ctx, req.Storage, path, nextVersion, operations, now); err != nil {
 		return nil, err
 	}
@@ -304,7 +307,17 @@ func buildSourceDeletePlan(
 	if err != nil {
 		return sourceDeletePlan{}, err
 	}
-	operations, operationIDs := newAssociationDeleteOutboxRecords(associations, version, now)
+	versionRecord, err := getVersion(ctx, storage, path, version)
+	if err != nil {
+		return sourceDeletePlan{}, err
+	}
+	if versionRecord == nil {
+		return sourceDeletePlan{}, fmt.Errorf("source version is unavailable")
+	}
+	operations, operationIDs, err := newAssociationDeleteOutboxRecords(associations, version, versionRecord.Data, now)
+	if err != nil {
+		return sourceDeletePlan{}, err
+	}
 	staleUpsertIDs, err := queuedUpsertIDsForPathVersion(ctx, storage, path, version)
 	if err != nil {
 		return sourceDeletePlan{}, err
@@ -432,34 +445,48 @@ func ensureQueueCapacityAfterReplacement(
 func newAssociationOutboxRecords(
 	associations []associationRecord,
 	version int,
+	payload secretPayload,
 	now string,
-) ([]outboxRecord, []string) {
+) ([]outboxRecord, []string, error) {
 	operations := make([]outboxRecord, 0, len(associations))
 	operationIDs := make([]string, 0, len(associations))
 	for _, association := range associations {
-		operation := newAssociationOutboxRecord(association, version, now)
-		operations = append(operations, operation)
-		operationIDs = append(operationIDs, operation.ID)
+		objectIDs, err := associationObjectIDs(association, payload)
+		if err != nil {
+			return nil, nil, err
+		}
+		for _, objectID := range objectIDs {
+			operation := newAssociationOutboxRecord(association, version, objectID, now)
+			operations = append(operations, operation)
+			operationIDs = append(operationIDs, operation.ID)
+		}
 	}
-	return operations, operationIDs
+	return operations, operationIDs, nil
 }
 
 func newAssociationDeleteOutboxRecords(
 	associations []associationRecord,
 	version int,
+	payload secretPayload,
 	now string,
-) ([]outboxRecord, []string) {
+) ([]outboxRecord, []string, error) {
 	operations := []outboxRecord{}
 	operationIDs := []string{}
 	for _, association := range associations {
 		if normalizedDeleteMode(association.DeleteMode) != deleteModeDelete {
 			continue
 		}
-		operation := newAssociationDeleteOutboxRecord(association, version, now)
-		operations = append(operations, operation)
-		operationIDs = append(operationIDs, operation.ID)
+		objectIDs, err := associationObjectIDs(association, payload)
+		if err != nil {
+			return nil, nil, err
+		}
+		for _, objectID := range objectIDs {
+			operation := newAssociationDeleteOutboxRecord(association, version, objectID, now)
+			operations = append(operations, operation)
+			operationIDs = append(operationIDs, operation.ID)
+		}
 	}
-	return operations, operationIDs
+	return operations, operationIDs, nil
 }
 
 func additionalQueuedOperationCount(
@@ -561,12 +588,12 @@ func enqueueIntentOperations(operations []outboxRecord) []enqueueIntentOperation
 	return intentOperations
 }
 
-func newAssociationOutboxRecord(association associationRecord, version int, now string) outboxRecord {
+func newAssociationOutboxRecord(association associationRecord, version int, objectID string, now string) outboxRecord {
 	id := newOperationID(
 		association.Path,
 		version,
 		association.ID,
-		syncObjectIDSecretPath,
+		objectID,
 		outbox.OperationTypeUpsert,
 	)
 	return outboxRecord{
@@ -575,22 +602,27 @@ func newAssociationOutboxRecord(association associationRecord, version int, now 
 		Path:           association.Path,
 		Version:        version,
 		AssociationID:  association.ID,
-		ObjectID:       syncObjectIDSecretPath,
+		ObjectID:       objectID,
 		DestinationRef: association.DestinationRef,
 		State:          outboxStatePending,
 		NotBefore:      now,
 		CreatedTime:    now,
 		UpdatedTime:    now,
-		IdempotencyKey: association.Path + ":" + strconv.Itoa(version) + ":" + association.ID + ":secret-path:upsert",
+		IdempotencyKey: association.Path + ":" + strconv.Itoa(version) + ":" + association.ID + ":" + objectID + ":upsert",
 	}
 }
 
-func newAssociationDeleteOutboxRecord(association associationRecord, version int, now string) outboxRecord {
+func newAssociationDeleteOutboxRecord(
+	association associationRecord,
+	version int,
+	objectID string,
+	now string,
+) outboxRecord {
 	id := newOperationID(
 		association.Path,
 		version,
 		association.ID,
-		syncObjectIDSecretPath,
+		objectID,
 		outbox.OperationTypeDelete,
 	)
 	return outboxRecord{
@@ -599,13 +631,13 @@ func newAssociationDeleteOutboxRecord(association associationRecord, version int
 		Path:           association.Path,
 		Version:        version,
 		AssociationID:  association.ID,
-		ObjectID:       syncObjectIDSecretPath,
+		ObjectID:       objectID,
 		DestinationRef: association.DestinationRef,
 		State:          outboxStatePending,
 		NotBefore:      now,
 		CreatedTime:    now,
 		UpdatedTime:    now,
-		IdempotencyKey: association.Path + ":" + strconv.Itoa(version) + ":" + association.ID + ":secret-path:delete",
+		IdempotencyKey: association.Path + ":" + strconv.Itoa(version) + ":" + association.ID + ":" + objectID + ":delete",
 	}
 }
 

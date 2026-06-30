@@ -210,6 +210,32 @@ bao write secret-sync/associations/app/db \
   delete_mode=delete
 ```
 
+`secret-key` granularity creates one destination object per top-level source
+key. It requires `name_template` instead of `resolved_name`, and the template
+must include `{{ key }}`:
+
+```sh
+bao write secret-sync/associations/app/db \
+  destination_type=fake \
+  destination_name=default \
+  name_template='prod/{{ path }}/{{ key }}' \
+  granularity=secret-key \
+  format=json \
+  delete_mode=retain
+```
+
+For `json` format, each remote object receives canonical JSON containing only
+its source key. For example, source data with `password` and `username` creates
+objects such as `prod/app/db/password` and `prod/app/db/username`. Source keys
+used with `secret-key` granularity must be non-empty, have no surrounding
+whitespace, and must not contain `/`, `.`, or `..`.
+
+Current provider support:
+
+- `fake`: `secret-path` and `secret-key`.
+- `aws-sm`: `secret-path` only.
+- `k8s`: `secret-path` only.
+
 The write returns `sync_operation_ids`. Queue processing is asynchronous.
 For one-to-one associations, lifecycle responses also include top-level fields
 such as `association_id`, `destination_ref`, `resolved_name`, `enabled`, and

@@ -122,7 +122,7 @@ func legacyOutboxRecordsForIntent(
 	}
 	records := []outboxRecord{}
 	for _, association := range associations {
-		operation := newAssociationOutboxRecord(association, intent.Version, now)
+		operation := newAssociationOutboxRecord(association, intent.Version, syncObjectIDSecretPath, now)
 		for _, id := range intent.OperationIDs {
 			if operation.ID == id {
 				records = append(records, operation)

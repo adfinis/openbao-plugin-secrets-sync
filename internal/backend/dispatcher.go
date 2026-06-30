@@ -74,7 +74,7 @@ func isOutboxDue(record outboxRecord, now time.Time) bool {
 }
 
 func isSupportedOperation(record outboxRecord) bool {
-	if record.ObjectID != syncObjectIDSecretPath {
+	if record.ObjectID == "" {
 		return false
 	}
 	return record.Type == outbox.OperationTypeUpsert || record.Type == outbox.OperationTypeDelete
@@ -114,7 +114,12 @@ func (b *secretSyncBackend) processUpsert(
 		b.recordOperationFailure(ctx, record, failure.class)
 		return markOperationFailed(ctx, storage, record, *failure, now)
 	}
-	preparedPayload, failure := prepareProviderPayload(upsertContext)
+	preparedPayload, failure := prepareProviderPayload(upsertContext, record.ObjectID)
+	if failure != nil {
+		b.recordOperationFailure(ctx, record, failure.class)
+		return markOperationFailed(ctx, storage, record, *failure, now)
+	}
+	resolvedName, failure := resolvedNameForOperation(upsertContext.association, record.ObjectID)
 	if failure != nil {
 		b.recordOperationFailure(ctx, record, failure.class)
 		return markOperationFailed(ctx, storage, record, *failure, now)
@@ -127,7 +132,7 @@ func (b *secretSyncBackend) processUpsert(
 	providerStart := time.Now()
 	result, err := upsertContext.provider.Upsert(ctx, providers.UpsertRequest{
 		Destination:   resolvedDestinationConfig,
-		ResolvedName:  upsertContext.association.ResolvedName,
+		ResolvedName:  resolvedName,
 		Format:        preparedPayload.Format,
 		Payload:       preparedPayload.Bytes,
 		PayloadSHA256: preparedPayload.SHA256,
@@ -149,7 +154,7 @@ func (b *secretSyncBackend) processUpsert(
 		return markOperationFailed(ctx, storage, record, operationFailure{
 			class:         errorClass,
 			message:       "provider upsert failed",
-			resolvedName:  upsertContext.association.ResolvedName,
+			resolvedName:  resolvedName,
 			payloadSHA256: preparedPayload.SHA256,
 		}, now)
 	}
@@ -170,7 +175,7 @@ func (b *secretSyncBackend) processUpsert(
 		AssociationID:   record.AssociationID,
 		ObjectID:        record.ObjectID,
 		DestinationRef:  record.DestinationRef,
-		ResolvedName:    upsertContext.association.ResolvedName,
+		ResolvedName:    resolvedName,
 		State:           string(domain.SyncStateSynced),
 		PayloadSHA256:   preparedPayload.SHA256,
 		RemoteVersion:   result.RemoteVersion,
@@ -194,6 +199,11 @@ func (b *secretSyncBackend) processDelete(
 		b.recordOperationFailure(ctx, record, failure.class)
 		return markOperationFailed(ctx, storage, record, *failure, now)
 	}
+	resolvedName, failure := resolvedNameForOperation(deleteContext.association, record.ObjectID)
+	if failure != nil {
+		b.recordOperationFailure(ctx, record, failure.class)
+		return markOperationFailed(ctx, storage, record, *failure, now)
+	}
 	resolvedDestinationConfig, err := destinationConfig(ctx, storage, *deleteContext.destination)
 	if err != nil {
 		return err
@@ -201,7 +211,7 @@ func (b *secretSyncBackend) processDelete(
 	providerStart := time.Now()
 	result, err := deleteContext.provider.Delete(ctx, providers.DeleteRequest{
 		Destination:   resolvedDestinationConfig,
-		ResolvedName:  deleteContext.association.ResolvedName,
+		ResolvedName:  resolvedName,
 		SourcePath:    record.Path,
 		SourceVersion: record.Version,
 		AssociationID: record.AssociationID,
@@ -220,7 +230,7 @@ func (b *secretSyncBackend) processDelete(
 		return markOperationFailed(ctx, storage, record, operationFailure{
 			class:        errorClass,
 			message:      "provider delete failed",
-			resolvedName: deleteContext.association.ResolvedName,
+			resolvedName: resolvedName,
 		}, now)
 	}
 	if result == nil {
@@ -240,7 +250,7 @@ func (b *secretSyncBackend) processDelete(
 		AssociationID:   record.AssociationID,
 		ObjectID:        record.ObjectID,
 		DestinationRef:  record.DestinationRef,
-		ResolvedName:    deleteContext.association.ResolvedName,
+		ResolvedName:    resolvedName,
 		State:           string(domain.SyncStateRemoteMissing),
 		RemoteVersion:   result.RemoteVersion,
 		LastOperationID: record.ID,
@@ -374,8 +384,16 @@ func (b *secretSyncBackend) loadDeleteContext(
 	}, nil, nil
 }
 
-func prepareProviderPayload(upsertContext *upsertContext) (payloadpkg.CanonicalPayload, *operationFailure) {
-	preparedPayload, err := buildCanonicalPayload(upsertContext.association.Format, upsertContext.version.Data)
+func prepareProviderPayload(
+	upsertContext *upsertContext,
+	objectID string,
+) (payloadpkg.CanonicalPayload, *operationFailure) {
+	preparedPayload, err := buildCanonicalPayloadForObject(
+		upsertContext.association.Format,
+		upsertContext.version.Data,
+		upsertContext.association.Granularity,
+		objectID,
+	)
 	if err != nil {
 		return payloadpkg.CanonicalPayload{}, &operationFailure{
 			class:        providers.ErrorClassValidation,
@@ -395,13 +413,40 @@ func prepareProviderPayload(upsertContext *upsertContext) (payloadpkg.CanonicalP
 	return preparedPayload, nil
 }
 
-func buildCanonicalPayload(format string, data secretPayload) (payloadpkg.CanonicalPayload, error) {
+func buildCanonicalPayloadForObject(
+	format string,
+	data secretPayload,
+	granularity string,
+	objectID string,
+) (payloadpkg.CanonicalPayload, error) {
 	switch format {
 	case defaultAssociationFormat:
-		return payloadpkg.BuildJSON(map[string]interface{}(data))
+		switch granularity {
+		case syncGranularitySecretPath:
+			return payloadpkg.BuildJSON(map[string]interface{}(data))
+		case syncGranularitySecretKey:
+			value, ok := data[objectID]
+			if !ok {
+				return payloadpkg.CanonicalPayload{}, fmt.Errorf("source key %q does not exist", objectID)
+			}
+			return payloadpkg.BuildJSON(map[string]interface{}{objectID: value})
+		default:
+			return payloadpkg.CanonicalPayload{}, fmt.Errorf("unsupported granularity %q", granularity)
+		}
 	default:
 		return payloadpkg.CanonicalPayload{}, fmt.Errorf("unsupported payload format %q", format)
 	}
+}
+
+func resolvedNameForOperation(association *associationRecord, objectID string) (string, *operationFailure) {
+	resolvedName, err := associationResolvedNameForObject(*association, objectID)
+	if err != nil {
+		return "", &operationFailure{
+			class:   providers.ErrorClassValidation,
+			message: err.Error(),
+		}
+	}
+	return resolvedName, nil
 }
 
 func enforceProviderPayloadLimit(

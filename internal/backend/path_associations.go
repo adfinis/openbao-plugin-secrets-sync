@@ -156,7 +156,7 @@ func associationRequestFields() map[string]*framework.FieldSchema {
 		},
 		"granularity": {
 			Type:        framework.TypeString,
-			Description: "Sync granularity. This phase supports secret-path.",
+			Description: "Sync granularity: secret-path or secret-key.",
 		},
 		"format": {
 			Type:        framework.TypeString,
@@ -237,11 +237,10 @@ func pathAssociationEnable(
 	}
 	operationIDs := []string{}
 	if !wasEnabled {
-		operationID, err := enqueueAssociationCurrentVersion(ctx, req.Storage, *record, *metadata, now)
+		operationIDs, err = enqueueAssociationCurrentVersion(ctx, req.Storage, *record, *metadata, now)
 		if err != nil {
 			return logical.ErrorResponse(err.Error()), nil
 		}
-		operationIDs = append(operationIDs, operationID)
 	}
 	return &logical.Response{Data: associationLifecycleResponse(
 		*record,
@@ -276,14 +275,14 @@ func pathAssociationSync(
 		return logical.ErrorResponse(err.Error()), nil
 	}
 	now := nowUTC().Format(timeFormatRFC3339)
-	operationID, err := enqueueAssociationCurrentVersion(ctx, req.Storage, *record, *metadata, now)
+	operationIDs, err := enqueueAssociationCurrentVersion(ctx, req.Storage, *record, *metadata, now)
 	if err != nil {
 		return logical.ErrorResponse(err.Error()), nil
 	}
 	return &logical.Response{Data: associationLifecycleResponse(
 		*record,
 		responseField("association", associationResponse(*record)),
-		responseField("sync_operation_ids", []string{operationID}),
+		responseField("sync_operation_ids", operationIDs),
 	)}, nil
 }
 
@@ -320,22 +319,22 @@ func (b *secretSyncBackend) pathAssociationWrite(
 	}
 
 	shouldEnqueue := record.Enabled && existing == nil
-	if shouldEnqueue {
-		if err := ensureQueueCapacityFor(ctx, req.Storage, 1); err != nil {
-			return logical.ErrorResponse(err.Error()), nil
-		}
-	}
 	if err := putAssociation(ctx, req.Storage, record); err != nil {
 		return nil, err
 	}
 
 	operationIDs := []string{}
 	if shouldEnqueue {
-		operation := newAssociationOutboxRecord(record, metadata.CurrentVersion, nowUTC().Format(timeFormatRFC3339))
-		if err := putOutbox(ctx, req.Storage, operation); err != nil {
-			return nil, err
+		operationIDs, err = enqueueAssociationCurrentVersion(
+			ctx,
+			req.Storage,
+			record,
+			*metadata,
+			nowUTC().Format(timeFormatRFC3339),
+		)
+		if err != nil {
+			return logical.ErrorResponse(err.Error()), nil
 		}
-		operationIDs = append(operationIDs, operation.ID)
 	}
 
 	return &logical.Response{Data: associationLifecycleResponse(
@@ -369,11 +368,52 @@ func (b *secretSyncBackend) pathAssociationPlan(
 	if err != nil {
 		return logical.ErrorResponse(err.Error()), nil
 	}
-	preparedPayload, err := buildCanonicalPayload(record.Format, version.Data)
+	eligibilityErr := validateAssociationActivation(record, *metadata)
+	sourceEligible := eligibilityErr == nil
+	if record.Granularity == syncGranularitySecretKey {
+		return b.pathAssociationSecretKeyPlan(
+			ctx,
+			req.Storage,
+			record,
+			*metadata,
+			*version,
+			*destination,
+			provider,
+			sourceEligible,
+		)
+	}
+	return b.pathAssociationSecretPathPlan(
+		ctx,
+		req.Storage,
+		record,
+		*metadata,
+		*version,
+		*destination,
+		provider,
+		eligibilityErr,
+	)
+}
+
+func (b *secretSyncBackend) pathAssociationSecretPathPlan(
+	ctx context.Context,
+	storage logical.Storage,
+	record associationRecord,
+	metadata metadataRecord,
+	version versionRecord,
+	destination destinationRecord,
+	provider providers.Provider,
+	eligibilityErr error,
+) (*logical.Response, error) {
+	preparedPayload, err := buildCanonicalPayloadForObject(
+		record.Format,
+		version.Data,
+		record.Granularity,
+		syncObjectIDSecretPath,
+	)
 	if err != nil {
 		return logical.ErrorResponse("source payload encoding failed"), nil
 	}
-	if eligibilityErr := validateAssociationActivation(record, *metadata); eligibilityErr != nil {
+	if eligibilityErr != nil {
 		return &logical.Response{Data: associationPlanResponse(
 			record,
 			metadata.CurrentVersion,
@@ -399,7 +439,7 @@ func (b *secretSyncBackend) pathAssociationPlan(
 			},
 		)}, nil
 	}
-	resolvedDestinationConfig, err := destinationConfig(ctx, req.Storage, *destination)
+	resolvedDestinationConfig, err := destinationConfig(ctx, storage, destination)
 	if err != nil {
 		return nil, err
 	}
@@ -464,17 +504,184 @@ func providerPlanRequest(
 	version int,
 	preparedPayload payloadpkg.CanonicalPayload,
 ) providers.PlanRequest {
+	resolvedName, err := associationResolvedNameForObject(record, syncObjectIDSecretPath)
+	if err != nil {
+		resolvedName = record.ResolvedName
+	}
 	return providers.PlanRequest{
 		Destination:   destination,
-		ResolvedName:  record.ResolvedName,
+		ResolvedName:  resolvedName,
 		Format:        preparedPayload.Format,
 		PayloadSHA256: preparedPayload.SHA256,
 		PayloadBytes:  len(preparedPayload.Bytes),
 		SourcePath:    record.Path,
 		SourceVersion: version,
 		AssociationID: record.ID,
-		ObjectID:      record.Granularity,
+		ObjectID:      syncObjectIDSecretPath,
 	}
+}
+
+func (b *secretSyncBackend) pathAssociationSecretKeyPlan(
+	ctx context.Context,
+	storage logical.Storage,
+	record associationRecord,
+	metadata metadataRecord,
+	version versionRecord,
+	destination destinationRecord,
+	provider providers.Provider,
+	sourceEligible bool,
+) (*logical.Response, error) {
+	resolvedDestinationConfig, err := destinationConfig(ctx, storage, destination)
+	if err != nil {
+		return nil, err
+	}
+	objectIDs, err := associationObjectIDs(record, version.Data)
+	if err != nil {
+		return logical.ErrorResponse(err.Error()), nil
+	}
+	objects := make([]secretKeyPlanObject, 0, len(objectIDs))
+	for _, objectID := range objectIDs {
+		object, err := b.planSecretKeyObject(
+			ctx,
+			record,
+			resolvedDestinationConfig,
+			provider,
+			metadata.CurrentVersion,
+			version.Data,
+			objectID,
+			sourceEligible,
+		)
+		if err != nil {
+			return nil, err
+		}
+		objects = append(objects, object)
+	}
+	return &logical.Response{Data: associationSecretKeyPlanResponse(
+		record,
+		metadata.CurrentVersion,
+		sourceEligible,
+		objects,
+	)}, nil
+}
+
+func (b *secretSyncBackend) planSecretKeyObject(
+	ctx context.Context,
+	record associationRecord,
+	destination providers.DestinationConfig,
+	provider providers.Provider,
+	version int,
+	data secretPayload,
+	objectID string,
+	sourceEligible bool,
+) (secretKeyPlanObject, error) {
+	payload, err := buildCanonicalPayloadForObject(record.Format, data, record.Granularity, objectID)
+	if err != nil {
+		return secretKeyPlanObject{
+			ObjectID:   objectID,
+			Action:     providers.PlanActionBlocked,
+			ErrorClass: providers.ErrorClassValidation,
+			Message:    "source payload encoding failed",
+		}, nil
+	}
+	resolvedName, err := associationResolvedNameForObject(record, objectID)
+	if err != nil {
+		return secretKeyPlanObject{}, err
+	}
+	object := secretKeyPlanObject{
+		ObjectID:      objectID,
+		ResolvedName:  resolvedName,
+		PayloadSHA256: payload.SHA256,
+		PayloadBytes:  len(payload.Bytes),
+	}
+	if !sourceEligible {
+		object.Action = providers.PlanActionBlocked
+		object.ErrorClass = providers.ErrorClassValidation
+		object.Message = "source is not eligible"
+		return object, nil
+	}
+	if limitErr := enforceProviderPayloadLimit(provider.Capabilities(), payload); limitErr != nil {
+		object.Action = providers.PlanActionBlocked
+		object.ErrorClass = providers.ErrorClassCapacity
+		object.Message = limitErr.Error()
+		return object, nil
+	}
+	providerStart := time.Now()
+	plan, providerErr := provider.Plan(ctx, providers.PlanRequest{
+		Destination:   destination,
+		ResolvedName:  resolvedName,
+		Format:        payload.Format,
+		PayloadSHA256: payload.SHA256,
+		PayloadBytes:  len(payload.Bytes),
+		SourcePath:    record.Path,
+		SourceVersion: version,
+		AssociationID: record.ID,
+		ObjectID:      objectID,
+	})
+	b.recordProviderRequest(ctx, provider.Type(), observability.OperationPlan, providerErr, time.Since(providerStart))
+	if providerErr != nil {
+		object.Action = providers.PlanActionBlocked
+		object.ErrorClass = providerErrorClass(providerErr)
+		object.Message = providerErr.Error()
+		return object, nil
+	}
+	if plan == nil {
+		plan = &providers.PlanResult{Action: providers.PlanActionBlocked}
+	}
+	object.Action = plan.Action
+	object.ErrorClass = plan.ErrorClass
+	object.Message = plan.Message
+	return object, nil
+}
+
+type secretKeyPlanObject struct {
+	ObjectID      string
+	ResolvedName  string
+	PayloadSHA256 string
+	PayloadBytes  int
+	Action        string
+	ErrorClass    providers.ErrorClass
+	Message       string
+}
+
+func associationSecretKeyPlanResponse(
+	record associationRecord,
+	version int,
+	sourceEligible bool,
+	objects []secretKeyPlanObject,
+) map[string]interface{} { //nolint:forbidigo
+	objectResponses := make([]map[string]interface{}, 0, len(objects)) //nolint:forbidigo
+	action := ""
+	for index, object := range objects {
+		if index == 0 {
+			action = object.Action
+		} else if action != object.Action {
+			action = "multiple"
+		}
+		objectResponses = append(objectResponses, newResponseData(
+			responseField("object_id", object.ObjectID),
+			responseField("resolved_name", object.ResolvedName),
+			responseField("action", object.Action),
+			responseField("payload_sha256", object.PayloadSHA256),
+			responseField("payload_bytes", object.PayloadBytes),
+			responseField("error_class", string(object.ErrorClass)),
+			responseField("message", object.Message),
+		))
+	}
+	return newResponseData(
+		responseField("path", record.Path),
+		responseField("version", version),
+		responseField("action", action),
+		responseField("source_eligible", sourceEligible),
+		responseField("association_id", record.ID),
+		responseField("destination_ref", record.DestinationRef),
+		responseField("association", associationResponse(record)),
+		responseField("destination", newResponseData(
+			responseField("type", record.DestinationType),
+			responseField("name", record.DestinationName),
+		)),
+		responseField("granularity", record.Granularity),
+		responseField("objects", objectResponses),
+	)
 }
 
 func associationPlanResponse(
@@ -631,33 +838,44 @@ func enqueueAssociationCurrentVersion(
 	record associationRecord,
 	metadata metadataRecord,
 	now string,
-) (string, error) {
+) ([]string, error) {
 	version, err := getVersion(ctx, storage, record.Path, metadata.CurrentVersion)
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 	if version == nil || version.Destroyed || version.DeletionTime != "" {
-		return "", fmt.Errorf("current source version is unavailable")
+		return nil, fmt.Errorf("current source version is unavailable")
 	}
-	operation := newAssociationOutboxRecord(record, metadata.CurrentVersion, now)
-	existing, err := getOutbox(ctx, storage, operation.ID)
+	operations, operationIDs, err := newAssociationOutboxRecords(
+		[]associationRecord{record},
+		metadata.CurrentVersion,
+		version.Data,
+		now,
+	)
 	if err != nil {
-		return "", err
+		return nil, err
 	}
-	additionalOperations := 1
-	if existing != nil && isQueuedOutboxState(existing.State) {
-		additionalOperations = 0
+	additionalOperations, err := additionalQueuedOperationCount(ctx, storage, operations)
+	if err != nil {
+		return nil, err
 	}
 	if err := ensureQueueCapacityFor(ctx, storage, additionalOperations); err != nil {
-		return "", err
+		return nil, err
 	}
-	if existing != nil {
-		operation.CreatedTime = existing.CreatedTime
+	for index, operation := range operations {
+		existing, err := getOutbox(ctx, storage, operation.ID)
+		if err != nil {
+			return nil, err
+		}
+		if existing != nil {
+			operation.CreatedTime = existing.CreatedTime
+			operations[index] = operation
+		}
 	}
-	if err := putOutbox(ctx, storage, operation); err != nil {
-		return "", err
+	if err := putOutboxRecords(ctx, storage, operations); err != nil {
+		return nil, err
 	}
-	return operation.ID, nil
+	return operationIDs, nil
 }
 
 func markAssociationStatusDisabled(
@@ -688,7 +906,39 @@ func markAssociationStatusDisabled(
 	}
 	status.State = string(domain.SyncStateDisabled)
 	status.UpdatedTime = now
-	return putStatus(ctx, storage, *status)
+	if record.Granularity == syncGranularitySecretPath || metadata == nil || metadata.CurrentVersion == 0 {
+		return putStatus(ctx, storage, *status)
+	}
+	version, err := getVersion(ctx, storage, record.Path, metadata.CurrentVersion)
+	if err != nil {
+		return err
+	}
+	if version == nil {
+		return putStatus(ctx, storage, *status)
+	}
+	objectIDs, err := associationObjectIDs(record, version.Data)
+	if err != nil {
+		return err
+	}
+	for _, objectID := range objectIDs {
+		resolvedName, err := associationResolvedNameForObject(record, objectID)
+		if err != nil {
+			return err
+		}
+		if err := putStatus(ctx, storage, statusRecord{
+			Path:           record.Path,
+			Version:        metadata.CurrentVersion,
+			AssociationID:  record.ID,
+			ObjectID:       objectID,
+			DestinationRef: record.DestinationRef,
+			ResolvedName:   resolvedName,
+			State:          string(domain.SyncStateDisabled),
+			UpdatedTime:    now,
+		}); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (b *secretSyncBackend) associationRecordFromFieldData(
@@ -699,36 +949,26 @@ func (b *secretSyncBackend) associationRecordFromFieldData(
 ) (associationRecord, error) {
 	destinationType := data.Get("destination_type").(string)
 	destinationName := data.Get("destination_name").(string)
-	provider, err := b.providerRegistry.MustGet(destinationType)
+	provider, err := b.associationProvider(ctx, storage, destinationType, destinationName)
 	if err != nil {
 		return associationRecord{}, err
-	}
-	destination, err := getDestination(ctx, storage, destinationType, destinationName)
-	if err != nil {
-		return associationRecord{}, err
-	}
-	if destination == nil {
-		return associationRecord{}, fmt.Errorf("destination %s/%s does not exist", destinationType, destinationName)
-	}
-	if destination.Disabled {
-		return associationRecord{}, fmt.Errorf("destination %s/%s is disabled", destinationType, destinationName)
 	}
 
-	granularity := stringFromField(data, "granularity", syncObjectIDSecretPath)
+	granularity := stringFromField(data, "granularity", syncGranularitySecretPath)
 	format := stringFromField(data, "format", defaultAssociationFormat)
 	deleteMode := stringFromField(data, "delete_mode", defaultDeleteMode)
-	nameTemplate := stringFromField(data, "name_template", defaultNameTemplate)
+	nameTemplate := stringFromField(data, "name_template", defaultNameTemplateForGranularity(granularity))
 	resolvedName := stringFromField(data, "resolved_name", "")
-	if resolvedName == "" {
-		renderedName, err := renderAssociationName(nameTemplate, path, destinationType, destinationName)
-		if err != nil {
-			return associationRecord{}, err
-		}
-		resolvedName = renderedName
-	}
-	resolvedName = strings.Trim(resolvedName, "/")
-	if resolvedName == "" {
-		return associationRecord{}, fmt.Errorf("resolved_name must not be empty")
+	resolvedName, reservationName, err := resolveAssociationNames(
+		path,
+		destinationType,
+		destinationName,
+		granularity,
+		nameTemplate,
+		resolvedName,
+	)
+	if err != nil {
+		return associationRecord{}, err
 	}
 	if err := validateAssociationCapabilities(provider.Capabilities(), granularity, format); err != nil {
 		return associationRecord{}, err
@@ -737,24 +977,12 @@ func (b *secretSyncBackend) associationRecordFromFieldData(
 		return associationRecord{}, err
 	}
 
-	id := newAssociationID(path, destinationType, destinationName, resolvedName, granularity)
+	id := newAssociationID(path, destinationType, destinationName, reservationName, granularity)
 	destinationReference := destinationRef(destinationType, destinationName)
-	reservations, err := listAssociationNameReservationIDs(ctx, storage, destinationReference, resolvedName)
-	if err != nil {
+	if err := validateAssociationNameReservation(ctx, storage, destinationReference, reservationName, id); err != nil {
 		return associationRecord{}, err
 	}
-	if len(reservations) > 0 && (len(reservations) != 1 || reservations[0] != id) {
-		return associationRecord{}, fmt.Errorf(
-			"resolved_name %q is already reserved for destination %s",
-			resolvedName,
-			destinationReference,
-		)
-	}
 
-	enabled := true
-	if value, ok := data.GetOk("enabled"); ok {
-		enabled = value.(bool)
-	}
 	now := nowUTC().Format(timeFormatRFC3339)
 	return associationRecord{
 		ID:              id,
@@ -767,21 +995,158 @@ func (b *secretSyncBackend) associationRecordFromFieldData(
 		Granularity:     granularity,
 		Format:          format,
 		DeleteMode:      deleteMode,
-		Enabled:         enabled,
+		Enabled:         boolFromField(data, "enabled", true),
 		CreatedTime:     now,
 		UpdatedTime:     now,
 	}, nil
 }
 
-func validateAssociationCapabilities(capabilities providers.Capabilities, granularity string, format string) error {
-	if granularity != syncObjectIDSecretPath {
-		return fmt.Errorf("unsupported granularity %q", granularity)
+func (b *secretSyncBackend) associationProvider(
+	ctx context.Context,
+	storage logical.Storage,
+	destinationType string,
+	destinationName string,
+) (providers.Provider, error) {
+	provider, err := b.providerRegistry.MustGet(destinationType)
+	if err != nil {
+		return nil, err
 	}
+	destination, err := getDestination(ctx, storage, destinationType, destinationName)
+	if err != nil {
+		return nil, err
+	}
+	if destination == nil {
+		return nil, fmt.Errorf("destination %s/%s does not exist", destinationType, destinationName)
+	}
+	if destination.Disabled {
+		return nil, fmt.Errorf("destination %s/%s is disabled", destinationType, destinationName)
+	}
+	return provider, nil
+}
+
+func resolveAssociationNames(
+	path string,
+	destinationType string,
+	destinationName string,
+	granularity string,
+	nameTemplate string,
+	resolvedName string,
+) (string, string, error) {
+	switch granularity {
+	case syncGranularitySecretPath:
+		resolvedName, err := resolveSecretPathAssociationName(
+			path,
+			destinationType,
+			destinationName,
+			nameTemplate,
+			resolvedName,
+		)
+		if err != nil {
+			return "", "", err
+		}
+		return resolvedName, resolvedName, nil
+	case syncGranularitySecretKey:
+		if err := validateSecretKeyAssociationTemplate(
+			path,
+			destinationType,
+			destinationName,
+			nameTemplate,
+			resolvedName,
+		); err != nil {
+			return "", "", err
+		}
+		return "", nameTemplate, nil
+	default:
+		return "", "", fmt.Errorf("unsupported granularity %q", granularity)
+	}
+}
+
+func resolveSecretPathAssociationName(
+	path string,
+	destinationType string,
+	destinationName string,
+	nameTemplate string,
+	resolvedName string,
+) (string, error) {
+	if resolvedName == "" {
+		renderedName, err := renderAssociationObjectName(
+			nameTemplate,
+			path,
+			destinationType,
+			destinationName,
+			syncObjectIDSecretPath,
+		)
+		if err != nil {
+			return "", err
+		}
+		resolvedName = renderedName
+	}
+	resolvedName = strings.Trim(resolvedName, "/")
+	if resolvedName == "" {
+		return "", fmt.Errorf("resolved_name must not be empty")
+	}
+	return resolvedName, nil
+}
+
+func validateSecretKeyAssociationTemplate(
+	path string,
+	destinationType string,
+	destinationName string,
+	nameTemplate string,
+	resolvedName string,
+) error {
+	if resolvedName != "" {
+		return fmt.Errorf("secret-key granularity requires name_template instead of resolved_name")
+	}
+	if !strings.Contains(nameTemplate, "{{ key }}") {
+		return fmt.Errorf("secret-key name_template must include {{ key }}")
+	}
+	_, err := renderAssociationObjectName(
+		nameTemplate,
+		path,
+		destinationType,
+		destinationName,
+		"key",
+	)
+	return err
+}
+
+func validateAssociationNameReservation(
+	ctx context.Context,
+	storage logical.Storage,
+	destinationReference string,
+	reservationName string,
+	associationID string,
+) error {
+	reservations, err := listAssociationNameReservationIDs(ctx, storage, destinationReference, reservationName)
+	if err != nil {
+		return err
+	}
+	if len(reservations) == 0 || (len(reservations) == 1 && reservations[0] == associationID) {
+		return nil
+	}
+	return fmt.Errorf(
+		"resolved_name %q is already reserved for destination %s",
+		reservationName,
+		destinationReference,
+	)
+}
+
+func validateAssociationCapabilities(capabilities providers.Capabilities, granularity string, format string) error {
 	if format != defaultAssociationFormat {
 		return fmt.Errorf("unsupported format %q", format)
 	}
-	if !capabilities.SupportsSecretPath {
-		return fmt.Errorf("destination provider does not support secret-path granularity")
+	switch granularity {
+	case syncGranularitySecretPath:
+		if !capabilities.SupportsSecretPath {
+			return fmt.Errorf("destination provider does not support secret-path granularity")
+		}
+	case syncGranularitySecretKey:
+		if !capabilities.SupportsSecretKey {
+			return fmt.Errorf("destination provider does not support secret-key granularity")
+		}
+	default:
+		return fmt.Errorf("unsupported granularity %q", granularity)
 	}
 	return nil
 }
@@ -814,29 +1179,20 @@ func validateSourceEligibility(metadata metadataRecord) error {
 	return nil
 }
 
-func renderAssociationName(
-	template string,
-	path string,
-	destinationType string,
-	destinationName string,
-) (string, error) {
-	rendered := strings.NewReplacer(
-		"{{ path }}", path,
-		"{{ destination.type }}", destinationType,
-		"{{ destination.name }}", destinationName,
-	).Replace(template)
-	if strings.Contains(rendered, "{{") || strings.Contains(rendered, "}}") {
-		return "", fmt.Errorf("unsupported name_template %q", template)
-	}
-	return rendered, nil
-}
-
 func stringFromField(data *framework.FieldData, key string, fallback string) string {
 	value := strings.TrimSpace(data.Get(key).(string))
 	if value == "" {
 		return fallback
 	}
 	return value
+}
+
+func boolFromField(data *framework.FieldData, key string, fallback bool) bool {
+	value, ok := data.GetOk(key)
+	if !ok {
+		return fallback
+	}
+	return value.(bool)
 }
 
 func associationResponse(record associationRecord) map[string]interface{} { //nolint:forbidigo
