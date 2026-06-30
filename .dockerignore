@@ -1,0 +1,17 @@
+**
+
+!go.mod
+!go.sum
+
+!cmd/
+!cmd/**/
+!cmd/*.go
+!cmd/**/*.go
+
+!internal/
+!internal/**/
+!internal/*.go
+!internal/**/*.go
+
+**/.DS_Store
+**/artifacts/**

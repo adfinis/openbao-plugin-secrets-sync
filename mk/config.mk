@@ -1,0 +1,44 @@
+GO_VERSION := $(shell cat .go-version)
+GO ?= go
+GOBIN ?= $(CURDIR)/bin
+GOFUMPT ?= $(if $(wildcard $(GOBIN)/gofumpt),$(GOBIN)/gofumpt,gofumpt)
+STATICCHECK ?= $(if $(wildcard $(GOBIN)/staticcheck),$(GOBIN)/staticcheck,staticcheck)
+GOVULNCHECK ?= $(if $(wildcard $(GOBIN)/govulncheck),$(GOBIN)/govulncheck,govulncheck)
+GOLANGCI_LINT ?= $(if $(wildcard $(GOBIN)/golangci-lint),$(GOBIN)/golangci-lint,golangci-lint)
+GO_LICENSES ?= $(if $(wildcard $(GOBIN)/go-licenses),$(GOBIN)/go-licenses,go-licenses)
+TRIVY ?= trivy
+SEMGREP ?= semgrep
+SEMGREP_CONFIG_FLAGS ?= --config .semgrep/rules
+SEMGREP_TARGETS ?= cmd internal .github
+SEMGREP_ARTIFACT_DIR ?= dist/semgrep
+SEMGREP_OUTPUT_JSON ?= $(SEMGREP_ARTIFACT_DIR)/semgrep.json
+FUZZTIME ?= 10s
+GO_SOURCE_DIRS := $(shell for d in cmd internal test; do [ -d "$$d" ] && printf '%s ' "$$d"; done)
+
+BINARY_NAME ?= openbao-plugin-secrets-sync
+BIN ?= bin/$(BINARY_NAME)
+DIST_DIR ?= dist/release
+CHECKSUM_FILE ?= $(DIST_DIR)/checksums.txt
+CHECKSUM ?= shasum -a 256
+RELEASE_TARGETS ?= linux/amd64 linux/arm64
+VERSION ?= 0.0.0-dev
+COMMIT ?= $(shell git rev-parse --short HEAD 2>/dev/null || printf '%s' unknown)
+BUILD_DATE ?= $(shell if [ -n "$${SOURCE_DATE_EPOCH:-}" ]; then date -u -r "$${SOURCE_DATE_EPOCH}" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date -u -d "@$${SOURCE_DATE_EPOCH}" +%Y-%m-%dT%H:%M:%SZ; else date -u +%Y-%m-%dT%H:%M:%SZ; fi)
+DIRTY ?= $(shell if [ -n "$$(git status --porcelain 2>/dev/null)" ]; then printf '%s' true; else printf '%s' false; fi)
+VERSION_PKG := github.com/adfinis/openbao-secret-sync/internal/version
+GO_BUILD_FLAGS ?= -trimpath -buildvcs=false
+LDFLAGS := -s -w -X $(VERSION_PKG).version=$(VERSION) -X $(VERSION_PKG).commit=$(COMMIT) -X $(VERSION_PKG).buildDate=$(BUILD_DATE) -X $(VERSION_PKG).dirty=$(DIRTY)
+
+GOFUMPT_VERSION ?= v0.9.2
+STATICCHECK_VERSION ?= v0.7.0
+GOVULNCHECK_VERSION ?= v1.2.0
+GOLANGCI_LINT_VERSION ?= v2.11.4
+GO_LICENSES_VERSION ?= v2.0.1
+GO_LICENSES_ALLOWED ?= Apache-2.0 BSD-2-Clause BSD-3-Clause ISC MIT MPL-2.0 Unicode-DFS-2016
+GO_LICENSES_IGNORE ?= github.com/adfinis/openbao-secret-sync
+GO_LICENSES_PACKAGE_TARGETS ?= ./cmd/openbao-plugin-secrets-sync
+LICENSE_REPORT_DIR ?= dist/licenses
+go_licenses_empty :=
+go_licenses_space := $(go_licenses_empty) $(go_licenses_empty)
+go_licenses_comma := ,
+GO_LICENSES_ALLOWED_CSV := $(subst $(go_licenses_space),$(go_licenses_comma),$(strip $(GO_LICENSES_ALLOWED)))

@@ -1,0 +1,48 @@
+version: 1
+
+project:
+  name: openbao-secret-sync
+  module: github.com/adfinis/openbao-secret-sync
+  binary: openbao-plugin-secrets-sync
+
+toolchain:
+  go: "1.26.4"
+  taskRunner: make
+  qualityTools:
+    gofumpt: "0.9.2"
+    staticcheck: "0.7.0"
+    govulncheck: "1.2.0"
+    semgrep: "1.157.0"
+    golangciLint: "2.11.4"
+    goLicenses: "2.0.1"
+    trivy: "0.69.3"
+    pinStatus: pinned
+  githubActions:
+    cache: cdf6c1fa76f9f475f3d7449005a359c84ca0f306
+    checkout: 9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+    dependencyReview: 2031cfc080254a8a887f58cffee85186f0e49e48
+    releasePlease: 45996ed1f6d02564a971a2fa1b5860e934307cf7
+    setupGo: 4b73464bb391d4059bd26b0524d20df3927bd417
+    setupTrivy: 81e514348e19b6112ce2a7e3ecbafe19c1e1f567
+
+validation:
+  openbao:
+    primary: "2.5.5"
+    image: ghcr.io/openbao/openbao:2.5.5@sha256:6150c4a6b62067db6141c8da7a6a6b5763f4f47c315343d0c848b40fecdfd452
+    imageDigest: sha256:6150c4a6b62067db6141c8da7a6a6b5763f4f47c315343d0c848b40fecdfd452
+    digestStatus: pinned
+
+artifacts:
+  versionSource: release-please
+  releasePleaseConfig: release-please-config.json
+  releasePleaseManifest: .release-please-manifest.json
+  binaryName: openbao-plugin-secrets-sync
+  distDirectory: dist/release
+  binaryPattern: openbao-plugin-secrets-sync_${VERSION}_${GOOS}_${GOARCH}
+  checksumAlgorithm: sha256
+  checksumFile: checksums.txt
+  linuxTargets:
+    - goos: linux
+      goarch: amd64
+    - goos: linux
+      goarch: arm64

@@ -1,0 +1,45 @@
+name: CI
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  core:
+    name: Core Quality
+    runs-on: ubuntu-24.04
+    env:
+      SEMGREP_VERSION: "1.157.0"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Setup repo tools
+        uses: ./.github/actions/setup-repo-tools
+
+      - name: Install Semgrep
+        run: |
+          python3 -m venv .venv-semgrep
+          . .venv-semgrep/bin/activate
+          python -m pip install --upgrade pip
+          python -m pip install "semgrep==${SEMGREP_VERSION}"
+          echo "${GITHUB_WORKSPACE}/.venv-semgrep/bin" >> "${GITHUB_PATH}"
+
+      - name: Install Trivy
+        uses: aquasecurity/setup-trivy@81e514348e19b6112ce2a7e3ecbafe19c1e1f567 # v0.3.1
+        with:
+          version: v0.69.3
+
+      - name: Run core quality gate
+        run: make ci-core

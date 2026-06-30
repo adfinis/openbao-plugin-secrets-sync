@@ -1,0 +1,74 @@
+// Package providers defines the destination provider contract.
+package providers
+
+import "context"
+
+// Provider adapts the core sync engine to one destination type.
+type Provider interface {
+	Type() string
+	Capabilities() Capabilities
+	Validate(context.Context, DestinationConfig) error
+	Plan(context.Context, PlanRequest) (*PlanResult, error)
+	Upsert(context.Context, UpsertRequest) (*SyncResult, error)
+	Delete(context.Context, DeleteRequest) (*SyncResult, error)
+	ReadState(context.Context, ReadStateRequest) (*RemoteState, error)
+	Health(context.Context, DestinationConfig) (*HealthResult, error)
+}
+
+// Capabilities declares destination behavior the core engine may rely on.
+type Capabilities struct {
+	SupportsValueReadback       bool
+	SupportsMetadataReadback    bool
+	SupportsPayloadHashMetadata bool
+	SupportsUpdateIfOwned       bool
+	SupportsDeleteIfOwned       bool
+	SupportsSecretPath          bool
+	SupportsSecretKey           bool
+	MaxPayloadBytes             int
+}
+
+// DestinationConfig is provider-specific destination configuration.
+type DestinationConfig struct {
+	Name string
+}
+
+// PlanRequest describes a dry-run provider operation.
+type PlanRequest struct {
+	ResolvedName string
+}
+
+// PlanResult describes the provider action that would be taken.
+type PlanResult struct {
+	Action string
+}
+
+// UpsertRequest describes a remote create or update operation.
+type UpsertRequest struct {
+	ResolvedName string
+	Payload      []byte
+}
+
+// DeleteRequest describes a remote delete operation.
+type DeleteRequest struct {
+	ResolvedName string
+}
+
+// ReadStateRequest describes a remote state lookup.
+type ReadStateRequest struct {
+	ResolvedName string
+}
+
+// RemoteState is the provider's view of one remote object.
+type RemoteState struct {
+	Exists bool
+}
+
+// SyncResult describes the result of one remote mutation.
+type SyncResult struct {
+	RemoteVersion string
+}
+
+// HealthResult describes destination health.
+type HealthResult struct {
+	Healthy bool
+}
