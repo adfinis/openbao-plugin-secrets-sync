@@ -108,18 +108,57 @@ func TestAWSDestinationConfigLifecycle(t *testing.T) {
 	storage := &logical.InmemStorage{}
 
 	writeResp := handleRequest(t, b, storage, logical.UpdateOperation, "destinations/aws-sm/prod", map[string]interface{}{
-		"description":                          "aws production",
-		awssecretsmanager.ConfigKeyRegion:      "eu-central-1",
-		awssecretsmanager.ConfigKeyEndpointURL: "http://localhost:4566",
-		awssecretsmanager.ConfigKeyAuthMode:    awssecretsmanager.AuthModeAssumeRole,
-		awssecretsmanager.ConfigKeyRoleARN:     "arn:aws:iam::123456789012:role/openbao-secret-sync",
-		awssecretsmanager.ConfigKeyExternalID:  "tenant-1",
-		awssecretsmanager.ConfigKeySessionName: "openbao-sync",
+		"description":                             "aws production",
+		awssecretsmanager.ConfigKeyRegion:         "eu-central-1",
+		awssecretsmanager.ConfigKeyEndpointURL:    "http://localhost:4566",
+		awssecretsmanager.ConfigKeyEndpointPolicy: awssecretsmanager.EndpointPolicyLocal,
+		awssecretsmanager.ConfigKeyAuthMode:       awssecretsmanager.AuthModeAssumeRole,
+		awssecretsmanager.ConfigKeyRoleARN:        "arn:aws:iam::123456789012:role/openbao-secret-sync",
+		awssecretsmanager.ConfigKeyExternalID:     "tenant-1",
+		awssecretsmanager.ConfigKeySessionName:    "openbao-sync",
 	})
 	if writeResp != nil && writeResp.IsError() {
 		t.Fatalf("unexpected destination write error: %v", writeResp.Error())
 	}
 
+	assertStoredAWSDestinationConfig(t, storage)
+	assertReadAWSDestinationConfig(t, b, storage)
+
+	validateResp := handleRequest(t, b, storage, logical.UpdateOperation, "destinations/aws-sm/prod/validate", nil)
+	assertNoErrorResponse(t, validateResp)
+	if got := validateResp.Data["valid"]; got != true {
+		t.Fatalf("aws validation valid = %v, want true", got)
+	}
+}
+
+func assertStoredAWSDestinationConfig(t *testing.T, storage logical.Storage) {
+	t.Helper()
+	storedDestination, err := getDestination(context.Background(), storage, awssecretsmanager.ProviderType, "prod")
+	if err != nil {
+		t.Fatalf("read stored destination: %v", err)
+	}
+	if _, ok := storedDestination.Config[awssecretsmanager.ConfigKeyExternalID]; ok {
+		t.Fatal("external_id must not be stored in non-sensitive destination config")
+	}
+	storedSensitiveConfig, err := getDestinationSensitiveConfig(
+		context.Background(),
+		storage,
+		awssecretsmanager.ProviderType,
+		"prod",
+	)
+	if err != nil {
+		t.Fatalf("read stored sensitive config: %v", err)
+	}
+	if storedSensitiveConfig == nil {
+		t.Fatal("sensitive destination config must be stored separately")
+	}
+	if got := storedSensitiveConfig.Config[awssecretsmanager.ConfigKeyExternalID]; got != "tenant-1" {
+		t.Fatalf("stored external_id = %q, want tenant-1", got)
+	}
+}
+
+func assertReadAWSDestinationConfig(t *testing.T, b *secretSyncBackend, storage logical.Storage) {
+	t.Helper()
 	readResp := handleRequest(t, b, storage, logical.ReadOperation, "destinations/aws-sm/prod", nil)
 	assertNoErrorResponse(t, readResp)
 	config := readResp.Data["config"].(map[string]interface{})
@@ -129,15 +168,114 @@ func TestAWSDestinationConfigLifecycle(t *testing.T) {
 	if got := config[awssecretsmanager.ConfigKeyAuthMode]; got != awssecretsmanager.AuthModeAssumeRole {
 		t.Fatalf("aws auth_mode = %v, want %s", got, awssecretsmanager.AuthModeAssumeRole)
 	}
+	if _, ok := config[awssecretsmanager.ConfigKeyExternalID]; ok {
+		t.Fatal("read config must not include external_id")
+	}
 	sensitiveConfig := readResp.Data["sensitive_config"].(map[string]interface{})
 	if got := sensitiveConfig["redacted"]; got != true {
 		t.Fatalf("sensitive_config redacted = %v, want true", got)
 	}
+	if got := sensitiveConfig["configured"]; got != true {
+		t.Fatalf("sensitive_config configured = %v, want true", got)
+	}
+	keys, ok := sensitiveConfig["keys"].([]string)
+	if !ok {
+		t.Fatalf("sensitive keys = %T, want []string", sensitiveConfig["keys"])
+	}
+	if len(keys) != 1 || keys[0] != awssecretsmanager.ConfigKeyExternalID {
+		t.Fatalf("sensitive keys = %v, want [%s]", keys, awssecretsmanager.ConfigKeyExternalID)
+	}
+}
 
-	validateResp := handleRequest(t, b, storage, logical.UpdateOperation, "destinations/aws-sm/prod/validate", nil)
-	assertNoErrorResponse(t, validateResp)
-	if got := validateResp.Data["valid"]; got != true {
-		t.Fatalf("aws validation valid = %v, want true", got)
+func TestDestinationSensitiveConfigDeletion(t *testing.T) {
+	b := Backend(&logical.BackendConfig{})
+	storage := &logical.InmemStorage{}
+
+	writeResp := handleRequest(t, b, storage, logical.UpdateOperation, "destinations/aws-sm/prod", map[string]interface{}{
+		awssecretsmanager.ConfigKeyAuthMode:   awssecretsmanager.AuthModeAssumeRole,
+		awssecretsmanager.ConfigKeyRoleARN:    "arn:aws:iam::123456789012:role/openbao-secret-sync",
+		awssecretsmanager.ConfigKeyExternalID: "tenant-1",
+	})
+	if writeResp != nil && writeResp.IsError() {
+		t.Fatalf("unexpected destination write error: %v", writeResp.Error())
+	}
+
+	clearResp := handleRequest(t, b, storage, logical.UpdateOperation, "destinations/aws-sm/prod", map[string]interface{}{
+		awssecretsmanager.ConfigKeyExternalID: "",
+	})
+	if clearResp != nil && clearResp.IsError() {
+		t.Fatalf("unexpected destination update error: %v", clearResp.Error())
+	}
+	sensitiveConfig, err := getDestinationSensitiveConfig(
+		context.Background(),
+		storage,
+		awssecretsmanager.ProviderType,
+		"prod",
+	)
+	if err != nil {
+		t.Fatalf("read stored sensitive config: %v", err)
+	}
+	if sensitiveConfig != nil {
+		t.Fatalf("sensitive config after clear = %#v, want nil", sensitiveConfig)
+	}
+}
+
+func TestDestinationWriteMigratesSensitiveKeysFromLegacyConfig(t *testing.T) {
+	b := Backend(&logical.BackendConfig{})
+	storage := &logical.InmemStorage{}
+	if err := putDestination(context.Background(), storage, destinationRecord{
+		Type: awssecretsmanager.ProviderType,
+		Name: "prod",
+		Config: map[string]string{
+			awssecretsmanager.ConfigKeyAuthMode:   awssecretsmanager.AuthModeAssumeRole,
+			awssecretsmanager.ConfigKeyRoleARN:    "arn:aws:iam::123456789012:role/openbao-secret-sync",
+			awssecretsmanager.ConfigKeyExternalID: "tenant-legacy",
+		},
+	}); err != nil {
+		t.Fatalf("write legacy destination: %v", err)
+	}
+
+	updateResp := handleRequest(t, b, storage, logical.UpdateOperation, "destinations/aws-sm/prod", map[string]interface{}{
+		"description": "migrated",
+	})
+	if updateResp != nil && updateResp.IsError() {
+		t.Fatalf("unexpected destination update error: %v", updateResp.Error())
+	}
+	storedDestination, err := getDestination(context.Background(), storage, awssecretsmanager.ProviderType, "prod")
+	if err != nil {
+		t.Fatalf("read stored destination: %v", err)
+	}
+	if _, ok := storedDestination.Config[awssecretsmanager.ConfigKeyExternalID]; ok {
+		t.Fatal("legacy external_id must be removed from non-sensitive destination config")
+	}
+	storedSensitiveConfig, err := getDestinationSensitiveConfig(
+		context.Background(),
+		storage,
+		awssecretsmanager.ProviderType,
+		"prod",
+	)
+	if err != nil {
+		t.Fatalf("read stored sensitive config: %v", err)
+	}
+	if got := storedSensitiveConfig.Config[awssecretsmanager.ConfigKeyExternalID]; got != "tenant-legacy" {
+		t.Fatalf("migrated external_id = %q, want tenant-legacy", got)
+	}
+}
+
+func TestDestinationConfigResponseFiltersSensitiveKeys(t *testing.T) {
+	response := destinationConfigResponse(map[string]string{
+		awssecretsmanager.ConfigKeyRegion:          "eu-central-1",
+		awssecretsmanager.ConfigKeyExternalID:      "tenant-1",
+		awssecretsmanager.ConfigKeySecretAccessKey: "secret",
+	})
+	if got := response[awssecretsmanager.ConfigKeyRegion]; got != "eu-central-1" {
+		t.Fatalf("region = %v, want eu-central-1", got)
+	}
+	if _, ok := response[awssecretsmanager.ConfigKeyExternalID]; ok {
+		t.Fatal("response must not include external_id")
+	}
+	if _, ok := response[awssecretsmanager.ConfigKeySecretAccessKey]; ok {
+		t.Fatal("response must not include secret_access_key")
 	}
 }
 

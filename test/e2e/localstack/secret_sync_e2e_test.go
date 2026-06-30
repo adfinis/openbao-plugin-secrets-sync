@@ -51,9 +51,10 @@ func TestOpenBaoPluginSyncsToLocalStackSecretsManager(t *testing.T) {
 	})
 
 	write(t, baoClient, mountPath+"/destinations/aws-sm/prod", map[string]interface{}{
-		awssecretsmanager.ConfigKeyRegion:      awsRegion,
-		awssecretsmanager.ConfigKeyEndpointURL: localstackInBao,
-		awssecretsmanager.ConfigKeyAuthMode:    awssecretsmanager.AuthModeDefault,
+		awssecretsmanager.ConfigKeyRegion:         awsRegion,
+		awssecretsmanager.ConfigKeyEndpointURL:    localstackInBao,
+		awssecretsmanager.ConfigKeyEndpointPolicy: awssecretsmanager.EndpointPolicyLocal,
+		awssecretsmanager.ConfigKeyAuthMode:       awssecretsmanager.AuthModeDefault,
 	})
 	write(t, baoClient, mountPath+"/metadata/app/db", map[string]interface{}{
 		"custom_metadata": map[string]interface{}{

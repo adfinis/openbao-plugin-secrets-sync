@@ -84,8 +84,17 @@ func TestValidateDestinationConfig(t *testing.T) {
 		{
 			name: "default auth",
 			config: map[string]string{
-				ConfigKeyRegion:      testRegion,
-				ConfigKeyEndpointURL: testEndpointURL,
+				ConfigKeyRegion:         testRegion,
+				ConfigKeyEndpointURL:    testEndpointURL,
+				ConfigKeyEndpointPolicy: EndpointPolicyLocal,
+			},
+		},
+		{
+			name: "private endpoint",
+			config: map[string]string{
+				ConfigKeyRegion:         testRegion,
+				ConfigKeyEndpointURL:    "https://10.0.0.5",
+				ConfigKeyEndpointPolicy: EndpointPolicyPrivate,
 			},
 		},
 		{
@@ -101,7 +110,14 @@ func TestValidateDestinationConfig(t *testing.T) {
 		{
 			name: "unsupported static auth",
 			config: map[string]string{
-				ConfigKeyAuthMode: "static",
+				ConfigKeyAuthMode: AuthModeStatic,
+			},
+			errorClass: providers.ErrorClassValidation,
+		},
+		{
+			name: "static fields require static auth",
+			config: map[string]string{
+				ConfigKeyAccessKeyID: "AKIATEST",
 			},
 			errorClass: providers.ErrorClassValidation,
 		},
@@ -122,14 +138,46 @@ func TestValidateDestinationConfig(t *testing.T) {
 		{
 			name: "invalid endpoint scheme",
 			config: map[string]string{
-				ConfigKeyEndpointURL: "ftp://localhost",
+				ConfigKeyEndpointURL:    "ftp://localhost",
+				ConfigKeyEndpointPolicy: EndpointPolicyLocal,
+			},
+			errorClass: providers.ErrorClassValidation,
+		},
+		{
+			name: "endpoint requires explicit policy",
+			config: map[string]string{
+				ConfigKeyEndpointURL: testEndpointURL,
+			},
+			errorClass: providers.ErrorClassValidation,
+		},
+		{
+			name: "endpoint policy requires endpoint",
+			config: map[string]string{
+				ConfigKeyEndpointPolicy: EndpointPolicyLocal,
 			},
 			errorClass: providers.ErrorClassValidation,
 		},
 		{
 			name: "endpoint userinfo rejected",
 			config: map[string]string{
-				ConfigKeyEndpointURL: "https://user@example.com",
+				ConfigKeyEndpointURL:    "https://user@example.com",
+				ConfigKeyEndpointPolicy: EndpointPolicyPrivate,
+			},
+			errorClass: providers.ErrorClassValidation,
+		},
+		{
+			name: "private endpoint rejects http",
+			config: map[string]string{
+				ConfigKeyEndpointURL:    "http://10.0.0.5",
+				ConfigKeyEndpointPolicy: EndpointPolicyPrivate,
+			},
+			errorClass: providers.ErrorClassValidation,
+		},
+		{
+			name: "private endpoint rejects loopback",
+			config: map[string]string{
+				ConfigKeyEndpointURL:    "https://127.0.0.1:4566",
+				ConfigKeyEndpointPolicy: EndpointPolicyPrivate,
 			},
 			errorClass: providers.ErrorClassValidation,
 		},

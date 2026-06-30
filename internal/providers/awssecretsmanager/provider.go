@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
+	"net/netip"
 	"net/url"
 	"strconv"
 	"strings"
@@ -28,6 +29,8 @@ const (
 	ConfigKeyRegion = "region"
 	// ConfigKeyEndpointURL configures a custom Secrets Manager endpoint, primarily for localstack.
 	ConfigKeyEndpointURL = "endpoint_url"
+	// ConfigKeyEndpointPolicy explicitly opts in to custom endpoint behavior.
+	ConfigKeyEndpointPolicy = "endpoint_policy"
 	// ConfigKeyAuthMode selects AWS credential behavior.
 	ConfigKeyAuthMode = "auth_mode"
 	// ConfigKeyRoleARN configures the role ARN for assume-role auth.
@@ -36,11 +39,26 @@ const (
 	ConfigKeyExternalID = "external_id"
 	// ConfigKeySessionName configures the optional role session name for assume-role auth.
 	ConfigKeySessionName = "session_name"
+	// ConfigKeyAccessKeyID configures the static AWS access key ID. Static auth is intentionally unsupported for now.
+	ConfigKeyAccessKeyID = "access_key_id"
+	// ConfigKeySecretAccessKey configures the static AWS secret access key.
+	// Static auth is intentionally unsupported for now.
+	ConfigKeySecretAccessKey = "secret_access_key"
+	// ConfigKeySessionToken configures the optional static AWS session token.
+	// Static auth is intentionally unsupported for now.
+	ConfigKeySessionToken = "session_token"
 
 	// AuthModeDefault uses the AWS SDK default credential chain.
 	AuthModeDefault = "default"
 	// AuthModeAssumeRole uses the default credential chain and then assumes a configured role.
 	AuthModeAssumeRole = "assume_role"
+	// AuthModeStatic is reserved for non-default static credential auth.
+	AuthModeStatic = "static"
+
+	// EndpointPolicyLocal allows development endpoints such as LocalStack.
+	EndpointPolicyLocal = "local"
+	// EndpointPolicyPrivate allows explicitly configured HTTPS private endpoints.
+	EndpointPolicyPrivate = "private"
 
 	// AWS Secrets Manager caps the encrypted secret value at 65,536 bytes.
 	secretValueMaxBytes = 65536
@@ -325,32 +343,48 @@ func defaultClientFactory(
 }
 
 type awsDestinationOptions struct {
-	region      string
-	endpointURL string
-	authMode    string
-	roleARN     string
-	externalID  string
-	sessionName string
+	region          string
+	endpointURL     string
+	endpointPolicy  string
+	authMode        string
+	roleARN         string
+	externalID      string
+	sessionName     string
+	accessKeyID     string
+	secretAccessKey string
+	sessionToken    string
 }
 
 func awsDestinationOptionsFromConfig(cfg providers.DestinationConfig) (awsDestinationOptions, error) {
 	options := awsDestinationOptions{
-		region:      configValue(cfg, ConfigKeyRegion),
-		endpointURL: configValue(cfg, ConfigKeyEndpointURL),
-		authMode:    normalizedAuthMode(cfg),
-		roleARN:     configValue(cfg, ConfigKeyRoleARN),
-		externalID:  configValue(cfg, ConfigKeyExternalID),
-		sessionName: configValue(cfg, ConfigKeySessionName),
+		region:          configValue(cfg, ConfigKeyRegion),
+		endpointURL:     configValue(cfg, ConfigKeyEndpointURL),
+		endpointPolicy:  configValue(cfg, ConfigKeyEndpointPolicy),
+		authMode:        normalizedAuthMode(cfg),
+		roleARN:         configValue(cfg, ConfigKeyRoleARN),
+		externalID:      configValue(cfg, ConfigKeyExternalID),
+		sessionName:     configValue(cfg, ConfigKeySessionName),
+		accessKeyID:     configValue(cfg, ConfigKeyAccessKeyID),
+		secretAccessKey: configValue(cfg, ConfigKeySecretAccessKey),
+		sessionToken:    configValue(cfg, ConfigKeySessionToken),
 	}
 	if options.endpointURL != "" {
-		if err := validateEndpointURL(options.endpointURL); err != nil {
+		if options.endpointPolicy == "" {
+			return awsDestinationOptions{}, validationError("aws-sm endpoint_url requires endpoint_policy")
+		}
+		if err := validateEndpointURL(options.endpointURL, options.endpointPolicy); err != nil {
 			return awsDestinationOptions{}, err
 		}
+	} else if options.endpointPolicy != "" {
+		return awsDestinationOptions{}, validationError("aws-sm endpoint_policy requires endpoint_url")
 	}
 	switch options.authMode {
 	case AuthModeDefault:
 		if options.roleARN != "" || options.externalID != "" || options.sessionName != "" {
 			return awsDestinationOptions{}, validationError("aws-sm role fields require auth_mode assume_role")
+		}
+		if options.hasStaticCredentials() {
+			return awsDestinationOptions{}, validationError("aws-sm static credential fields require auth_mode static")
 		}
 	case AuthModeAssumeRole:
 		if options.roleARN == "" {
@@ -359,12 +393,21 @@ func awsDestinationOptionsFromConfig(cfg providers.DestinationConfig) (awsDestin
 		if !isLikelyRoleARN(options.roleARN) {
 			return awsDestinationOptions{}, validationError("aws-sm role_arn must be an IAM role ARN")
 		}
+		if options.hasStaticCredentials() {
+			return awsDestinationOptions{}, validationError("aws-sm static credential fields require auth_mode static")
+		}
+	case AuthModeStatic:
+		return awsDestinationOptions{}, validationError("aws-sm auth_mode static is not supported yet")
 	default:
 		return awsDestinationOptions{}, validationError(
-			"aws-sm auth_mode must be default or assume_role",
+			"aws-sm auth_mode must be default, assume_role, or static",
 		)
 	}
 	return options, nil
+}
+
+func (options awsDestinationOptions) hasStaticCredentials() bool {
+	return options.accessKeyID != "" || options.secretAccessKey != "" || options.sessionToken != ""
 }
 
 func normalizedAuthMode(cfg providers.DestinationConfig) string {
@@ -382,18 +425,79 @@ func configValue(cfg providers.DestinationConfig, key string) string {
 	return strings.TrimSpace(cfg.Config[key])
 }
 
-func validateEndpointURL(rawEndpoint string) error {
+func validateEndpointURL(rawEndpoint string, endpointPolicy string) error {
 	parsedEndpoint, err := url.Parse(rawEndpoint)
 	if err != nil {
 		return validationError("aws-sm endpoint_url must be a valid URL")
 	}
-	if parsedEndpoint.Scheme != "https" && parsedEndpoint.Scheme != "http" {
-		return validationError("aws-sm endpoint_url must use http or https")
+	if parsedEndpoint.Host == "" || parsedEndpoint.User != nil ||
+		parsedEndpoint.RawQuery != "" || parsedEndpoint.Fragment != "" {
+		return validationError("aws-sm endpoint_url must include a host and no userinfo, query, or fragment")
 	}
-	if parsedEndpoint.Host == "" || parsedEndpoint.User != nil {
-		return validationError("aws-sm endpoint_url must include a host and no userinfo")
+	host := normalizeEndpointHost(parsedEndpoint.Hostname())
+	if host == "" {
+		return validationError("aws-sm endpoint_url must include a host")
+	}
+	switch endpointPolicy {
+	case EndpointPolicyLocal:
+		return validateLocalEndpointURL(parsedEndpoint.Scheme, host)
+	case EndpointPolicyPrivate:
+		return validatePrivateEndpointURL(parsedEndpoint.Scheme, host)
+	default:
+		return validationError("aws-sm endpoint_policy must be local or private")
+	}
+}
+
+func validateLocalEndpointURL(scheme string, host string) error {
+	if scheme != "https" && scheme != "http" {
+		return validationError("aws-sm local endpoint_url must use http or https")
+	}
+	if !isLocalEndpointHost(host) {
+		return validationError("aws-sm local endpoint_url host must be localhost, loopback, or localstack")
 	}
 	return nil
+}
+
+func validatePrivateEndpointURL(scheme string, host string) error {
+	if scheme != "https" {
+		return validationError("aws-sm private endpoint_url must use https")
+	}
+	if isLocalEndpointHost(host) {
+		return validationError("aws-sm private endpoint_url must not target local development hosts")
+	}
+	if addr, ok := parseEndpointAddr(host); ok && isUnsafeEndpointAddr(addr) {
+		return validationError(
+			"aws-sm private endpoint_url must not target loopback, link-local, multicast, or unspecified addresses",
+		)
+	}
+	return nil
+}
+
+func normalizeEndpointHost(host string) string {
+	return strings.TrimSuffix(strings.ToLower(strings.TrimSpace(host)), ".")
+}
+
+func isLocalEndpointHost(host string) bool {
+	if host == "localhost" || host == "localstack" || strings.HasSuffix(host, ".localhost") {
+		return true
+	}
+	addr, ok := parseEndpointAddr(host)
+	return ok && addr.IsLoopback()
+}
+
+func parseEndpointAddr(host string) (netip.Addr, bool) {
+	addr, err := netip.ParseAddr(host)
+	if err != nil {
+		return netip.Addr{}, false
+	}
+	return addr, true
+}
+
+func isUnsafeEndpointAddr(addr netip.Addr) bool {
+	return addr.IsLoopback() ||
+		addr.IsLinkLocalUnicast() ||
+		addr.IsMulticast() ||
+		addr.IsUnspecified()
 }
 
 func isLikelyRoleARN(roleARN string) bool {

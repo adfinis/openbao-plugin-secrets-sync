@@ -366,8 +366,8 @@ Key construction choices:
 
 - `BackendType: logical.TypeLogical`
 - `RunningVersion: pluginVersion`
-- `PathsSpecial.SealWrapStorage`: destination secrets and optional local secret
-  data prefixes
+- `PathsSpecial.SealWrapStorage`: destination sensitive config and optional
+  local secret data prefixes
 - `PathsSpecial.LocalStorage`: runtime locks only if they must not replicate
 - `PeriodicFunc`: outbox processing and reconciliation scheduler
 - `WALRollback`: only where provider operations need explicit compensation

@@ -393,7 +393,11 @@ func (b *secretSyncBackend) pathAssociationPlan(
 			},
 		)}, nil
 	}
-	planRequest := providerPlanRequest(record, *destination, metadata.CurrentVersion, preparedPayload)
+	resolvedDestinationConfig, err := destinationConfig(ctx, req.Storage, *destination)
+	if err != nil {
+		return nil, err
+	}
+	planRequest := providerPlanRequest(record, resolvedDestinationConfig, metadata.CurrentVersion, preparedPayload)
 	plan, providerErr := provider.Plan(ctx, planRequest)
 	if providerErr != nil {
 		return &logical.Response{Data: associationPlanResponse(
@@ -448,12 +452,12 @@ func currentSourceVersionFromPlanRequest(
 
 func providerPlanRequest(
 	record associationRecord,
-	destination destinationRecord,
+	destination providers.DestinationConfig,
 	version int,
 	preparedPayload payloadpkg.CanonicalPayload,
 ) providers.PlanRequest {
 	return providers.PlanRequest{
-		Destination:   destinationConfig(destination),
+		Destination:   destination,
 		ResolvedName:  record.ResolvedName,
 		Format:        preparedPayload.Format,
 		PayloadSHA256: preparedPayload.SHA256,

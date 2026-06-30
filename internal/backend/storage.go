@@ -252,6 +252,47 @@ func listDestinationNames(ctx context.Context, storage logical.Storage, destinat
 	return storage.List(ctx, destinationStoragePrefix+destinationType+"/")
 }
 
+func putDestinationSensitiveConfig(
+	ctx context.Context,
+	storage logical.Storage,
+	record destinationSensitiveRecord,
+) error {
+	entry, err := logical.StorageEntryJSON(destinationSensitiveStorageKey(record.Type, record.Name), record)
+	if err != nil {
+		return err
+	}
+	return storage.Put(ctx, entry)
+}
+
+func getDestinationSensitiveConfig(
+	ctx context.Context,
+	storage logical.Storage,
+	destinationType string,
+	name string,
+) (*destinationSensitiveRecord, error) {
+	entry, err := storage.Get(ctx, destinationSensitiveStorageKey(destinationType, name))
+	if err != nil {
+		return nil, err
+	}
+	if entry == nil {
+		return nil, nil
+	}
+	var record destinationSensitiveRecord
+	if err := entry.DecodeJSON(&record); err != nil {
+		return nil, err
+	}
+	return &record, nil
+}
+
+func deleteDestinationSensitiveConfig(
+	ctx context.Context,
+	storage logical.Storage,
+	destinationType string,
+	name string,
+) error {
+	return storage.Delete(ctx, destinationSensitiveStorageKey(destinationType, name))
+}
+
 func putAssociation(ctx context.Context, storage logical.Storage, record associationRecord) error {
 	entry, err := logical.StorageEntryJSON(associationStorageKey(record.Path, record.ID), record)
 	if err != nil {

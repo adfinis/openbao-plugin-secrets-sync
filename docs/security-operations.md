@@ -109,6 +109,9 @@ credentials must be seal-wrapped.
 - Credential rotation must be possible without recreating associations.
 - Prefer workload identity and federated identity over static keys where the
   destination supports it.
+- Current AWS support stores assume-role `external_id` in seal-wrapped
+  sensitive config. Static access keys and session tokens are recognized as
+  sensitive fields but intentionally remain unsupported auth material.
 - Derived short-lived tokens should be cached only in memory and invalidated on
   destination config updates.
 - Provider SDK default credential chains must be explicitly allowed or disabled
@@ -116,16 +119,19 @@ credentials must be seal-wrapped.
 
 ## SSRF And Network Controls
 
-Destination configs that include custom endpoints must be validated:
+Destination configs that include custom endpoints must be explicit and
+validated:
 
-- current AWS support validates URL shape and allows `http` endpoints for
-  localstack; the stricter production controls below are still required before
-  treating arbitrary custom endpoints as hardened;
-- default deny private, loopback, link-local, multicast, and special-purpose
-  addresses;
-- default allowed ports: 443, optionally 80;
-- optional explicit allowlist for private endpoint deployments;
-- DNS resolution checked at connection time, not only at config time;
+- `endpoint_url` requires an `endpoint_policy`;
+- `endpoint_policy=local` is for development endpoints such as LocalStack and
+  may use `http` only for local hosts;
+- `endpoint_policy=private` requires `https` and rejects direct loopback,
+  link-local, multicast, and unspecified addresses;
+- default AWS endpoints remain preferred for production;
+- DNS resolution still needs to be checked at connection time, not only at
+  config time;
+- optional explicit allowlists are still required for hardened private endpoint
+  deployments;
 - redirects disabled or constrained;
 - proxy behavior explicit in destination config.
 

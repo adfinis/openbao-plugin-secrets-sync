@@ -76,6 +76,14 @@ type destinationRecord struct {
 	UpdatedTime string            `json:"updated_time"`
 }
 
+type destinationSensitiveRecord struct {
+	Type        string            `json:"type"`
+	Name        string            `json:"name"`
+	Config      map[string]string `json:"config"`
+	CreatedTime string            `json:"created_time"`
+	UpdatedTime string            `json:"updated_time"`
+}
+
 type associationRecord struct {
 	ID              string `json:"id"`
 	Path            string `json:"path"`
@@ -172,6 +180,10 @@ func enqueueIntentStorageKey(path string, version int) string {
 
 func destinationStorageKey(destinationType string, name string) string {
 	return destinationStoragePrefix + destinationRef(destinationType, name)
+}
+
+func destinationSensitiveStorageKey(destinationType string, name string) string {
+	return destinationSecretsPrefix + destinationRef(destinationType, name)
 }
 
 func associationStorageKey(path string, id string) string {

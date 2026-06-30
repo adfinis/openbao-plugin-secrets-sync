@@ -2,6 +2,7 @@ package backend
 
 import (
 	"context"
+	"sort"
 	"strings"
 
 	"github.com/adfinis/openbao-secret-sync/internal/providers"
@@ -13,10 +14,17 @@ import (
 var destinationConfigFieldKeys = []string{
 	awssecretsmanager.ConfigKeyRegion,
 	awssecretsmanager.ConfigKeyEndpointURL,
+	awssecretsmanager.ConfigKeyEndpointPolicy,
 	awssecretsmanager.ConfigKeyAuthMode,
 	awssecretsmanager.ConfigKeyRoleARN,
-	awssecretsmanager.ConfigKeyExternalID,
 	awssecretsmanager.ConfigKeySessionName,
+}
+
+var destinationSensitiveConfigFieldKeys = []string{
+	awssecretsmanager.ConfigKeyExternalID,
+	awssecretsmanager.ConfigKeyAccessKeyID,
+	awssecretsmanager.ConfigKeySecretAccessKey,
+	awssecretsmanager.ConfigKeySessionToken,
 }
 
 func pathDestinations(b *secretSyncBackend) []*framework.Path {
@@ -107,11 +115,15 @@ func destinationRequestFields() map[string]*framework.FieldSchema {
 	}
 	fields[awssecretsmanager.ConfigKeyEndpointURL] = &framework.FieldSchema{
 		Type:        framework.TypeString,
-		Description: "Custom AWS Secrets Manager endpoint URL, primarily for localstack.",
+		Description: "Custom AWS Secrets Manager endpoint URL. Requires endpoint_policy.",
+	}
+	fields[awssecretsmanager.ConfigKeyEndpointPolicy] = &framework.FieldSchema{
+		Type:        framework.TypeString,
+		Description: "Custom endpoint policy for aws-sm destinations: local or private.",
 	}
 	fields[awssecretsmanager.ConfigKeyAuthMode] = &framework.FieldSchema{
 		Type:        framework.TypeString,
-		Description: "AWS auth mode for aws-sm destinations: default or assume_role.",
+		Description: "AWS auth mode for aws-sm destinations: default, assume_role, or reserved static.",
 	}
 	fields[awssecretsmanager.ConfigKeyRoleARN] = &framework.FieldSchema{
 		Type:        framework.TypeString,
@@ -120,10 +132,34 @@ func destinationRequestFields() map[string]*framework.FieldSchema {
 	fields[awssecretsmanager.ConfigKeyExternalID] = &framework.FieldSchema{
 		Type:        framework.TypeString,
 		Description: "External ID passed to STS for aws-sm assume_role destinations.",
+		DisplayAttrs: &framework.DisplayAttributes{
+			Sensitive: true,
+		},
 	}
 	fields[awssecretsmanager.ConfigKeySessionName] = &framework.FieldSchema{
 		Type:        framework.TypeString,
 		Description: "Optional STS session name for aws-sm assume_role destinations.",
+	}
+	fields[awssecretsmanager.ConfigKeyAccessKeyID] = &framework.FieldSchema{
+		Type:        framework.TypeString,
+		Description: "Static AWS access key ID. Static auth is intentionally unsupported until a later slice.",
+		DisplayAttrs: &framework.DisplayAttributes{
+			Sensitive: true,
+		},
+	}
+	fields[awssecretsmanager.ConfigKeySecretAccessKey] = &framework.FieldSchema{
+		Type:        framework.TypeString,
+		Description: "Static AWS secret access key. Static auth is intentionally unsupported until a later slice.",
+		DisplayAttrs: &framework.DisplayAttributes{
+			Sensitive: true,
+		},
+	}
+	fields[awssecretsmanager.ConfigKeySessionToken] = &framework.FieldSchema{
+		Type:        framework.TypeString,
+		Description: "Static AWS session token. Static auth is intentionally unsupported until a later slice.",
+		DisplayAttrs: &framework.DisplayAttributes{
+			Sensitive: true,
+		},
 	}
 	return fields
 }
@@ -157,12 +193,20 @@ func (b *secretSyncBackend) pathDestinationWrite(
 	if err != nil {
 		return nil, err
 	}
+	existingSensitive, err := getDestinationSensitiveConfig(ctx, req.Storage, destinationType, name)
+	if err != nil {
+		return nil, err
+	}
+	config := destinationConfigFromFieldData(existing, data)
+	sensitiveConfig := destinationSensitiveConfigFromFieldData(existingSensitive, data)
+	migrateSensitiveConfigFromDestination(existing, data, sensitiveConfig)
+	removeSensitiveConfigKeys(config)
 	record := destinationRecord{
 		Type:        destinationType,
 		Name:        name,
 		Description: data.Get("description").(string),
 		Disabled:    data.Get("disabled").(bool),
-		Config:      destinationConfigFromFieldData(existing, data),
+		Config:      config,
 		CreatedTime: now,
 		UpdatedTime: now,
 	}
@@ -170,6 +214,25 @@ func (b *secretSyncBackend) pathDestinationWrite(
 		record.CreatedTime = existing.CreatedTime
 	}
 	if err := putDestination(ctx, req.Storage, record); err != nil {
+		return nil, err
+	}
+	if len(sensitiveConfig) == 0 {
+		if err := deleteDestinationSensitiveConfig(ctx, req.Storage, destinationType, name); err != nil {
+			return nil, err
+		}
+		return nil, nil
+	}
+	sensitiveRecord := destinationSensitiveRecord{
+		Type:        destinationType,
+		Name:        name,
+		Config:      sensitiveConfig,
+		CreatedTime: now,
+		UpdatedTime: now,
+	}
+	if existingSensitive != nil {
+		sensitiveRecord.CreatedTime = existingSensitive.CreatedTime
+	}
+	if err := putDestinationSensitiveConfig(ctx, req.Storage, sensitiveRecord); err != nil {
 		return nil, err
 	}
 	return nil, nil
@@ -184,7 +247,11 @@ func (b *secretSyncBackend) pathDestinationValidate(
 	if response != nil || err != nil {
 		return response, err
 	}
-	providerErr := provider.Validate(ctx, destinationConfig(*record))
+	resolvedConfig, err := destinationConfig(ctx, req.Storage, *record)
+	if err != nil {
+		return nil, err
+	}
+	providerErr := provider.Validate(ctx, resolvedConfig)
 	if providerErr != nil {
 		return &logical.Response{Data: newResponseData(
 			responseField("valid", false),
@@ -209,7 +276,11 @@ func (b *secretSyncBackend) pathDestinationHealth(
 	if response != nil || err != nil {
 		return response, err
 	}
-	result, providerErr := provider.Health(ctx, destinationConfig(*record))
+	resolvedConfig, err := destinationConfig(ctx, req.Storage, *record)
+	if err != nil {
+		return nil, err
+	}
+	result, providerErr := provider.Health(ctx, resolvedConfig)
 	if providerErr != nil {
 		return &logical.Response{Data: newResponseData(
 			responseField("healthy", false),
@@ -246,7 +317,11 @@ func (b *secretSyncBackend) pathDestinationRead(
 	if err != nil {
 		return logical.ErrorResponse(err.Error()), nil
 	}
-	return &logical.Response{Data: destinationResponse(*record, provider.Capabilities())}, nil
+	sensitiveRecord, err := getDestinationSensitiveConfig(ctx, req.Storage, record.Type, record.Name)
+	if err != nil {
+		return nil, err
+	}
+	return &logical.Response{Data: destinationResponse(*record, sensitiveRecord, provider.Capabilities())}, nil
 }
 
 func (b *secretSyncBackend) destinationProviderFromRequest(
@@ -309,6 +384,9 @@ func (b *secretSyncBackend) pathDestinationDelete(
 	if err := deleteDestination(ctx, req.Storage, destinationType, name); err != nil {
 		return nil, err
 	}
+	if err := deleteDestinationSensitiveConfig(ctx, req.Storage, destinationType, name); err != nil {
+		return nil, err
+	}
 	return nil, nil
 }
 
@@ -319,6 +397,7 @@ func (b *secretSyncBackend) validateDestinationType(destinationType string) erro
 
 func destinationResponse(
 	record destinationRecord,
+	sensitiveRecord *destinationSensitiveRecord,
 	capabilities providers.Capabilities,
 ) map[string]interface{} { //nolint:forbidigo
 	return newResponseData(
@@ -329,9 +408,7 @@ func destinationResponse(
 		responseField("config", destinationConfigResponse(record.Config)),
 		responseField("created_time", record.CreatedTime),
 		responseField("updated_time", record.UpdatedTime),
-		responseField("sensitive_config", newResponseData(
-			responseField("redacted", true),
-		)),
+		responseField("sensitive_config", destinationSensitiveConfigResponse(sensitiveRecord)),
 		responseField("capabilities", capabilitiesResponse(capabilities)),
 	)
 }
@@ -343,11 +420,25 @@ func destinationRefResponse(record destinationRecord) map[string]interface{} { /
 	)
 }
 
-func destinationConfig(record destinationRecord) providers.DestinationConfig {
+func destinationConfig(
+	ctx context.Context,
+	storage logical.Storage,
+	record destinationRecord,
+) (providers.DestinationConfig, error) {
+	config := copyStringMap(record.Config)
+	sensitiveRecord, err := getDestinationSensitiveConfig(ctx, storage, record.Type, record.Name)
+	if err != nil {
+		return providers.DestinationConfig{}, err
+	}
+	if sensitiveRecord != nil {
+		for key, value := range sensitiveRecord.Config {
+			config[key] = value
+		}
+	}
 	return providers.DestinationConfig{
 		Name:   record.Name,
-		Config: copyStringMap(record.Config),
-	}
+		Config: config,
+	}, nil
 }
 
 func destinationConfigFromFieldData(
@@ -373,12 +464,88 @@ func destinationConfigFromFieldData(
 	return config
 }
 
+func destinationSensitiveConfigFromFieldData(
+	existing *destinationSensitiveRecord,
+	data *framework.FieldData,
+) map[string]string {
+	config := map[string]string{}
+	if existing != nil {
+		config = copyStringMap(existing.Config)
+	}
+	for _, key := range destinationSensitiveConfigFieldKeys {
+		value, ok := data.GetOk(key)
+		if !ok {
+			continue
+		}
+		stringValue := strings.TrimSpace(value.(string))
+		if stringValue == "" {
+			delete(config, key)
+			continue
+		}
+		config[key] = stringValue
+	}
+	return config
+}
+
+func removeSensitiveConfigKeys(config map[string]string) {
+	for _, key := range destinationSensitiveConfigFieldKeys {
+		delete(config, key)
+	}
+}
+
+func migrateSensitiveConfigFromDestination(
+	existing *destinationRecord,
+	data *framework.FieldData,
+	sensitiveConfig map[string]string,
+) {
+	if existing == nil {
+		return
+	}
+	for _, key := range destinationSensitiveConfigFieldKeys {
+		if _, ok := data.GetOk(key); ok {
+			continue
+		}
+		value := strings.TrimSpace(existing.Config[key])
+		if value == "" {
+			continue
+		}
+		if _, ok := sensitiveConfig[key]; !ok {
+			sensitiveConfig[key] = value
+		}
+	}
+}
+
 func destinationConfigResponse(config map[string]string) map[string]interface{} { //nolint:forbidigo
-	response := make(map[string]interface{}, len(config)) //nolint:forbidigo
-	for key, value := range config {
+	publicConfig := copyStringMap(config)
+	removeSensitiveConfigKeys(publicConfig)
+	response := make(map[string]interface{}, len(publicConfig)) //nolint:forbidigo
+	for key, value := range publicConfig {
 		response[key] = value
 	}
 	return response
+}
+
+func destinationSensitiveConfigResponse(
+	sensitiveRecord *destinationSensitiveRecord,
+) map[string]interface{} { //nolint:forbidigo
+	keys := []string{}
+	if sensitiveRecord != nil {
+		keys = sortedStringMapKeys(sensitiveRecord.Config)
+	}
+	return newResponseData(
+		responseField("redacted", true),
+		responseField("configured", len(keys) > 0),
+		responseField("keys", keys),
+	)
+}
+
+func sortedStringMapKeys(input map[string]string) []string {
+	keys := make([]string, 0, len(input))
+	for key := range input {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	return keys
 }
 
 func copyStringMap(input map[string]string) map[string]string {

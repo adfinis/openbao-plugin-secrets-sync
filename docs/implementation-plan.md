@@ -170,9 +170,12 @@ Completed foundation:
 - AWS-specific mocked client cases exercise health, plan, upsert, delete,
   read-state, ownership rejection, and error classification.
 - SDK client boundary uses the AWS SDK default configuration chain.
-- Destination config supports `region`, `endpoint_url`, `auth_mode=default`,
-  and `auth_mode=assume_role` with `role_arn`, `external_id`, and
-  `session_name`.
+- Destination config supports `region`, `endpoint_url` with explicit
+  `endpoint_policy`, `auth_mode=default`, and `auth_mode=assume_role` with
+  `role_arn`, seal-wrapped `external_id`, and `session_name`.
+- Sensitive destination fields are split from non-sensitive destination
+  metadata, stored under the seal-wrapped destination secret prefix, and
+  redacted on reads.
 - Upsert, owned delete, read-state, and health behavior are implemented behind
   the provider interface.
 - Ownership tags include association id, source path, source version, object id,
@@ -189,11 +192,13 @@ Completed foundation:
 
 Remaining tasks:
 
-- Add a seal-wrapped sensitive destination config path before supporting static
-  AWS keys or session tokens.
-- Add stricter production network controls for custom endpoint URLs.
+- Keep static AWS keys and session tokens unsupported until their auth path,
+  rotation semantics, and tests are explicit.
+- Add DNS-time endpoint checks and optional allowlists for production private
+  endpoint deployments.
 - Broaden LocalStack coverage for auth variants and AWS failure paths after
   sensitive destination config storage exists.
+- Add opt-in real AWS e2e coverage with strict tagging and cleanup controls.
 
 Exit criteria:
 

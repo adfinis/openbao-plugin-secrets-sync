@@ -35,8 +35,8 @@ type Provider interface {
 }
 ```
 
-Destination config is deliberately split into a stable name and a provider-owned
-non-sensitive string map:
+Resolved destination config is deliberately split into a stable name and a
+provider-owned string map:
 
 ```go
 type DestinationConfig struct {
@@ -45,10 +45,10 @@ type DestinationConfig struct {
 }
 ```
 
-Sensitive destination credentials must not be stored in `Config`. Static
-access keys, session tokens, private keys, client secrets, and similar material
-need a separate seal-wrapped storage path and redacted read surface before they
-are added to any provider.
+Persistent destination metadata must keep sensitive fields out of the
+non-sensitive storage record. The backend stores sensitive fields under a
+seal-wrapped destination secret prefix, redacts reads, and merges them into the
+resolved provider config only for validation, health, planning, and dispatch.
 
 The core engine resolves provider implementations through the registry. Route
 handlers, association validation, and the dispatcher must use the same registry
@@ -362,14 +362,16 @@ demand and a useful ownership model through tags and version metadata.
 
 Current status: package has provider type `aws-sm`, conservative capabilities,
 backend registration, destination config for SDK default auth and STS
-assume-role auth, optional custom endpoint support for localstack, an
-SDK-backed client boundary, and mocked behavior tests for health, plan, upsert,
-owned delete, read-state, ownership checks, and AWS error classification.
+assume-role auth, seal-wrapped external ID handling, explicit custom endpoint
+policies, an SDK-backed client boundary, LocalStack e2e coverage, and mocked
+behavior tests for health, plan, upsert, owned delete, read-state, ownership
+checks, and AWS error classification.
 
 Required implementation behavior:
 
 - support workload identity or role assumption before static keys;
-- validate auth mode, assume-role fields, and endpoint URL shape;
+- validate auth mode, assume-role fields, sensitive static credential fields,
+  endpoint URL shape, and endpoint policy;
 - write ownership tags for association id, source path, source version, object
   id, and payload hash;
 - enforce max payload size before remote calls;
@@ -379,8 +381,10 @@ Required implementation behavior:
 - detect ownership loss before update or delete;
 - avoid logging AWS responses that may include secret material.
 
-Static access keys are intentionally not supported yet. They require a separate
-seal-wrapped sensitive config path, redaction tests, and rotation semantics.
+Static access keys are intentionally not supported yet. The backend now has the
+seal-wrapped storage and redaction surface needed for them, but static auth
+still requires explicit credential construction, rotation semantics, and opt-in
+tests before it should be enabled.
 
 ### Kubernetes Secrets
 
