@@ -22,6 +22,7 @@ const (
 	outboxByPathStoragePrefix  = "outbox_by_path/"
 	defaultQueueCapacity       = 1000
 	defaultMaxVersions         = 10
+	defaultDeleteVersionAfter  = "0s"
 	outboxStatePending         = "pending"
 	outboxStateRetryWait       = "retry_wait"
 	outboxStateFailedTerminal  = "failed_terminal"
@@ -51,12 +52,14 @@ type versionMetadata struct {
 }
 
 type metadataRecord struct {
-	CurrentVersion int                        `json:"current_version"`
-	OldestVersion  int                        `json:"oldest_version"`
-	MaxVersions    int                        `json:"max_versions"`
-	CASRequired    bool                       `json:"cas_required"`
-	Versions       map[string]versionMetadata `json:"versions"`
-	UpdatedTime    string                     `json:"updated_time"`
+	CurrentVersion     int                        `json:"current_version"`
+	OldestVersion      int                        `json:"oldest_version"`
+	MaxVersions        int                        `json:"max_versions"`
+	CASRequired        bool                       `json:"cas_required"`
+	DeleteVersionAfter string                     `json:"delete_version_after"`
+	CustomMetadata     map[string]string          `json:"custom_metadata"`
+	Versions           map[string]versionMetadata `json:"versions"`
+	UpdatedTime        string                     `json:"updated_time"`
 }
 
 type destinationRecord struct {
@@ -126,6 +129,7 @@ type statusRecord struct {
 	DestinationRef  string `json:"destination_ref"`
 	ResolvedName    string `json:"resolved_name"`
 	State           string `json:"state"`
+	PayloadSHA256   string `json:"payload_sha256"`
 	RemoteVersion   string `json:"remote_version"`
 	LastOperationID string `json:"last_operation_id"`
 	LastSuccessTime string `json:"last_success_time"`
@@ -223,8 +227,10 @@ func newOperationID(
 
 func newMetadataRecord() metadataRecord {
 	return metadataRecord{
-		MaxVersions: defaultMaxVersions,
-		Versions:    make(map[string]versionMetadata),
+		MaxVersions:        defaultMaxVersions,
+		DeleteVersionAfter: defaultDeleteVersionAfter,
+		CustomMetadata:     make(map[string]string),
+		Versions:           make(map[string]versionMetadata),
 	}
 }
 

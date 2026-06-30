@@ -2,6 +2,7 @@ package backend
 
 import (
 	"context"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -20,9 +21,7 @@ func getMetadata(ctx context.Context, storage logical.Storage, path string) (*me
 	if err := entry.DecodeJSON(&metadata); err != nil {
 		return nil, err
 	}
-	if metadata.Versions == nil {
-		metadata.Versions = make(map[string]versionMetadata)
-	}
+	normalizeMetadataDefaults(&metadata)
 	return &metadata, nil
 }
 
@@ -101,6 +100,68 @@ func deleteSourcePath(ctx context.Context, storage logical.Storage, path string)
 		}
 	}
 	return deleteMetadata(ctx, storage, path)
+}
+
+func normalizeMetadataDefaults(metadata *metadataRecord) {
+	if metadata.MaxVersions == 0 {
+		metadata.MaxVersions = defaultMaxVersions
+	}
+	if metadata.DeleteVersionAfter == "" {
+		metadata.DeleteVersionAfter = defaultDeleteVersionAfter
+	}
+	if metadata.CustomMetadata == nil {
+		metadata.CustomMetadata = make(map[string]string)
+	}
+	if metadata.Versions == nil {
+		metadata.Versions = make(map[string]versionMetadata)
+	}
+}
+
+func pruneExcessVersions(ctx context.Context, storage logical.Storage, path string, metadata *metadataRecord) error {
+	if metadata.MaxVersions <= 0 || metadata.CurrentVersion == 0 {
+		return nil
+	}
+	keepFrom := metadata.CurrentVersion - metadata.MaxVersions + 1
+	if keepFrom <= 1 {
+		metadata.OldestVersion = oldestMetadataVersion(metadata)
+		return nil
+	}
+	for version := range metadata.Versions {
+		versionNumber, err := strconv.Atoi(version)
+		if err != nil {
+			return err
+		}
+		if versionNumber >= keepFrom {
+			continue
+		}
+		if err := deleteVersion(ctx, storage, path, versionNumber); err != nil {
+			return err
+		}
+		delete(metadata.Versions, version)
+	}
+	metadata.OldestVersion = oldestMetadataVersion(metadata)
+	return nil
+}
+
+func oldestMetadataVersion(metadata *metadataRecord) int {
+	versions := metadataVersionNumbers(metadata)
+	if len(versions) == 0 {
+		return 0
+	}
+	return versions[0]
+}
+
+func metadataVersionNumbers(metadata *metadataRecord) []int {
+	versions := make([]int, 0, len(metadata.Versions))
+	for version := range metadata.Versions {
+		versionNumber, err := strconv.Atoi(version)
+		if err != nil {
+			continue
+		}
+		versions = append(versions, versionNumber)
+	}
+	sort.Ints(versions)
+	return versions
 }
 
 func putEnqueueIntent(ctx context.Context, storage logical.Storage, record enqueueIntentRecord) error {

@@ -2,13 +2,13 @@ package backend
 
 import (
 	"context"
-	"fmt"
 
+	"github.com/adfinis/openbao-secret-sync/internal/providers"
 	"github.com/openbao/openbao/sdk/v2/framework"
 	"github.com/openbao/openbao/sdk/v2/logical"
 )
 
-func pathDestinations(_ *secretSyncBackend) []*framework.Path {
+func pathDestinations(b *secretSyncBackend) []*framework.Path {
 	return []*framework.Path{
 		{
 			Pattern: "destinations/" + framework.GenericNameRegex("type") + "/?",
@@ -20,7 +20,7 @@ func pathDestinations(_ *secretSyncBackend) []*framework.Path {
 			},
 			Operations: map[logical.Operation]framework.OperationHandler{
 				logical.ListOperation: &framework.PathOperation{
-					Callback: pathDestinationList,
+					Callback: b.pathDestinationList,
 					Summary:  "List configured destinations for a provider type.",
 				},
 			},
@@ -49,19 +49,19 @@ func pathDestinations(_ *secretSyncBackend) []*framework.Path {
 			},
 			Operations: map[logical.Operation]framework.OperationHandler{
 				logical.CreateOperation: &framework.PathOperation{
-					Callback: pathDestinationWrite,
+					Callback: b.pathDestinationWrite,
 					Summary:  "Create a destination.",
 				},
 				logical.UpdateOperation: &framework.PathOperation{
-					Callback: pathDestinationWrite,
+					Callback: b.pathDestinationWrite,
 					Summary:  "Create or update a destination.",
 				},
 				logical.ReadOperation: &framework.PathOperation{
-					Callback: pathDestinationRead,
+					Callback: b.pathDestinationRead,
 					Summary:  "Read a destination.",
 				},
 				logical.DeleteOperation: &framework.PathOperation{
-					Callback: pathDestinationDelete,
+					Callback: b.pathDestinationDelete,
 					Summary:  "Delete a destination.",
 				},
 			},
@@ -71,14 +71,14 @@ func pathDestinations(_ *secretSyncBackend) []*framework.Path {
 	}
 }
 
-func pathDestinationWrite(
+func (b *secretSyncBackend) pathDestinationWrite(
 	ctx context.Context,
 	req *logical.Request,
 	data *framework.FieldData,
 ) (*logical.Response, error) {
 	destinationType := data.Get("type").(string)
 	name := data.Get("name").(string)
-	if err := validateDestinationType(destinationType); err != nil {
+	if err := b.validateDestinationType(destinationType); err != nil {
 		return logical.ErrorResponse(err.Error()), nil
 	}
 
@@ -104,7 +104,7 @@ func pathDestinationWrite(
 	return nil, nil
 }
 
-func pathDestinationRead(
+func (b *secretSyncBackend) pathDestinationRead(
 	ctx context.Context,
 	req *logical.Request,
 	data *framework.FieldData,
@@ -116,16 +116,20 @@ func pathDestinationRead(
 	if record == nil {
 		return nil, nil
 	}
-	return &logical.Response{Data: destinationResponse(*record)}, nil
+	provider, err := b.providerRegistry.MustGet(record.Type)
+	if err != nil {
+		return logical.ErrorResponse(err.Error()), nil
+	}
+	return &logical.Response{Data: destinationResponse(*record, provider.Capabilities())}, nil
 }
 
-func pathDestinationList(
+func (b *secretSyncBackend) pathDestinationList(
 	ctx context.Context,
 	req *logical.Request,
 	data *framework.FieldData,
 ) (*logical.Response, error) {
 	destinationType := data.Get("type").(string)
-	if err := validateDestinationType(destinationType); err != nil {
+	if err := b.validateDestinationType(destinationType); err != nil {
 		return logical.ErrorResponse(err.Error()), nil
 	}
 	names, err := listDestinationNames(ctx, req.Storage, destinationType)
@@ -135,14 +139,14 @@ func pathDestinationList(
 	return logical.ListResponse(names), nil
 }
 
-func pathDestinationDelete(
+func (b *secretSyncBackend) pathDestinationDelete(
 	ctx context.Context,
 	req *logical.Request,
 	data *framework.FieldData,
 ) (*logical.Response, error) {
 	destinationType := data.Get("type").(string)
 	name := data.Get("name").(string)
-	if err := validateDestinationType(destinationType); err != nil {
+	if err := b.validateDestinationType(destinationType); err != nil {
 		return logical.ErrorResponse(err.Error()), nil
 	}
 	associationIDs, err := listAssociationIDsForDestination(ctx, req.Storage, destinationType, name)
@@ -158,14 +162,15 @@ func pathDestinationDelete(
 	return nil, nil
 }
 
-func validateDestinationType(destinationType string) error {
-	if destinationType != providerTypeFake {
-		return fmt.Errorf("unsupported destination type %q", destinationType)
-	}
-	return nil
+func (b *secretSyncBackend) validateDestinationType(destinationType string) error {
+	_, err := b.providerRegistry.MustGet(destinationType)
+	return err
 }
 
-func destinationResponse(record destinationRecord) map[string]interface{} { //nolint:forbidigo
+func destinationResponse(
+	record destinationRecord,
+	capabilities providers.Capabilities,
+) map[string]interface{} { //nolint:forbidigo
 	return newResponseData(
 		responseField("type", record.Type),
 		responseField("name", record.Name),
@@ -176,19 +181,19 @@ func destinationResponse(record destinationRecord) map[string]interface{} { //no
 		responseField("sensitive_config", newResponseData(
 			responseField("redacted", true),
 		)),
-		responseField("capabilities", fakeCapabilitiesResponse()),
+		responseField("capabilities", capabilitiesResponse(capabilities)),
 	)
 }
 
-func fakeCapabilitiesResponse() map[string]interface{} { //nolint:forbidigo
+func capabilitiesResponse(capabilities providers.Capabilities) map[string]interface{} { //nolint:forbidigo
 	return newResponseData(
-		responseField("supports_value_readback", true),
-		responseField("supports_metadata_readback", true),
-		responseField("supports_payload_hash_metadata", true),
-		responseField("supports_update_if_owned", true),
-		responseField("supports_delete_if_owned", true),
-		responseField("supports_secret_path", true),
-		responseField("supports_secret_key", true),
-		responseField("max_payload_bytes", 1024*1024),
+		responseField("supports_value_readback", capabilities.SupportsValueReadback),
+		responseField("supports_metadata_readback", capabilities.SupportsMetadataReadback),
+		responseField("supports_payload_hash_metadata", capabilities.SupportsPayloadHashMetadata),
+		responseField("supports_update_if_owned", capabilities.SupportsUpdateIfOwned),
+		responseField("supports_delete_if_owned", capabilities.SupportsDeleteIfOwned),
+		responseField("supports_secret_path", capabilities.SupportsSecretPath),
+		responseField("supports_secret_key", capabilities.SupportsSecretKey),
+		responseField("max_payload_bytes", capabilities.MaxPayloadBytes),
 	)
 }

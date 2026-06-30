@@ -18,6 +18,11 @@ plugin binary.
 ## Interface
 
 ```go
+type Registry interface {
+    Get(providerType string) (Provider, bool)
+    MustGet(providerType string) (Provider, error)
+}
+
 type Provider interface {
     Type() string
     Capabilities() Capabilities
@@ -29,6 +34,10 @@ type Provider interface {
     Health(ctx context.Context, cfg DestinationConfig) (*HealthResult, error)
 }
 ```
+
+The core engine resolves provider implementations through the registry. Route
+handlers, association validation, and the dispatcher must use the same registry
+so capability checks and remote mutation cannot drift.
 
 Provider rules:
 
@@ -91,6 +100,24 @@ Required delete modes:
 
 Providers must return `ownership` or `collision` error classes when they cannot
 honor the requested safety mode.
+
+## Upsert Input
+
+Providers receive prepared payload bytes, not source secret maps:
+
+```go
+type UpsertRequest struct {
+    Destination   DestinationConfig
+    ResolvedName  string
+    Format        string
+    Payload       []byte
+    PayloadSHA256 string
+}
+```
+
+The core engine builds `Payload`, enforces `MaxPayloadBytes`, and computes
+`PayloadSHA256` before the provider is called. Providers must not reformat the
+payload before writing if they also persist or compare the payload hash.
 
 ## Ownership Metadata
 

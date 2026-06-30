@@ -82,8 +82,8 @@ Exit criteria:
 Tasks:
 
 - Implement KV-v2-like storage records.
-- Implement CAS, metadata list/read, soft delete, undelete, destroy, and
-  metadata delete.
+- Implement CAS, metadata list/read/write, latest and selected-version soft
+  delete, undelete, destroy, and metadata delete.
 - Implement durable outbox.
 - Implement enqueue-intent recovery.
 - Implement operation claiming and retry schedule.
@@ -93,6 +93,7 @@ Tasks:
 Exit criteria:
 
 - local KV behavior is covered by unit tests;
+- source metadata policy is covered by unit tests;
 - queue survives plugin restart;
 - incomplete enqueue intent is recovered;
 - stale operations do not overwrite newer source versions;
@@ -103,8 +104,9 @@ Exit criteria:
 Tasks:
 
 - Implement provider interface and capability model.
+- Implement provider registry and make dispatch provider-agnostic.
 - Implement template engine and name reservation index.
-- Implement canonical payload builder.
+- Implement canonical payload builder and status payload hashing.
 - Implement destination config validation.
 - Implement dry-run plan endpoint.
 - Implement source eligibility checks for association activation.
@@ -114,10 +116,13 @@ Exit criteria:
 
 - fake provider can report create, update, delete, conflict, and partial-success
   plans;
+- fake provider dispatch runs through the same registry path as real providers;
+- payload size limits are enforced before provider mutation;
+- status records include payload hashes but never secret values;
 - destination credentials are redacted on read;
 - invalid templates fail at association creation;
 - name collisions are rejected or require explicit operator resolution;
-- associations cannot bypass source eligibility.
+- enabled associations cannot bypass source eligibility.
 
 ## Phase 3: AWS Secrets Manager Provider
 

@@ -2,9 +2,11 @@ package backend
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/adfinis/openbao-secret-sync/internal/domain"
+	"github.com/adfinis/openbao-secret-sync/internal/providers"
 	"github.com/openbao/openbao/sdk/v2/logical"
 )
 
@@ -242,6 +244,44 @@ func TestUndeleteAndDestroyVersions(t *testing.T) {
 	}
 }
 
+func TestDeleteVersionsSoftDeletesSelectedVersions(t *testing.T) {
+	b := Backend(&logical.BackendConfig{})
+	storage := &logical.InmemStorage{}
+
+	writeAppDBSecret(t, b, storage, "initial")
+	secondResp := writeAppDBSecret(t, b, storage, "rotated")
+	secondMetadata := secondResp.Data["metadata"].(map[string]interface{})
+	if got := secondMetadata["version"]; got != 2 {
+		t.Fatalf("second write version = %v, want 2", got)
+	}
+
+	deleteResp := handleRequest(t, b, storage, logical.UpdateOperation, "delete/app/db", map[string]interface{}{
+		"versions": []int{1},
+	})
+	if deleteResp != nil && deleteResp.IsError() {
+		t.Fatalf("unexpected version delete error: %v", deleteResp.Error())
+	}
+	readDeletedResp := handleRequest(t, b, storage, logical.ReadOperation, "data/app/db", map[string]interface{}{
+		"version": 1,
+	})
+	if readDeletedResp != nil {
+		t.Fatalf("deleted version response = %#v, want nil", readDeletedResp)
+	}
+	readLatestResp := handleRequest(t, b, storage, logical.ReadOperation, "data/app/db", nil)
+	assertNoErrorResponse(t, readLatestResp)
+	readMetadata := readLatestResp.Data["metadata"].(map[string]interface{})
+	if got := readMetadata["version"]; got != 2 {
+		t.Fatalf("latest version = %v, want 2", got)
+	}
+
+	metadataResp := handleRequest(t, b, storage, logical.ReadOperation, "metadata/app/db", nil)
+	assertNoErrorResponse(t, metadataResp)
+	versions := metadataResp.Data["versions"].(map[string]versionMetadata)
+	if versions["1"].DeletionTime == "" {
+		t.Fatal("metadata version deletion_time must be set after version delete")
+	}
+}
+
 func TestMetadataDeleteRequiresAssociationRemoval(t *testing.T) {
 	b := Backend(&logical.BackendConfig{})
 	storage := &logical.InmemStorage{}
@@ -278,6 +318,84 @@ func TestMetadataDeleteRequiresAssociationRemoval(t *testing.T) {
 	}
 }
 
+func TestMetadataWriteEnforcesCASRequiredAndCustomMetadata(t *testing.T) {
+	b := Backend(&logical.BackendConfig{})
+	storage := &logical.InmemStorage{}
+
+	writeAppDBSecret(t, b, storage, "initial")
+	metadataResp := handleRequest(t, b, storage, logical.UpdateOperation, "metadata/app/db", map[string]interface{}{
+		"cas_required": true,
+		"custom_metadata": map[string]interface{}{
+			"syncable": "true",
+			"owner":    "platform",
+		},
+	})
+	assertNoErrorResponse(t, metadataResp)
+	if got := metadataResp.Data["cas_required"]; got != true {
+		t.Fatalf("cas_required = %v, want true", got)
+	}
+	customMetadata := metadataResp.Data["custom_metadata"].(map[string]string)
+	if got := customMetadata["syncable"]; got != "true" {
+		t.Fatalf("custom_metadata.syncable = %v, want true", got)
+	}
+
+	blockedResp := handleRequest(t, b, storage, logical.UpdateOperation, "data/app/db", map[string]interface{}{
+		"data": map[string]interface{}{
+			"password": "blocked",
+		},
+	})
+	if blockedResp == nil || !blockedResp.IsError() {
+		t.Fatalf("write without CAS response = %#v, want error", blockedResp)
+	}
+
+	allowedResp := handleRequest(t, b, storage, logical.UpdateOperation, "data/app/db", map[string]interface{}{
+		"data": map[string]interface{}{
+			"password": "rotated",
+		},
+		"options": map[string]interface{}{
+			"cas": 1,
+		},
+	})
+	assertNoErrorResponse(t, allowedResp)
+	allowedMetadata := allowedResp.Data["metadata"].(map[string]interface{})
+	if got := allowedMetadata["version"]; got != 2 {
+		t.Fatalf("allowed write version = %v, want 2", got)
+	}
+}
+
+func TestMetadataMaxVersionsPrunesOldVersions(t *testing.T) {
+	b := Backend(&logical.BackendConfig{})
+	storage := &logical.InmemStorage{}
+
+	metadataResp := handleRequest(t, b, storage, logical.UpdateOperation, "metadata/app/db", map[string]interface{}{
+		"max_versions": 2,
+	})
+	assertNoErrorResponse(t, metadataResp)
+
+	writeAppDBSecret(t, b, storage, "one")
+	writeAppDBSecret(t, b, storage, "two")
+	writeAppDBSecret(t, b, storage, "three")
+
+	readPrunedResp := handleRequest(t, b, storage, logical.ReadOperation, "data/app/db", map[string]interface{}{
+		"version": 1,
+	})
+	if readPrunedResp != nil {
+		t.Fatalf("pruned version response = %#v, want nil", readPrunedResp)
+	}
+	metadataResp = handleRequest(t, b, storage, logical.ReadOperation, "metadata/app/db", nil)
+	assertNoErrorResponse(t, metadataResp)
+	if got := metadataResp.Data["current_version"]; got != 3 {
+		t.Fatalf("current_version = %v, want 3", got)
+	}
+	if got := metadataResp.Data["oldest_version"]; got != 2 {
+		t.Fatalf("oldest_version = %v, want 2", got)
+	}
+	versions := metadataResp.Data["versions"].(map[string]versionMetadata)
+	if _, ok := versions["1"]; ok {
+		t.Fatalf("metadata versions = %v, want version 1 pruned", versions)
+	}
+}
+
 func TestAssociationCreateQueuesCurrentVersion(t *testing.T) {
 	b := Backend(&logical.BackendConfig{})
 	storage := &logical.InmemStorage{}
@@ -305,6 +423,35 @@ func TestAssociationCreateQueuesCurrentVersion(t *testing.T) {
 	if got := associations[0]["resolved_name"]; got != "prod/app/db" {
 		t.Fatalf("resolved name = %v, want prod/app/db", got)
 	}
+}
+
+func TestAssociationRequiresSyncableMetadata(t *testing.T) {
+	b := Backend(&logical.BackendConfig{})
+	storage := &logical.InmemStorage{}
+
+	writeAppDBSecret(t, b, storage, "initial")
+	createFakeDestination(t, b, storage, "default")
+
+	blockedResp := handleRequest(t, b, storage, logical.UpdateOperation, "associations/app/db", map[string]interface{}{
+		"destination_type": providerTypeFake,
+		"destination_name": "default",
+		"resolved_name":    "prod/app/db",
+		"granularity":      syncObjectIDSecretPath,
+		"format":           defaultAssociationFormat,
+	})
+	if blockedResp == nil || !blockedResp.IsError() {
+		t.Fatalf("association without syncable metadata response = %#v, want error", blockedResp)
+	}
+
+	markAppDBSyncable(t, b, storage)
+	allowedResp := handleRequest(t, b, storage, logical.UpdateOperation, "associations/app/db", map[string]interface{}{
+		"destination_type": providerTypeFake,
+		"destination_name": "default",
+		"resolved_name":    "prod/app/db",
+		"granularity":      syncObjectIDSecretPath,
+		"format":           defaultAssociationFormat,
+	})
+	assertNoErrorResponse(t, allowedResp)
 }
 
 func TestDataWriteCAS(t *testing.T) {
@@ -409,6 +556,49 @@ func TestPeriodicProcessesFakeOutbox(t *testing.T) {
 	}
 	if operation == nil || operation.State != outboxStateSucceeded {
 		t.Fatalf("outbox operation = %#v, want succeeded", operation)
+	}
+}
+
+func TestPeriodicRejectsPayloadOverProviderLimit(t *testing.T) {
+	b := Backend(&logical.BackendConfig{})
+	storage := &logical.InmemStorage{}
+
+	resp := handleRequest(t, b, storage, logical.UpdateOperation, "data/app/db", map[string]interface{}{
+		"data": map[string]interface{}{
+			"password": strings.Repeat("x", 1024*1024) + "secret-canary",
+		},
+	})
+	assertNoErrorResponse(t, resp)
+	createFakeDestination(t, b, storage, "default")
+	associationResp := createDefaultFakeAssociation(t, b, storage)
+	operationID := operationIDsFromResponse(t, associationResp)[0]
+
+	if err := b.periodic(context.Background(), &logical.Request{Storage: storage}); err != nil {
+		t.Fatalf("periodic: %v", err)
+	}
+
+	operation, err := getOutbox(context.Background(), storage, operationID)
+	if err != nil {
+		t.Fatalf("read outbox operation: %v", err)
+	}
+	if operation == nil || operation.State != outboxStateFailedTerminal {
+		t.Fatalf("outbox operation = %#v, want terminal failure", operation)
+	}
+	statusResp := handleRequest(t, b, storage, logical.ReadOperation, "status/app/db", nil)
+	assertNoErrorResponse(t, statusResp)
+	objects := statusResp.Data["objects"].([]map[string]interface{})
+	if len(objects) != 1 {
+		t.Fatalf("status objects length = %d, want 1", len(objects))
+	}
+	object := objects[0]
+	if got := object["last_error_class"]; got != string(providers.ErrorClassCapacity) {
+		t.Fatalf("last_error_class = %v, want %s", got, providers.ErrorClassCapacity)
+	}
+	if strings.Contains(object["last_error"].(string), "secret-canary") {
+		t.Fatalf("last_error contains secret canary: %s", object["last_error"])
+	}
+	if got := object["payload_sha256"].(string); !strings.HasPrefix(got, "sha256:") {
+		t.Fatalf("payload_sha256 = %q, want sha256 prefix", got)
 	}
 }
 
@@ -745,6 +935,7 @@ func createFakeDestination(t *testing.T, b logical.Backend, storage logical.Stor
 
 func createDefaultFakeAssociation(t *testing.T, b logical.Backend, storage logical.Storage) *logical.Response {
 	t.Helper()
+	markAppDBSyncable(t, b, storage)
 	return handleRequest(t, b, storage, logical.UpdateOperation, "associations/app/db", map[string]interface{}{
 		"destination_type": providerTypeFake,
 		"destination_name": "default",
@@ -752,6 +943,16 @@ func createDefaultFakeAssociation(t *testing.T, b logical.Backend, storage logic
 		"granularity":      syncObjectIDSecretPath,
 		"format":           defaultAssociationFormat,
 	})
+}
+
+func markAppDBSyncable(t *testing.T, b logical.Backend, storage logical.Storage) {
+	t.Helper()
+	resp := handleRequest(t, b, storage, logical.UpdateOperation, "metadata/app/db", map[string]interface{}{
+		"custom_metadata": map[string]interface{}{
+			"syncable": "true",
+		},
+	})
+	assertNoErrorResponse(t, resp)
 }
 
 func assertSyncedStatusObject(t *testing.T, raw interface{}, operationID string) { //nolint:forbidigo
@@ -772,5 +973,8 @@ func assertSyncedStatusObject(t *testing.T, raw interface{}, operationID string)
 	}
 	if got := object["remote_version"]; got != "fake" {
 		t.Fatalf("object remote version = %v, want fake", got)
+	}
+	if got := object["payload_sha256"].(string); !strings.HasPrefix(got, "sha256:") {
+		t.Fatalf("object payload_sha256 = %q, want sha256 prefix", got)
 	}
 }

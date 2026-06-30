@@ -88,8 +88,11 @@ func statusResponseObject(record statusRecord) map[string]interface{} { //nolint
 		responseField("resolved_name", record.ResolvedName),
 		responseField("state", record.State),
 		responseField("version", record.Version),
+		responseField("payload_sha256", record.PayloadSHA256),
 		responseField("remote_version", record.RemoteVersion),
 		responseField("last_operation_id", record.LastOperationID),
 		responseField("last_success_time", record.LastSuccessTime),
+		responseField("last_error_class", record.LastErrorClass),
+		responseField("last_error", record.LastError),
 	)
 }

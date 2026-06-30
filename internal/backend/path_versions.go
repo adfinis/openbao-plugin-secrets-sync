@@ -21,6 +21,18 @@ func pathVersionMutations(_ *secretSyncBackend) []*framework.Path {
 	}
 	return []*framework.Path{
 		{
+			Pattern: "delete/" + framework.MatchAllRegex("path"),
+			Fields:  fields,
+			Operations: map[logical.Operation]framework.OperationHandler{
+				logical.UpdateOperation: &framework.PathOperation{
+					Callback: pathDeleteVersionsWrite,
+					Summary:  "Soft-delete local source secret versions.",
+				},
+			},
+			HelpSynopsis:    "Delete local versions.",
+			HelpDescription: "Sets deletion time on selected local source secret versions.",
+		},
+		{
 			Pattern: "undelete/" + framework.MatchAllRegex("path"),
 			Fields:  fields,
 			Operations: map[logical.Operation]framework.OperationHandler{
@@ -45,6 +57,14 @@ func pathVersionMutations(_ *secretSyncBackend) []*framework.Path {
 			HelpDescription: "Permanently removes payload data from selected local source secret versions.",
 		},
 	}
+}
+
+func pathDeleteVersionsWrite(
+	ctx context.Context,
+	req *logical.Request,
+	data *framework.FieldData,
+) (*logical.Response, error) {
+	return runVersionMutation(ctx, req, data, softDeleteVersion)
 }
 
 func pathUndeleteWrite(
@@ -116,6 +136,33 @@ func versionMutationRequest(data *framework.FieldData) (string, []int, error) {
 		}
 	}
 	return path, versions, nil
+}
+
+func softDeleteVersion(
+	ctx context.Context,
+	storage logical.Storage,
+	metadata *metadataRecord,
+	path string,
+	version int,
+	now string,
+) error {
+	record, err := getVersion(ctx, storage, path, version)
+	if err != nil {
+		return err
+	}
+	if record == nil || record.Destroyed || record.DeletionTime != "" {
+		return nil
+	}
+	record.DeletionTime = now
+	if err := putVersion(ctx, storage, path, *record); err != nil {
+		return err
+	}
+	versionKey := versionMetadataKey(record.Version)
+	versionMetadata := metadata.Versions[versionKey]
+	versionMetadata.DeletionTime = now
+	metadata.Versions[versionKey] = versionMetadata
+	metadata.UpdatedTime = now
+	return nil
 }
 
 func undeleteVersion(

@@ -97,12 +97,7 @@ func pathDataWrite(ctx context.Context, req *logical.Request, data *framework.Fi
 		return nil, err
 	}
 
-	record := versionRecord{
-		Version:     nextVersion,
-		CreatedTime: now,
-		Data:        payload,
-	}
-	if err := putVersion(ctx, req.Storage, path, record); err != nil {
+	if err := putSourceVersionRecord(ctx, req.Storage, path, nextVersion, payload, now); err != nil {
 		return nil, err
 	}
 	if err := putOutboxRecords(ctx, req.Storage, operations); err != nil {
@@ -111,16 +106,7 @@ func pathDataWrite(ctx context.Context, req *logical.Request, data *framework.Fi
 	if err := completeEnqueueIntent(ctx, req.Storage, path, nextVersion, operations, now); err != nil {
 		return nil, err
 	}
-
-	if metadata.OldestVersion == 0 {
-		metadata.OldestVersion = nextVersion
-	}
-	metadata.CurrentVersion = nextVersion
-	metadata.UpdatedTime = now
-	metadata.Versions[versionMetadataKey(nextVersion)] = versionMetadata{
-		CreatedTime: now,
-	}
-	if err := putMetadata(ctx, req.Storage, path, *metadata); err != nil {
+	if err := commitSourceMetadata(ctx, req.Storage, path, metadata, nextVersion, now); err != nil {
 		return nil, err
 	}
 
@@ -132,6 +118,47 @@ func pathDataWrite(ctx context.Context, req *logical.Request, data *framework.Fi
 			responseField("sync_state", string(syncStateForOperationIDs(operationIDs))),
 		)),
 	)}, nil
+}
+
+func putSourceVersionRecord(
+	ctx context.Context,
+	storage logical.Storage,
+	path string,
+	nextVersion int,
+	payload secretPayload,
+	now string,
+) error {
+	record := versionRecord{
+		Version:     nextVersion,
+		CreatedTime: now,
+		Data:        payload,
+	}
+	if err := putVersion(ctx, storage, path, record); err != nil {
+		return err
+	}
+	return nil
+}
+
+func commitSourceMetadata(
+	ctx context.Context,
+	storage logical.Storage,
+	path string,
+	metadata *metadataRecord,
+	nextVersion int,
+	now string,
+) error {
+	if metadata.OldestVersion == 0 {
+		metadata.OldestVersion = nextVersion
+	}
+	metadata.CurrentVersion = nextVersion
+	metadata.UpdatedTime = now
+	metadata.Versions[versionMetadataKey(nextVersion)] = versionMetadata{
+		CreatedTime: now,
+	}
+	if err := pruneExcessVersions(ctx, storage, path, metadata); err != nil {
+		return err
+	}
+	return putMetadata(ctx, storage, path, *metadata)
 }
 
 func pathDataRead(ctx context.Context, req *logical.Request, data *framework.FieldData) (*logical.Response, error) {
@@ -182,24 +209,10 @@ func pathDataDelete(ctx context.Context, req *logical.Request, data *framework.F
 	if metadata == nil || metadata.CurrentVersion == 0 {
 		return nil, nil
 	}
-	record, err := getVersion(ctx, req.Storage, path, metadata.CurrentVersion)
-	if err != nil {
-		return nil, err
-	}
-	if record == nil || record.Destroyed || record.DeletionTime != "" {
-		return nil, nil
-	}
-
 	now := nowUTC().Format(timeFormatRFC3339)
-	record.DeletionTime = now
-	if err := putVersion(ctx, req.Storage, path, *record); err != nil {
-		return nil, err
+	if err := softDeleteVersion(ctx, req.Storage, metadata, path, metadata.CurrentVersion, now); err != nil {
+		return logical.ErrorResponse(err.Error()), nil
 	}
-	versionKey := versionMetadataKey(record.Version)
-	version := metadata.Versions[versionKey]
-	version.DeletionTime = now
-	metadata.Versions[versionKey] = version
-	metadata.UpdatedTime = now
 	if err := putMetadata(ctx, req.Storage, path, *metadata); err != nil {
 		return nil, err
 	}
@@ -259,6 +272,9 @@ func intFromDynamic(value interface{}) (int, error) { //nolint:forbidigo // Open
 
 func checkCAS(metadata metadataRecord, cas int, casSet bool) error {
 	if !casSet {
+		if metadata.CASRequired {
+			return fmt.Errorf("check-and-set required for this secret")
+		}
 		return nil
 	}
 	switch {

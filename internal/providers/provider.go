@@ -32,6 +32,38 @@ type DestinationConfig struct {
 	Name string
 }
 
+// ErrorClass is a stable class for provider and provider-boundary failures.
+type ErrorClass string
+
+const (
+	ErrorClassValidation  ErrorClass = "validation"
+	ErrorClassAuthn       ErrorClass = "authn"
+	ErrorClassAuthz       ErrorClass = "authz"
+	ErrorClassRateLimit   ErrorClass = "rate_limit"
+	ErrorClassUnavailable ErrorClass = "unavailable"
+	ErrorClassCollision   ErrorClass = "collision"
+	ErrorClassOwnership   ErrorClass = "ownership"
+	ErrorClassDrift       ErrorClass = "drift"
+	ErrorClassCapacity    ErrorClass = "capacity"
+	ErrorClassInternal    ErrorClass = "internal"
+)
+
+// Error carries a stable class without forcing providers to expose raw API errors.
+type Error struct {
+	Class   ErrorClass
+	Message string
+}
+
+func (e *Error) Error() string {
+	if e == nil {
+		return ""
+	}
+	if e.Message == "" {
+		return string(e.Class)
+	}
+	return e.Message
+}
+
 // PlanRequest describes a dry-run provider operation.
 type PlanRequest struct {
 	ResolvedName string
@@ -44,8 +76,11 @@ type PlanResult struct {
 
 // UpsertRequest describes a remote create or update operation.
 type UpsertRequest struct {
-	ResolvedName string
-	Payload      []byte
+	Destination   DestinationConfig
+	ResolvedName  string
+	Format        string
+	Payload       []byte
+	PayloadSHA256 string
 }
 
 // DeleteRequest describes a remote delete operation.

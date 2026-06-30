@@ -7,6 +7,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/adfinis/openbao-secret-sync/internal/providers"
+	"github.com/adfinis/openbao-secret-sync/internal/providers/fake"
 	"github.com/adfinis/openbao-secret-sync/internal/version"
 	"github.com/openbao/openbao/sdk/v2/framework"
 	"github.com/openbao/openbao/sdk/v2/logical"
@@ -28,7 +30,9 @@ func Factory(ctx context.Context, conf *logical.BackendConfig) (logical.Backend,
 
 // Backend creates an uninitialized logical backend.
 func Backend(_ *logical.BackendConfig) *secretSyncBackend {
-	var b secretSyncBackend
+	b := secretSyncBackend{
+		providerRegistry: providers.MustNewRegistry(fake.Provider{}),
+	}
 	b.Backend = &framework.Backend{
 		Help: strings.TrimSpace(backendHelp),
 		PathsSpecial: &logical.Paths{
@@ -61,7 +65,8 @@ func Backend(_ *logical.BackendConfig) *secretSyncBackend {
 type secretSyncBackend struct {
 	*framework.Backend
 
-	cacheMu sync.Mutex
+	cacheMu          sync.Mutex
+	providerRegistry *providers.Registry
 }
 
 func (b *secretSyncBackend) invalidate() {
@@ -84,7 +89,7 @@ func (b *secretSyncBackend) periodic(ctx context.Context, req *logical.Request) 
 	if err := recoverIncompleteEnqueueIntents(ctx, req.Storage, now); err != nil {
 		return err
 	}
-	return processDueFakeOutbox(ctx, req.Storage, now)
+	return b.processDueOutbox(ctx, req.Storage, now)
 }
 
 func nowUTC() time.Time {

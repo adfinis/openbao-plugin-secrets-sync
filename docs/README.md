@@ -30,6 +30,8 @@ and operator diagnostics are OpenBao-native and plugin-first.
   current recommendation.
 - [Product design](product-design.md) - goals, non-goals, design principles,
   user-facing behavior, and API shape.
+- [API compatibility](api-compatibility.md) - KV-v2-like compatibility claim,
+  intentional differences, and source metadata policy.
 - [Architecture](architecture.md) - plugin boundary, components, storage model,
   consistency, queueing, and background work.
 - [Provider contract](provider-contract.md) - provider interface,

@@ -70,7 +70,7 @@ Destination authority can be proven through:
 
 The plugin should support:
 
-- `require_custom_metadata.syncable=true` before association activation;
+- `custom_metadata.syncable=true` before enabled association activation;
 - destination allowlist per mount;
 - maximum destinations per secret;
 - maximum secret size;

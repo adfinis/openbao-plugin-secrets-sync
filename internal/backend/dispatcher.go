@@ -2,18 +2,18 @@ package backend
 
 import (
 	"context"
-	"encoding/json"
+	"errors"
 	"fmt"
 	"time"
 
 	"github.com/adfinis/openbao-secret-sync/internal/domain"
 	"github.com/adfinis/openbao-secret-sync/internal/outbox"
+	payloadpkg "github.com/adfinis/openbao-secret-sync/internal/payload"
 	"github.com/adfinis/openbao-secret-sync/internal/providers"
-	"github.com/adfinis/openbao-secret-sync/internal/providers/fake"
 	"github.com/openbao/openbao/sdk/v2/logical"
 )
 
-func processDueFakeOutbox(ctx context.Context, storage logical.Storage, now time.Time) error {
+func (b *secretSyncBackend) processDueOutbox(ctx context.Context, storage logical.Storage, now time.Time) error {
 	ids, err := listOutboxIDs(ctx, storage)
 	if err != nil {
 		return err
@@ -29,10 +29,10 @@ func processDueFakeOutbox(ctx context.Context, storage logical.Storage, now time
 		if !isOutboxDue(*record, now) {
 			continue
 		}
-		if !isFakeUpsertOperation(*record) {
+		if !isSupportedUpsertOperation(*record) {
 			continue
 		}
-		if err := processFakeUpsert(ctx, storage, *record, now); err != nil {
+		if err := b.processUpsert(ctx, storage, *record, now); err != nil {
 			return err
 		}
 	}
@@ -50,55 +50,48 @@ func isOutboxDue(record outboxRecord, now time.Time) bool {
 	return !notBefore.After(now)
 }
 
-func isFakeUpsertOperation(record outboxRecord) bool {
+func isSupportedUpsertOperation(record outboxRecord) bool {
 	return record.Type == outbox.OperationTypeUpsert &&
 		record.ObjectID == syncObjectIDSecretPath
 }
 
-func processFakeUpsert(
+func (b *secretSyncBackend) processUpsert(
 	ctx context.Context,
 	storage logical.Storage,
 	record outboxRecord,
 	now time.Time,
 ) error {
-	version, err := getVersion(ctx, storage, record.Path, record.Version)
+	upsertContext, failure, err := b.loadUpsertContext(ctx, storage, record)
 	if err != nil {
 		return err
 	}
-	if version == nil {
-		return markFakeOperationFailed(ctx, storage, record, "missing source version", now)
+	if failure != nil {
+		return markOperationFailed(ctx, storage, record, *failure, now)
 	}
-	association, err := getAssociation(ctx, storage, record.Path, record.AssociationID)
-	if err != nil {
-		return err
-	}
-	if association == nil {
-		return markFakeOperationFailed(ctx, storage, record, "missing association", now)
-	}
-	destination, err := getDestination(ctx, storage, association.DestinationType, association.DestinationName)
-	if err != nil {
-		return err
-	}
-	if destination == nil {
-		return markFakeOperationFailed(ctx, storage, record, "missing destination", now)
-	}
-	if destination.Type != providerTypeFake {
-		return markFakeOperationFailed(ctx, storage, record, "unsupported destination provider", now)
-	}
-	if destination.Disabled || !association.Enabled {
-		return markFakeOperationFailed(ctx, storage, record, "association or destination disabled", now)
-	}
-	payload, err := json.Marshal(version.Data)
-	if err != nil {
-		return markFakeOperationFailed(ctx, storage, record, "source payload encoding failed", now)
+	preparedPayload, failure := prepareProviderPayload(upsertContext)
+	if failure != nil {
+		return markOperationFailed(ctx, storage, record, *failure, now)
 	}
 
-	result, err := fake.Provider{}.Upsert(ctx, providers.UpsertRequest{
-		ResolvedName: association.ResolvedName,
-		Payload:      payload,
+	result, err := upsertContext.provider.Upsert(ctx, providers.UpsertRequest{
+		Destination: providers.DestinationConfig{
+			Name: upsertContext.destination.Name,
+		},
+		ResolvedName:  upsertContext.association.ResolvedName,
+		Format:        preparedPayload.Format,
+		Payload:       preparedPayload.Bytes,
+		PayloadSHA256: preparedPayload.SHA256,
 	})
 	if err != nil {
-		return markFakeOperationFailed(ctx, storage, record, "provider upsert failed", now)
+		return markOperationFailed(ctx, storage, record, operationFailure{
+			class:         providerErrorClass(err),
+			message:       "provider upsert failed",
+			resolvedName:  upsertContext.association.ResolvedName,
+			payloadSHA256: preparedPayload.SHA256,
+		}, now)
+	}
+	if result == nil {
+		result = &providers.SyncResult{}
 	}
 
 	record.State = outboxStateSucceeded
@@ -113,8 +106,9 @@ func processFakeUpsert(
 		AssociationID:   record.AssociationID,
 		ObjectID:        record.ObjectID,
 		DestinationRef:  record.DestinationRef,
-		ResolvedName:    association.ResolvedName,
+		ResolvedName:    upsertContext.association.ResolvedName,
 		State:           string(domain.SyncStateSynced),
+		PayloadSHA256:   preparedPayload.SHA256,
 		RemoteVersion:   result.RemoteVersion,
 		LastOperationID: record.ID,
 		LastSuccessTime: now.Format(timeFormatRFC3339),
@@ -122,13 +116,134 @@ func processFakeUpsert(
 	})
 }
 
-func markFakeOperationFailed(
+type upsertContext struct {
+	version     *versionRecord
+	association *associationRecord
+	destination *destinationRecord
+	provider    providers.Provider
+}
+
+func (b *secretSyncBackend) loadUpsertContext(
 	ctx context.Context,
 	storage logical.Storage,
 	record outboxRecord,
-	message string,
+) (*upsertContext, *operationFailure, error) {
+	version, err := getVersion(ctx, storage, record.Path, record.Version)
+	if err != nil {
+		return nil, nil, err
+	}
+	if version == nil || version.Destroyed || version.DeletionTime != "" {
+		return nil, &operationFailure{class: providers.ErrorClassInternal, message: "source version is unavailable"}, nil
+	}
+	association, err := getAssociation(ctx, storage, record.Path, record.AssociationID)
+	if err != nil {
+		return nil, nil, err
+	}
+	if association == nil {
+		return nil, &operationFailure{class: providers.ErrorClassInternal, message: "association is missing"}, nil
+	}
+	destination, err := getDestination(ctx, storage, association.DestinationType, association.DestinationName)
+	if err != nil {
+		return nil, nil, err
+	}
+	if destination == nil {
+		return nil, &operationFailure{
+			class:        providers.ErrorClassInternal,
+			message:      "destination is missing",
+			resolvedName: association.ResolvedName,
+		}, nil
+	}
+	provider, err := b.providerRegistry.MustGet(destination.Type)
+	if err != nil {
+		return nil, &operationFailure{
+			class:        providers.ErrorClassValidation,
+			message:      "destination provider is unsupported",
+			resolvedName: association.ResolvedName,
+		}, nil
+	}
+	if destination.Disabled || !association.Enabled {
+		return nil, &operationFailure{
+			class:        providers.ErrorClassValidation,
+			message:      "association or destination is disabled",
+			resolvedName: association.ResolvedName,
+		}, nil
+	}
+	return &upsertContext{
+		version:     version,
+		association: association,
+		destination: destination,
+		provider:    provider,
+	}, nil, nil
+}
+
+func prepareProviderPayload(upsertContext *upsertContext) (payloadpkg.CanonicalPayload, *operationFailure) {
+	preparedPayload, err := buildCanonicalPayload(upsertContext.association.Format, upsertContext.version.Data)
+	if err != nil {
+		return payloadpkg.CanonicalPayload{}, &operationFailure{
+			class:        providers.ErrorClassValidation,
+			message:      "source payload encoding failed",
+			resolvedName: upsertContext.association.ResolvedName,
+		}
+	}
+	capabilities := upsertContext.provider.Capabilities()
+	if err := enforceProviderPayloadLimit(capabilities, preparedPayload); err != nil {
+		return payloadpkg.CanonicalPayload{}, &operationFailure{
+			class:         providers.ErrorClassCapacity,
+			message:       err.Error(),
+			resolvedName:  upsertContext.association.ResolvedName,
+			payloadSHA256: preparedPayload.SHA256,
+		}
+	}
+	return preparedPayload, nil
+}
+
+func buildCanonicalPayload(format string, data secretPayload) (payloadpkg.CanonicalPayload, error) {
+	switch format {
+	case defaultAssociationFormat:
+		return payloadpkg.BuildJSON(map[string]interface{}(data))
+	default:
+		return payloadpkg.CanonicalPayload{}, fmt.Errorf("unsupported payload format %q", format)
+	}
+}
+
+func enforceProviderPayloadLimit(
+	capabilities providers.Capabilities,
+	payload payloadpkg.CanonicalPayload,
+) error {
+	if capabilities.MaxPayloadBytes <= 0 || len(payload.Bytes) <= capabilities.MaxPayloadBytes {
+		return nil
+	}
+	return fmt.Errorf("payload exceeds provider max_payload_bytes %d", capabilities.MaxPayloadBytes)
+}
+
+func providerErrorClass(err error) providers.ErrorClass {
+	var providerError *providers.Error
+	if errors.As(err, &providerError) && providerError.Class != "" {
+		return providerError.Class
+	}
+	return providers.ErrorClassInternal
+}
+
+type operationFailure struct {
+	class         providers.ErrorClass
+	message       string
+	resolvedName  string
+	payloadSHA256 string
+}
+
+func markOperationFailed(
+	ctx context.Context,
+	storage logical.Storage,
+	record outboxRecord,
+	failure operationFailure,
 	now time.Time,
 ) error {
+	if failure.class == "" {
+		failure.class = providers.ErrorClassInternal
+	}
+	if failure.resolvedName == "" {
+		failure.resolvedName = record.Path
+	}
 	record.State = outboxStateFailedTerminal
 	record.Attempts++
 	record.UpdatedTime = now.Format(timeFormatRFC3339)
@@ -141,11 +256,12 @@ func markFakeOperationFailed(
 		AssociationID:   record.AssociationID,
 		ObjectID:        record.ObjectID,
 		DestinationRef:  record.DestinationRef,
-		ResolvedName:    record.Path,
+		ResolvedName:    failure.resolvedName,
 		State:           string(domain.SyncStateInternalError),
+		PayloadSHA256:   failure.payloadSHA256,
 		LastOperationID: record.ID,
-		LastErrorClass:  "internal_error",
-		LastError:       fmt.Sprintf("fake dispatch failed: %s", message),
+		LastErrorClass:  string(failure.class),
+		LastError:       fmt.Sprintf("dispatch failed: %s", failure.message),
 		UpdatedTime:     now.Format(timeFormatRFC3339),
 	})
 }

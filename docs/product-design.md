@@ -157,7 +157,9 @@ unbounded remote mutation inline.
 
 ## API Shape
 
-The API should feel familiar to KV-v2 users without copying Vault system sync.
+The source-secret API should feel familiar to KV-v2 users without claiming
+drop-in KV-v2 client compatibility. The compatibility target is documented in
+[API compatibility](api-compatibility.md).
 
 ### Secret Data
 
@@ -166,6 +168,8 @@ POST   data/<path>       write new version
 PATCH  data/<path>       partial update, optional after MVP
 GET    data/<path>       read latest or selected local version
 DELETE data/<path>       soft-delete latest local version
+POST   delete/<path>     soft-delete selected local versions
+POST   metadata/<path>   create or update local metadata policy
 LIST   metadata/<path>   list local secrets
 GET    metadata/<path>   read local metadata and sync summary
 POST   undelete/<path>   undelete versions
@@ -229,7 +233,7 @@ Association activation requires:
 Source eligibility should be enforced with at least one of:
 
 - caller has read permission for `data/<path>` at creation/update time;
-- source metadata contains required `syncable=true`;
+- source metadata contains required `custom_metadata.syncable=true`;
 - an operator-only path creates the association on behalf of source owners.
 
 ### Status And Operations

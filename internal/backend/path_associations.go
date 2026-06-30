@@ -5,12 +5,12 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/adfinis/openbao-secret-sync/internal/providers/fake"
+	"github.com/adfinis/openbao-secret-sync/internal/providers"
 	"github.com/openbao/openbao/sdk/v2/framework"
 	"github.com/openbao/openbao/sdk/v2/logical"
 )
 
-func pathAssociations(_ *secretSyncBackend) []*framework.Path {
+func pathAssociations(b *secretSyncBackend) []*framework.Path {
 	return []*framework.Path{
 		{
 			Pattern: "associations/?",
@@ -82,11 +82,11 @@ func pathAssociations(_ *secretSyncBackend) []*framework.Path {
 			},
 			Operations: map[logical.Operation]framework.OperationHandler{
 				logical.CreateOperation: &framework.PathOperation{
-					Callback: pathAssociationWrite,
+					Callback: b.pathAssociationWrite,
 					Summary:  "Create an association.",
 				},
 				logical.UpdateOperation: &framework.PathOperation{
-					Callback: pathAssociationWrite,
+					Callback: b.pathAssociationWrite,
 					Summary:  "Create or update an association.",
 				},
 				logical.ReadOperation: &framework.PathOperation{
@@ -100,7 +100,7 @@ func pathAssociations(_ *secretSyncBackend) []*framework.Path {
 	}
 }
 
-func pathAssociationWrite(
+func (b *secretSyncBackend) pathAssociationWrite(
 	ctx context.Context,
 	req *logical.Request,
 	data *framework.FieldData,
@@ -117,8 +117,11 @@ func pathAssociationWrite(
 		return logical.ErrorResponse("source path does not exist"), nil
 	}
 
-	record, err := associationRecordFromFieldData(ctx, req.Storage, path, data)
+	record, err := b.associationRecordFromFieldData(ctx, req.Storage, path, data)
 	if err != nil {
+		return logical.ErrorResponse(err.Error()), nil
+	}
+	if err := validateAssociationActivation(record, *metadata); err != nil {
 		return logical.ErrorResponse(err.Error()), nil
 	}
 	existing, err := getAssociation(ctx, req.Storage, path, record.ID)
@@ -210,7 +213,7 @@ func pathAssociationDelete(
 	return nil, nil
 }
 
-func associationRecordFromFieldData(
+func (b *secretSyncBackend) associationRecordFromFieldData(
 	ctx context.Context,
 	storage logical.Storage,
 	path string,
@@ -218,7 +221,8 @@ func associationRecordFromFieldData(
 ) (associationRecord, error) {
 	destinationType := data.Get("destination_type").(string)
 	destinationName := data.Get("destination_name").(string)
-	if err := validateDestinationType(destinationType); err != nil {
+	provider, err := b.providerRegistry.MustGet(destinationType)
+	if err != nil {
 		return associationRecord{}, err
 	}
 	destination, err := getDestination(ctx, storage, destinationType, destinationName)
@@ -247,7 +251,7 @@ func associationRecordFromFieldData(
 	if resolvedName == "" {
 		return associationRecord{}, fmt.Errorf("resolved_name must not be empty")
 	}
-	if err := validateAssociationCapabilities(granularity, format); err != nil {
+	if err := validateAssociationCapabilities(provider.Capabilities(), granularity, format); err != nil {
 		return associationRecord{}, err
 	}
 
@@ -286,16 +290,29 @@ func associationRecordFromFieldData(
 	}, nil
 }
 
-func validateAssociationCapabilities(granularity string, format string) error {
+func validateAssociationCapabilities(capabilities providers.Capabilities, granularity string, format string) error {
 	if granularity != syncObjectIDSecretPath {
 		return fmt.Errorf("unsupported granularity %q", granularity)
 	}
 	if format != defaultAssociationFormat {
 		return fmt.Errorf("unsupported format %q", format)
 	}
-	capabilities := fake.Provider{}.Capabilities()
 	if !capabilities.SupportsSecretPath {
-		return fmt.Errorf("fake provider does not support secret-path granularity")
+		return fmt.Errorf("destination provider does not support secret-path granularity")
+	}
+	return nil
+}
+
+func validateAssociationActivation(record associationRecord, metadata metadataRecord) error {
+	if !record.Enabled {
+		return nil
+	}
+	return validateSourceEligibility(metadata)
+}
+
+func validateSourceEligibility(metadata metadataRecord) error {
+	if metadata.CustomMetadata["syncable"] != "true" {
+		return fmt.Errorf("source path is not eligible for sync: custom_metadata.syncable must be true")
 	}
 	return nil
 }
