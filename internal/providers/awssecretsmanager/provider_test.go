@@ -39,6 +39,7 @@ func TestProviderConformance(t *testing.T) {
 		Provider:         Provider{client: client},
 		ValidDestination: providers.DestinationConfig{Name: testDestinationName},
 		RequiredCapabilities: providertest.CapabilityExpectations{
+			MetadataReadback:    true,
 			SecretPath:          true,
 			UpdateIfOwned:       true,
 			DeleteIfOwned:       true,

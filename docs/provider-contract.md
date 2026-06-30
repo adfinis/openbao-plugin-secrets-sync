@@ -418,6 +418,16 @@ Required implementation behavior:
 - handle per-key partial failures clearly;
 - test with envtest or kind.
 
+Current status: package has provider type `k8s`, conservative capabilities,
+backend registration, destination config for namespace, in-cluster auth, and
+kubeconfig auth, a client-go-backed client boundary, Opaque Secret
+create/update/delete/read-state/health behavior, ownership labels and
+annotations, payload hash metadata, Kubernetes API error classification, and a
+provider conformance lifecycle test using the client-go fake client.
+
+The current backend still only dispatches `secret-path` granularity. Kubernetes
+Secret `secret-key` granularity and per-key partial status remain later work.
+
 ## Provider Test Expectations
 
 Every provider must have tests for:

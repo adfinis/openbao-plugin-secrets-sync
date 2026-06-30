@@ -12,7 +12,8 @@ Implemented backend slices now include:
 - destination registry with redacted reads, validation, health, and a fake
   provider;
 - provider-agnostic dispatch through the provider registry;
-- provider conformance harness with fake provider coverage;
+- provider conformance harness with fake, AWS Secrets Manager, and Kubernetes
+  Secrets coverage;
 - association creation, planning, deletion, source eligibility checks, name
   reservations, and template rendering;
 - per-association disable, enable, and manual sync controls;
@@ -30,6 +31,11 @@ Implemented backend slices now include:
   client boundary, mocked plan/upsert/delete/read-state/health behavior, AWS
   error classification, ownership tag handling, destination config for default
   and assume-role auth, optional endpoint override, and backend registration.
+- Kubernetes Secrets provider with type, capabilities, validation, client-go
+  client boundary, mocked plan/upsert/delete/read-state/health behavior,
+  Kubernetes error classification, ownership labels and annotations,
+  destination config for in-cluster and kubeconfig auth, and backend
+  registration.
 - self-contained OpenBao plus LocalStack e2e coverage for plugin registration,
   mounting, AWS destination configuration, queue drain, create, update, delete,
   ownership tags, and status transitions.
@@ -224,7 +230,7 @@ Exit criteria:
 
 Tasks:
 
-- Implement kubeconfig, in-cluster, and service-account auth where appropriate.
+- Implement kubeconfig and in-cluster auth.
 - Implement namespace and name validation.
 - Implement Secret upsert, delete, read-state, and health.
 - Add labels and annotations for ownership.
@@ -232,11 +238,12 @@ Tasks:
 
 Exit criteria:
 
-- sync to Kubernetes Secret works;
-- delete mode works;
-- per-key partial status is visible;
+- unit-level sync to Kubernetes Secret works with the fake client;
+- unit-level delete mode works;
 - drift and ownership status are visible;
-- Kubernetes auth and policy errors map to stable classes.
+- Kubernetes auth and policy errors map to stable classes;
+- envtest or kind-backed integration proves the provider against a real API
+  server.
 
 ## Phase 5: Hardening
 
@@ -344,8 +351,8 @@ authorized association, durable intent, and allowed provider capability.
 - Should local secret versions be seal-wrapped by default, or only destination
   credentials?
 - What is the best default mount name: `sync-kv`, `secrets-sync`, or `kv-sync`?
-- Should Kubernetes remain an MVP provider, or should GitHub/GitLab be
-  prioritized for customer demos after AWS?
+- Should GitHub Actions, GitHub variables, or GitLab CI/CD variables be the
+  next provider after Kubernetes?
 - Should destination provider plugins become separate binaries later, or remain
   packages in the same plugin binary?
 - How should telemetry from an external plugin integrate with OpenBao telemetry

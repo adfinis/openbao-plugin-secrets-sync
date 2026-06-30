@@ -7,6 +7,7 @@ import (
 
 	"github.com/adfinis/openbao-secret-sync/internal/providers"
 	"github.com/adfinis/openbao-secret-sync/internal/providers/awssecretsmanager"
+	"github.com/adfinis/openbao-secret-sync/internal/providers/kubernetessecrets"
 	"github.com/openbao/openbao/sdk/v2/framework"
 	"github.com/openbao/openbao/sdk/v2/logical"
 )
@@ -18,6 +19,9 @@ var destinationConfigFieldKeys = []string{
 	awssecretsmanager.ConfigKeyAuthMode,
 	awssecretsmanager.ConfigKeyRoleARN,
 	awssecretsmanager.ConfigKeySessionName,
+	kubernetessecrets.ConfigKeyNamespace,
+	kubernetessecrets.ConfigKeyKubeconfigPath,
+	kubernetessecrets.ConfigKeyKubeContext,
 }
 
 var destinationSensitiveConfigFieldKeys = []string{
@@ -123,7 +127,7 @@ func destinationRequestFields() map[string]*framework.FieldSchema {
 	}
 	fields[awssecretsmanager.ConfigKeyAuthMode] = &framework.FieldSchema{
 		Type:        framework.TypeString,
-		Description: "AWS auth mode for aws-sm destinations: default, assume_role, or reserved static.",
+		Description: "Provider auth mode. aws-sm: default, assume_role, or reserved static. k8s: in_cluster or kubeconfig.",
 	}
 	fields[awssecretsmanager.ConfigKeyRoleARN] = &framework.FieldSchema{
 		Type:        framework.TypeString,
@@ -160,6 +164,19 @@ func destinationRequestFields() map[string]*framework.FieldSchema {
 		DisplayAttrs: &framework.DisplayAttributes{
 			Sensitive: true,
 		},
+	}
+	fields[kubernetessecrets.ConfigKeyNamespace] = &framework.FieldSchema{
+		Type:        framework.TypeString,
+		Description: "Kubernetes namespace for k8s destinations.",
+	}
+	fields[kubernetessecrets.ConfigKeyKubeconfigPath] = &framework.FieldSchema{
+		Type: framework.TypeString,
+		Description: "Kubeconfig path for k8s destinations using auth_mode kubeconfig. " +
+			"Prefer in-cluster auth for production OpenBao deployments.",
+	}
+	fields[kubernetessecrets.ConfigKeyKubeContext] = &framework.FieldSchema{
+		Type:        framework.TypeString,
+		Description: "Optional kubeconfig context for k8s destinations using auth_mode kubeconfig.",
 	}
 	return fields
 }

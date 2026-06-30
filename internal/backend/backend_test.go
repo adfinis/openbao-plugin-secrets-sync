@@ -11,6 +11,7 @@ import (
 	"github.com/adfinis/openbao-secret-sync/internal/outbox"
 	"github.com/adfinis/openbao-secret-sync/internal/providers"
 	"github.com/adfinis/openbao-secret-sync/internal/providers/awssecretsmanager"
+	"github.com/adfinis/openbao-secret-sync/internal/providers/kubernetessecrets"
 	"github.com/openbao/openbao/sdk/v2/logical"
 )
 
@@ -169,6 +170,45 @@ func TestAWSDestinationConfigLifecycle(t *testing.T) {
 	assertNoErrorResponse(t, validateResp)
 	if got := validateResp.Data["valid"]; got != true {
 		t.Fatalf("aws validation valid = %v, want true", got)
+	}
+}
+
+func TestKubernetesDestinationConfigLifecycle(t *testing.T) {
+	b := Backend(&logical.BackendConfig{})
+	storage := &logical.InmemStorage{}
+
+	writeResp := handleRequest(t, b, storage, logical.UpdateOperation, "destinations/k8s/prod", map[string]interface{}{
+		"description":                          "kubernetes production",
+		kubernetessecrets.ConfigKeyNamespace:   "apps",
+		kubernetessecrets.ConfigKeyAuthMode:    kubernetessecrets.AuthModeInCluster,
+		kubernetessecrets.ConfigKeyKubeContext: "",
+	})
+	if writeResp != nil && writeResp.IsError() {
+		t.Fatalf("unexpected destination write error: %v", writeResp.Error())
+	}
+
+	readResp := handleRequest(t, b, storage, logical.ReadOperation, "destinations/k8s/prod", nil)
+	assertNoErrorResponse(t, readResp)
+	config := readResp.Data["config"].(map[string]interface{})
+	if got := config[kubernetessecrets.ConfigKeyNamespace]; got != "apps" {
+		t.Fatalf("k8s destination namespace = %v, want apps", got)
+	}
+	if got := config[kubernetessecrets.ConfigKeyAuthMode]; got != kubernetessecrets.AuthModeInCluster {
+		t.Fatalf("k8s auth_mode = %v, want %s", got, kubernetessecrets.AuthModeInCluster)
+	}
+	sensitiveConfig := readResp.Data["sensitive_config"].(map[string]interface{})
+	if got := sensitiveConfig["configured"]; got != false {
+		t.Fatalf("k8s sensitive_config configured = %v, want false", got)
+	}
+
+	validateResp := handleRequest(t, b, storage, logical.UpdateOperation, "destinations/k8s/prod/validate", nil)
+	assertNoErrorResponse(t, validateResp)
+	if got := validateResp.Data["valid"]; got != true {
+		t.Fatalf("k8s validation valid = %v, want true", got)
+	}
+	capabilities := validateResp.Data["capabilities"].(map[string]interface{})
+	if got := capabilities["supports_value_readback"]; got != true {
+		t.Fatalf("k8s supports_value_readback = %v, want true", got)
 	}
 }
 

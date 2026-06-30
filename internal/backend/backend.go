@@ -11,6 +11,7 @@ import (
 	"github.com/adfinis/openbao-secret-sync/internal/providers"
 	"github.com/adfinis/openbao-secret-sync/internal/providers/awssecretsmanager"
 	"github.com/adfinis/openbao-secret-sync/internal/providers/fake"
+	"github.com/adfinis/openbao-secret-sync/internal/providers/kubernetessecrets"
 	"github.com/adfinis/openbao-secret-sync/internal/version"
 	"github.com/openbao/openbao/sdk/v2/framework"
 	"github.com/openbao/openbao/sdk/v2/logical"
@@ -33,8 +34,12 @@ func Factory(ctx context.Context, conf *logical.BackendConfig) (logical.Backend,
 // Backend creates an uninitialized logical backend.
 func Backend(_ *logical.BackendConfig) *secretSyncBackend {
 	b := secretSyncBackend{
-		providerRegistry: providers.MustNewRegistry(fake.Provider{}, awssecretsmanager.New()),
-		observer:         observability.New(),
+		providerRegistry: providers.MustNewRegistry(
+			fake.Provider{},
+			awssecretsmanager.New(),
+			kubernetessecrets.New(),
+		),
+		observer: observability.New(),
 	}
 	b.Backend = &framework.Backend{
 		Help: strings.TrimSpace(backendHelp),

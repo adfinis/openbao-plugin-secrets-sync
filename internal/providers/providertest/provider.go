@@ -17,6 +17,7 @@ type Harness struct {
 	ValidationError      *ValidationErrorCase
 	HealthCase           *HealthCase
 	PlanCases            []PlanCase
+	Lifecycle            *LifecycleCase
 	UpsertSuccess        *UpsertCase
 	DeleteSuccess        *DeleteCase
 	ReadStateCase        *ReadStateCase
@@ -26,6 +27,8 @@ type Harness struct {
 
 // CapabilityExpectations declares capability bits expected from a provider.
 type CapabilityExpectations struct {
+	ValueReadback       bool
+	MetadataReadback    bool
 	SecretPath          bool
 	SecretKey           bool
 	UpdateIfOwned       bool
@@ -78,6 +81,21 @@ type ReadStateCase struct {
 	RemoteVersion  string
 }
 
+// LifecycleCase validates a stateful create/update/delete provider flow.
+type LifecycleCase struct {
+	Name                 string
+	CreatePlan           PlanCase
+	Create               UpsertCase
+	StateAfterCreate     ReadStateCase
+	NoopPlan             PlanCase
+	UpdatePlan           PlanCase
+	Update               UpsertCase
+	StateAfterUpdate     ReadStateCase
+	Delete               DeleteCase
+	StateAfterDelete     ReadStateCase
+	ExpectRemoteVersions bool
+}
+
 // UpsertErrorCase validates upsert error classification.
 type UpsertErrorCase struct {
 	Name       string
@@ -106,6 +124,9 @@ func Run(t *testing.T, harness Harness) {
 	}
 	for _, planCase := range harness.PlanCases {
 		runPlanCheck(t, harness.Provider, planCase)
+	}
+	if harness.Lifecycle != nil {
+		runLifecycleCheck(t, harness.Provider, *harness.Lifecycle)
 	}
 	if harness.UpsertSuccess != nil {
 		runUpsertSuccessCheck(t, harness.Provider, *harness.UpsertSuccess)
@@ -254,6 +275,25 @@ func runReadStateCheck(t *testing.T, provider providers.Provider, readStateCase 
 	})
 }
 
+func runLifecycleCheck(t *testing.T, provider providers.Provider, lifecycleCase LifecycleCase) {
+	t.Helper()
+	name := lifecycleCase.Name
+	if name == "" {
+		name = "default"
+	}
+	t.Run("lifecycle/"+name, func(t *testing.T) {
+		runPlanCheck(t, provider, lifecycleCase.CreatePlan)
+		runUpsertSuccessCheck(t, provider, lifecycleCase.Create)
+		runReadStateCheck(t, provider, lifecycleCase.StateAfterCreate)
+		runPlanCheck(t, provider, lifecycleCase.NoopPlan)
+		runPlanCheck(t, provider, lifecycleCase.UpdatePlan)
+		runUpsertSuccessCheck(t, provider, lifecycleCase.Update)
+		runReadStateCheck(t, provider, lifecycleCase.StateAfterUpdate)
+		runDeleteSuccessCheck(t, provider, lifecycleCase.Delete)
+		runReadStateCheck(t, provider, lifecycleCase.StateAfterDelete)
+	})
+}
+
 func runUpsertErrorCheck(t *testing.T, provider providers.Provider, errorCase UpsertErrorCase) {
 	t.Helper()
 	t.Run("upsert-error/"+errorCase.Name, func(t *testing.T) {
@@ -276,20 +316,27 @@ func assertCapabilities(
 	expected CapabilityExpectations,
 ) {
 	t.Helper()
-	if expected.SecretPath && !capabilities.SupportsSecretPath {
-		t.Fatal("provider must support secret-path granularity")
+	capabilityChecks := []struct {
+		name     string
+		required bool
+		actual   bool
+	}{
+		{name: "value readback", required: expected.ValueReadback, actual: capabilities.SupportsValueReadback},
+		{name: "metadata readback", required: expected.MetadataReadback, actual: capabilities.SupportsMetadataReadback},
+		{name: "secret-path granularity", required: expected.SecretPath, actual: capabilities.SupportsSecretPath},
+		{name: "secret-key granularity", required: expected.SecretKey, actual: capabilities.SupportsSecretKey},
+		{name: "owned updates", required: expected.UpdateIfOwned, actual: capabilities.SupportsUpdateIfOwned},
+		{name: "owned deletes", required: expected.DeleteIfOwned, actual: capabilities.SupportsDeleteIfOwned},
+		{
+			name:     "payload hash metadata",
+			required: expected.PayloadHashMetadata,
+			actual:   capabilities.SupportsPayloadHashMetadata,
+		},
 	}
-	if expected.SecretKey && !capabilities.SupportsSecretKey {
-		t.Fatal("provider must support secret-key granularity")
-	}
-	if expected.UpdateIfOwned && !capabilities.SupportsUpdateIfOwned {
-		t.Fatal("provider must support owned updates")
-	}
-	if expected.DeleteIfOwned && !capabilities.SupportsDeleteIfOwned {
-		t.Fatal("provider must support owned deletes")
-	}
-	if expected.PayloadHashMetadata && !capabilities.SupportsPayloadHashMetadata {
-		t.Fatal("provider must support payload hash metadata")
+	for _, check := range capabilityChecks {
+		if check.required && !check.actual {
+			t.Fatalf("provider must support %s", check.name)
+		}
 	}
 	if capabilities.MaxPayloadBytes < expected.MinPayloadBytes {
 		t.Fatalf("max payload bytes = %d, want at least %d", capabilities.MaxPayloadBytes, expected.MinPayloadBytes)

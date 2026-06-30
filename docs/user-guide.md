@@ -11,8 +11,10 @@ The current implementation supports:
 
 - KV-v2-like source storage under `data/*` and `metadata/*`;
 - source opt-in through `custom_metadata.syncable=true`;
-- destination config for the fake provider and AWS Secrets Manager;
+- destination config for the fake provider, AWS Secrets Manager, and
+  Kubernetes Secrets;
 - AWS SDK default auth and AWS assume-role auth;
+- Kubernetes in-cluster auth and kubeconfig auth;
 - asynchronous queue processing with manual `queue/drain`;
 - association planning, create, manual sync, disable, enable, and delete;
 - status inspection and explicit remote delete semantics.
@@ -113,6 +115,39 @@ bao write -force secret-sync/destinations/aws-sm/prod/validate
 bao read secret-sync/destinations/aws-sm/prod/health
 ```
 
+## Configure Kubernetes Secrets
+
+Use in-cluster auth when OpenBao runs in the target Kubernetes cluster:
+
+```sh
+bao write secret-sync/destinations/k8s/apps \
+  namespace=apps \
+  auth_mode=in_cluster
+```
+
+Use kubeconfig auth for local development or external cluster access:
+
+```sh
+bao write secret-sync/destinations/k8s/apps \
+  namespace=apps \
+  auth_mode=kubeconfig \
+  kubeconfig_path="$HOME/.kube/config" \
+  context=kind-openbao
+```
+
+The Kubernetes provider writes one `Opaque` Secret per `secret-path`
+association. The canonical payload is stored in the Secret `data.payload` key.
+Ownership metadata is stored in labels and annotations. The `resolved_name`
+must be a valid Kubernetes Secret name, so use a DNS-safe name such as `app-db`
+instead of `app/db`.
+
+Validate and check health:
+
+```sh
+bao write -force secret-sync/destinations/k8s/apps/validate
+bao read secret-sync/destinations/k8s/apps/health
+```
+
 ## Write Source Data
 
 Mark a source path as syncable:
@@ -157,6 +192,19 @@ bao write secret-sync/associations/app/db \
   destination_type=aws-sm \
   destination_name=prod \
   resolved_name=openbao-secret-sync/app/db \
+  granularity=secret-path \
+  format=json \
+  delete_mode=delete
+```
+
+For Kubernetes, use the `k8s` destination type and a Kubernetes-safe
+`resolved_name`:
+
+```sh
+bao write secret-sync/associations/app/db \
+  destination_type=k8s \
+  destination_name=apps \
+  resolved_name=app-db \
   granularity=secret-path \
   format=json \
   delete_mode=delete

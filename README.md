@@ -14,7 +14,7 @@ diagnostics from the start.
 This repository is in early implementation state. The current code builds a
 logical backend plugin with KV-v2-like source storage, associations, a durable
 outbox, provider-agnostic dispatch, a fake provider, and an AWS Secrets Manager
-provider foundation.
+and Kubernetes Secrets provider foundation.
 
 ## Documentation
 
