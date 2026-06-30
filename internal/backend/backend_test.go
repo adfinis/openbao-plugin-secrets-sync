@@ -5,8 +5,10 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/adfinis/openbao-secret-sync/internal/domain"
+	"github.com/adfinis/openbao-secret-sync/internal/outbox"
 	"github.com/adfinis/openbao-secret-sync/internal/providers"
 	"github.com/openbao/openbao/sdk/v2/logical"
 )
@@ -325,6 +327,73 @@ func TestDeleteVersionsSoftDeletesSelectedVersions(t *testing.T) {
 	}
 }
 
+func TestDataDeleteRetainModeCancelsQueuedUpsert(t *testing.T) {
+	b := Backend(&logical.BackendConfig{})
+	storage := &logical.InmemStorage{}
+
+	writeAppDBSecret(t, b, storage, "initial")
+	createFakeDestination(t, b, storage, "default")
+	associationResp := createDefaultFakeAssociation(t, b, storage)
+	upsertOperationID := operationIDsFromResponse(t, associationResp)[0]
+
+	deleteResp := handleRequest(t, b, storage, logical.DeleteOperation, "data/app/db", nil)
+	assertNoErrorResponse(t, deleteResp)
+	metadata := deleteResp.Data["metadata"].(map[string]interface{})
+	assertOperationIDs(t, metadata, 0)
+	assertOutboxOperation(t, storage, upsertOperationID, 1, outboxStateCanceled)
+	assertQueueCount(t, b, storage, "pending", 0)
+	assertQueueCount(t, b, storage, "canceled", 1)
+
+	readResp := handleRequest(t, b, storage, logical.ReadOperation, "data/app/db", nil)
+	if readResp != nil {
+		t.Fatalf("deleted source response = %#v, want nil", readResp)
+	}
+}
+
+func TestDataDeleteDeleteModeQueuesRemoteDelete(t *testing.T) {
+	b := Backend(&logical.BackendConfig{})
+	storage := &logical.InmemStorage{}
+
+	writeAppDBSecret(t, b, storage, "initial")
+	createFakeDestination(t, b, storage, "default")
+	createFakeAssociationWithDeleteMode(t, b, storage, deleteModeDelete)
+	if err := b.periodic(context.Background(), &logical.Request{Storage: storage}); err != nil {
+		t.Fatalf("periodic upsert: %v", err)
+	}
+
+	deleteResp := handleRequest(t, b, storage, logical.DeleteOperation, "data/app/db", nil)
+	assertNoErrorResponse(t, deleteResp)
+	deleteOperationID := requireSingleOperationID(
+		t,
+		operationIDsFromMetadata(t, deleteResp.Data["metadata"].(map[string]interface{})),
+		"delete",
+	)
+	deleteOperation := assertOutboxOperation(t, storage, deleteOperationID, 1, outboxStatePending)
+	if got := deleteOperation.Type; got != outbox.OperationTypeDelete {
+		t.Fatalf("delete operation type = %s, want %s", got, outbox.OperationTypeDelete)
+	}
+
+	if err := b.periodic(context.Background(), &logical.Request{Storage: storage}); err != nil {
+		t.Fatalf("periodic delete: %v", err)
+	}
+	deleteOperation = assertOutboxOperation(t, storage, deleteOperationID, 1, outboxStateSucceeded)
+	if got := deleteOperation.Type; got != outbox.OperationTypeDelete {
+		t.Fatalf("succeeded delete operation type = %s, want %s", got, outbox.OperationTypeDelete)
+	}
+	statusResp := handleRequest(t, b, storage, logical.ReadOperation, "status/app/db", nil)
+	assertNoErrorResponse(t, statusResp)
+	objects := statusResp.Data["objects"].([]map[string]interface{})
+	if len(objects) != 1 || objects[0]["state"] != string(domain.SyncStateRemoteMissing) {
+		t.Fatalf("status objects = %#v, want remote missing object", objects)
+	}
+	if got := objects[0]["last_operation_id"]; got != deleteOperationID {
+		t.Fatalf("delete last operation ID = %v, want %s", got, deleteOperationID)
+	}
+	if got := objects[0]["remote_version"]; got != "deleted" {
+		t.Fatalf("delete remote version = %v, want deleted", got)
+	}
+}
+
 func TestMetadataDeleteRequiresAssociationRemoval(t *testing.T) {
 	b := Backend(&logical.BackendConfig{})
 	storage := &logical.InmemStorage{}
@@ -545,6 +614,106 @@ func TestAssociationPlan(t *testing.T) {
 	}
 }
 
+func TestAssociationDisableEnableAndManualSync(t *testing.T) {
+	b := Backend(&logical.BackendConfig{})
+	storage := &logical.InmemStorage{}
+
+	writeAppDBSecret(t, b, storage, "initial")
+	createFakeDestination(t, b, storage, "default")
+	associationResp := createDefaultFakeAssociation(t, b, storage)
+	associationID := associationIDFromResponse(t, associationResp)
+	operationID := operationIDsFromResponse(t, associationResp)[0]
+
+	disableResp := handleRequest(
+		t,
+		b,
+		storage,
+		logical.UpdateOperation,
+		"associations/app/db/"+associationID+"/disable",
+		nil,
+	)
+	assertNoErrorResponse(t, disableResp)
+	assertAssociationEnabled(t, disableResp, false)
+	assertStringSlice(t, stringSliceFromResponse(t, disableResp, "canceled_operation_ids"), []string{operationID})
+	assertQueueCount(t, b, storage, "canceled", 1)
+	assertDisabledStatusObject(t, b, storage, 1)
+
+	disabledSyncResp := handleRequest(
+		t,
+		b,
+		storage,
+		logical.UpdateOperation,
+		"associations/app/db/"+associationID+"/sync",
+		nil,
+	)
+	if disabledSyncResp == nil || !disabledSyncResp.IsError() {
+		t.Fatalf("sync disabled association response = %#v, want error", disabledSyncResp)
+	}
+
+	secondResp := writeAppDBSecret(t, b, storage, "rotated")
+	secondMetadata := secondResp.Data["metadata"].(map[string]interface{})
+	assertOperationIDs(t, secondMetadata, 0)
+
+	enableResp := handleRequest(
+		t,
+		b,
+		storage,
+		logical.UpdateOperation,
+		"associations/app/db/"+associationID+"/enable",
+		nil,
+	)
+	assertNoErrorResponse(t, enableResp)
+	assertAssociationEnabled(t, enableResp, true)
+	enableOperationID := requireSingleOperationID(t, operationIDsFromResponse(t, enableResp), "enable")
+	assertOutboxOperation(t, storage, enableOperationID, 2, outboxStatePending)
+	if err := b.periodic(context.Background(), &logical.Request{Storage: storage}); err != nil {
+		t.Fatalf("periodic: %v", err)
+	}
+
+	syncResp := handleRequest(
+		t,
+		b,
+		storage,
+		logical.UpdateOperation,
+		"associations/app/db/"+associationID+"/sync",
+		nil,
+	)
+	assertNoErrorResponse(t, syncResp)
+	syncOperationID := requireSingleOperationID(t, operationIDsFromResponse(t, syncResp), "manual sync")
+	assertStringSlice(t, []string{syncOperationID}, []string{enableOperationID})
+	assertOutboxOperation(t, storage, syncOperationID, 2, outboxStatePending)
+}
+
+func TestAssociationEnableRequiresSyncableMetadata(t *testing.T) {
+	b := Backend(&logical.BackendConfig{})
+	storage := &logical.InmemStorage{}
+
+	writeAppDBSecret(t, b, storage, "initial")
+	createFakeDestination(t, b, storage, "default")
+	resp := handleRequest(t, b, storage, logical.UpdateOperation, "associations/app/db", map[string]interface{}{
+		"destination_type": providerTypeFake,
+		"destination_name": "default",
+		"resolved_name":    "prod/app/db",
+		"granularity":      syncObjectIDSecretPath,
+		"format":           defaultAssociationFormat,
+		"enabled":          false,
+	})
+	assertNoErrorResponse(t, resp)
+	associationID := associationIDFromResponse(t, resp)
+
+	enableResp := handleRequest(
+		t,
+		b,
+		storage,
+		logical.UpdateOperation,
+		"associations/app/db/"+associationID+"/enable",
+		nil,
+	)
+	if enableResp == nil || !enableResp.IsError() {
+		t.Fatalf("enable without syncable metadata response = %#v, want error", enableResp)
+	}
+}
+
 func TestDataWriteCAS(t *testing.T) {
 	b := Backend(&logical.BackendConfig{})
 	storage := &logical.InmemStorage{}
@@ -693,6 +862,35 @@ func TestPeriodicRejectsPayloadOverProviderLimit(t *testing.T) {
 	}
 }
 
+func TestPeriodicRetriesTransientProviderErrors(t *testing.T) {
+	b := Backend(&logical.BackendConfig{})
+	storage := &logical.InmemStorage{}
+
+	writeAppDBSecret(t, b, storage, "initial")
+	createFakeDestination(t, b, storage, "default")
+	associationResp := createFakeAssociationWithResolvedName(t, b, storage, "prod/unavailable/app/db")
+	operationID := operationIDsFromResponse(t, associationResp)[0]
+
+	if err := b.periodic(context.Background(), &logical.Request{Storage: storage}); err != nil {
+		t.Fatalf("periodic: %v", err)
+	}
+	operation := assertOutboxOperation(t, storage, operationID, 1, outboxStateRetryWait)
+	if got := operation.Attempts; got != 1 {
+		t.Fatalf("attempts = %d, want 1", got)
+	}
+	assertFutureNotBefore(t, operation.NotBefore)
+	assertQueueCount(t, b, storage, "retry_wait", 1)
+	assertStatusObjectErrorClass(t, b, storage, providers.ErrorClassUnavailable)
+
+	for range 2 {
+		operation = runDueRetry(t, b, storage, *operation)
+	}
+	operation = assertOutboxOperation(t, storage, operationID, 1, outboxStateFailedTerminal)
+	if got := operation.Attempts; got != maxAutomaticRetryAttempts {
+		t.Fatalf("attempts = %d, want %d", got, maxAutomaticRetryAttempts)
+	}
+}
+
 func TestQueueOperationReadCancelAndRetry(t *testing.T) {
 	b := Backend(&logical.BackendConfig{})
 	storage := &logical.InmemStorage{}
@@ -801,6 +999,48 @@ func TestPeriodicRecoversIncompleteEnqueueIntent(t *testing.T) {
 	}
 	if intent == nil || !intent.Complete {
 		t.Fatalf("recovered enqueue intent = %#v, want complete", intent)
+	}
+}
+
+func TestRecoveryRestoresDeleteIntentAfterSourceDelete(t *testing.T) {
+	b := Backend(&logical.BackendConfig{})
+	storage := &logical.InmemStorage{}
+
+	writeAppDBSecret(t, b, storage, "initial")
+	createFakeDestination(t, b, storage, "default")
+	createFakeAssociationWithDeleteMode(t, b, storage, deleteModeDelete)
+	if err := b.periodic(context.Background(), &logical.Request{Storage: storage}); err != nil {
+		t.Fatalf("periodic upsert: %v", err)
+	}
+	deleteResp := handleRequest(t, b, storage, logical.DeleteOperation, "data/app/db", nil)
+	assertNoErrorResponse(t, deleteResp)
+	deleteOperationID := operationIDsFromMetadata(t, deleteResp.Data["metadata"].(map[string]interface{}))[0]
+	operation, err := getOutbox(context.Background(), storage, deleteOperationID)
+	if err != nil {
+		t.Fatalf("read delete operation: %v", err)
+	}
+	if operation == nil {
+		t.Fatal("delete operation must exist before simulated loss")
+	}
+	if err := deleteOutbox(context.Background(), storage, *operation); err != nil {
+		t.Fatalf("delete outbox operation: %v", err)
+	}
+	intent, err := getEnqueueIntent(context.Background(), storage, "app/db", 1)
+	if err != nil {
+		t.Fatalf("read delete enqueue intent: %v", err)
+	}
+	intent.Complete = false
+	intent.CompletedTime = ""
+	if err := putEnqueueIntent(context.Background(), storage, *intent); err != nil {
+		t.Fatalf("write incomplete delete enqueue intent: %v", err)
+	}
+
+	if err := recoverIncompleteEnqueueIntents(context.Background(), storage, nowUTC()); err != nil {
+		t.Fatalf("recover delete enqueue intent: %v", err)
+	}
+	recovered := assertOutboxOperation(t, storage, deleteOperationID, 1, outboxStatePending)
+	if got := recovered.Type; got != outbox.OperationTypeDelete {
+		t.Fatalf("recovered operation type = %s, want %s", got, outbox.OperationTypeDelete)
 	}
 }
 
@@ -956,6 +1196,143 @@ func assertOperationIDs(t *testing.T, metadata map[string]interface{}, expected 
 	}
 }
 
+func assertAssociationEnabled(t *testing.T, resp *logical.Response, want bool) {
+	t.Helper()
+	assertNoErrorResponse(t, resp)
+	association, ok := resp.Data["association"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("association = %T, want map[string]interface{}", resp.Data["association"])
+	}
+	if got := association["enabled"]; got != want {
+		t.Fatalf("association enabled = %v, want %v", got, want)
+	}
+}
+
+func assertStringSlice(t *testing.T, got []string, want []string) {
+	t.Helper()
+	if len(got) != len(want) {
+		t.Fatalf("string slice = %v, want %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("string slice = %v, want %v", got, want)
+		}
+	}
+}
+
+func assertQueueCount(t *testing.T, b logical.Backend, storage logical.Storage, key string, want int) {
+	t.Helper()
+	resp := handleRequest(t, b, storage, logical.ReadOperation, "queue", nil)
+	assertNoErrorResponse(t, resp)
+	if got := resp.Data[key]; got != want {
+		t.Fatalf("%s queue count = %v, want %d", key, got, want)
+	}
+}
+
+func assertDisabledStatusObject(t *testing.T, b logical.Backend, storage logical.Storage, version int) {
+	t.Helper()
+	statusResp := handleRequest(t, b, storage, logical.ReadOperation, "status/app/db", nil)
+	assertNoErrorResponse(t, statusResp)
+	objects := statusResp.Data["objects"].([]map[string]interface{})
+	if len(objects) != 1 || objects[0]["state"] != string(domain.SyncStateDisabled) {
+		t.Fatalf("status objects = %#v, want disabled object", objects)
+	}
+	if got := objects[0]["version"]; got != version {
+		t.Fatalf("disabled status version = %v, want %d", got, version)
+	}
+}
+
+func assertStatusObjectErrorClass(
+	t *testing.T,
+	b logical.Backend,
+	storage logical.Storage,
+	want providers.ErrorClass,
+) {
+	t.Helper()
+	statusResp := handleRequest(t, b, storage, logical.ReadOperation, "status/app/db", nil)
+	assertNoErrorResponse(t, statusResp)
+	objects := statusResp.Data["objects"].([]map[string]interface{})
+	if got := objects[0]["last_error_class"]; got != string(want) {
+		t.Fatalf("last_error_class = %v, want %s", got, want)
+	}
+}
+
+func assertOutboxOperation(
+	t *testing.T,
+	storage logical.Storage,
+	operationID string,
+	version int,
+	state string,
+) *outboxRecord {
+	t.Helper()
+	operation, err := getOutbox(context.Background(), storage, operationID)
+	if err != nil {
+		t.Fatalf("read outbox operation: %v", err)
+	}
+	if operation == nil {
+		t.Fatalf("outbox operation %s must exist", operationID)
+	}
+	if got := operation.Version; got != version {
+		t.Fatalf("outbox operation version = %d, want %d", got, version)
+	}
+	if got := operation.State; got != state {
+		t.Fatalf("outbox operation state = %s, want %s", got, state)
+	}
+	return operation
+}
+
+func assertFutureNotBefore(t *testing.T, raw string) {
+	t.Helper()
+	notBefore, err := time.Parse(timeFormatRFC3339, raw)
+	if err != nil {
+		t.Fatalf("parse not_before: %v", err)
+	}
+	if !notBefore.After(nowUTC()) {
+		t.Fatalf("not_before = %s, want future retry", raw)
+	}
+}
+
+func runDueRetry(
+	t *testing.T,
+	b *secretSyncBackend,
+	storage logical.Storage,
+	operation outboxRecord,
+) *outboxRecord {
+	t.Helper()
+	operation.NotBefore = nowUTC().Add(-time.Second).Format(timeFormatRFC3339)
+	if err := putOutbox(context.Background(), storage, operation); err != nil {
+		t.Fatalf("write due retry operation: %v", err)
+	}
+	if err := b.periodic(context.Background(), &logical.Request{Storage: storage}); err != nil {
+		t.Fatalf("periodic retry: %v", err)
+	}
+	updated, err := getOutbox(context.Background(), storage, operation.ID)
+	if err != nil {
+		t.Fatalf("read retry operation: %v", err)
+	}
+	if updated == nil {
+		t.Fatalf("retry operation %s must exist", operation.ID)
+	}
+	return updated
+}
+
+func stringSliceFromResponse(t *testing.T, resp *logical.Response, key string) []string {
+	t.Helper()
+	rawIDs, ok := resp.Data[key].([]string)
+	if !ok {
+		t.Fatalf("%s = %T, want []string", key, resp.Data[key])
+	}
+	return rawIDs
+}
+
+func requireSingleOperationID(t *testing.T, operationIDs []string, label string) string {
+	t.Helper()
+	if len(operationIDs) != 1 {
+		t.Fatalf("%s operation IDs = %v, want one operation", label, operationIDs)
+	}
+	return operationIDs[0]
+}
+
 func operationIDsFromMetadata(t *testing.T, metadata map[string]interface{}) []string {
 	t.Helper()
 	rawIDs, ok := metadata["sync_operation_ids"].([]string)
@@ -1031,6 +1408,42 @@ func createDefaultFakeAssociation(t *testing.T, b logical.Backend, storage logic
 		"destination_type": providerTypeFake,
 		"destination_name": "default",
 		"resolved_name":    "prod/app/db",
+		"granularity":      syncObjectIDSecretPath,
+		"format":           defaultAssociationFormat,
+	})
+}
+
+func createFakeAssociationWithDeleteMode(
+	t *testing.T,
+	b logical.Backend,
+	storage logical.Storage,
+	deleteMode string,
+) {
+	t.Helper()
+	markAppDBSyncable(t, b, storage)
+	resp := handleRequest(t, b, storage, logical.UpdateOperation, "associations/app/db", map[string]interface{}{
+		"destination_type": providerTypeFake,
+		"destination_name": "default",
+		"resolved_name":    "prod/app/db",
+		"granularity":      syncObjectIDSecretPath,
+		"format":           defaultAssociationFormat,
+		"delete_mode":      deleteMode,
+	})
+	assertNoErrorResponse(t, resp)
+}
+
+func createFakeAssociationWithResolvedName(
+	t *testing.T,
+	b logical.Backend,
+	storage logical.Storage,
+	resolvedName string,
+) *logical.Response {
+	t.Helper()
+	markAppDBSyncable(t, b, storage)
+	return handleRequest(t, b, storage, logical.UpdateOperation, "associations/app/db", map[string]interface{}{
+		"destination_type": providerTypeFake,
+		"destination_name": "default",
+		"resolved_name":    resolvedName,
 		"granularity":      syncObjectIDSecretPath,
 		"format":           defaultAssociationFormat,
 	})

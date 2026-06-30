@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/adfinis/openbao-secret-sync/internal/domain"
 	payloadpkg "github.com/adfinis/openbao-secret-sync/internal/payload"
 	"github.com/adfinis/openbao-secret-sync/internal/providers"
 	"github.com/openbao/openbao/sdk/v2/framework"
@@ -35,6 +36,42 @@ func pathAssociations(b *secretSyncBackend) []*framework.Path {
 			},
 			HelpSynopsis:    "Plan association sync.",
 			HelpDescription: "Builds a non-mutating provider plan for the current source version.",
+		},
+		{
+			Pattern: "associations/(?P<path>.+)/(?P<association_id>assoc-[0-9a-f]+)/disable",
+			Fields:  associationLifecycleFields(),
+			Operations: map[logical.Operation]framework.OperationHandler{
+				logical.UpdateOperation: &framework.PathOperation{
+					Callback: pathAssociationDisable,
+					Summary:  "Disable an association.",
+				},
+			},
+			HelpSynopsis:    "Disable an association.",
+			HelpDescription: "Disables future enqueue and cancels queued work for one association.",
+		},
+		{
+			Pattern: "associations/(?P<path>.+)/(?P<association_id>assoc-[0-9a-f]+)/enable",
+			Fields:  associationLifecycleFields(),
+			Operations: map[logical.Operation]framework.OperationHandler{
+				logical.UpdateOperation: &framework.PathOperation{
+					Callback: pathAssociationEnable,
+					Summary:  "Enable an association.",
+				},
+			},
+			HelpSynopsis:    "Enable an association.",
+			HelpDescription: "Enables an association and enqueues the current source version when transitioning from disabled.",
+		},
+		{
+			Pattern: "associations/(?P<path>.+)/(?P<association_id>assoc-[0-9a-f]+)/sync",
+			Fields:  associationLifecycleFields(),
+			Operations: map[logical.Operation]framework.OperationHandler{
+				logical.UpdateOperation: &framework.PathOperation{
+					Callback: pathAssociationSync,
+					Summary:  "Manually enqueue association sync.",
+				},
+			},
+			HelpSynopsis:    "Sync an association.",
+			HelpDescription: "Enqueues the current source version for one enabled association.",
 		},
 		{
 			Pattern: "associations/(?P<path>.+)/(?P<association_id>assoc-[0-9a-f]+)",
@@ -75,7 +112,20 @@ func pathAssociations(b *secretSyncBackend) []*framework.Path {
 				},
 			},
 			HelpSynopsis:    "Manage associations.",
-			HelpDescription: "Associates source secrets with fake destinations for asynchronous sync.",
+			HelpDescription: "Associates source secrets with configured destinations for asynchronous sync.",
+		},
+	}
+}
+
+func associationLifecycleFields() map[string]*framework.FieldSchema {
+	return map[string]*framework.FieldSchema{
+		"path": {
+			Type:        framework.TypeString,
+			Description: "Source secret path.",
+		},
+		"association_id": {
+			Type:        framework.TypeString,
+			Description: "Association identifier.",
 		},
 	}
 }
@@ -110,11 +160,126 @@ func associationRequestFields() map[string]*framework.FieldSchema {
 			Type:        framework.TypeString,
 			Description: "Payload format. This phase supports json.",
 		},
+		"delete_mode": {
+			Type:        framework.TypeString,
+			Description: "Remote delete behavior for this association: retain, delete, or orphan.",
+		},
 		"enabled": {
 			Type:        framework.TypeBool,
 			Description: "Whether the association should enqueue sync work.",
 		},
 	}
+}
+
+func pathAssociationDisable(
+	ctx context.Context,
+	req *logical.Request,
+	data *framework.FieldData,
+) (*logical.Response, error) {
+	record, response, err := associationFromLifecycleRequest(ctx, req, data)
+	if response != nil || err != nil {
+		return response, err
+	}
+	if record == nil {
+		return nil, nil
+	}
+	now := nowUTC().Format(timeFormatRFC3339)
+	record.Enabled = false
+	record.UpdatedTime = now
+	if err := putAssociation(ctx, req.Storage, *record); err != nil {
+		return nil, err
+	}
+	canceledOperationIDs, err := cancelQueuedOutboxForAssociation(ctx, req.Storage, *record, now)
+	if err != nil {
+		return nil, err
+	}
+	if err := markAssociationStatusDisabled(ctx, req.Storage, *record, now); err != nil {
+		return nil, err
+	}
+	return &logical.Response{Data: newResponseData(
+		responseField("association", associationResponse(*record)),
+		responseField("canceled_operation_ids", canceledOperationIDs),
+	)}, nil
+}
+
+func pathAssociationEnable(
+	ctx context.Context,
+	req *logical.Request,
+	data *framework.FieldData,
+) (*logical.Response, error) {
+	record, response, err := associationFromLifecycleRequest(ctx, req, data)
+	if response != nil || err != nil {
+		return response, err
+	}
+	if record == nil {
+		return nil, nil
+	}
+	metadata, response, err := metadataForAssociationActivation(ctx, req.Storage, *record)
+	if response != nil || err != nil {
+		return response, err
+	}
+	if err := validateSourceEligibility(*metadata); err != nil {
+		return logical.ErrorResponse(err.Error()), nil
+	}
+	if err := validateAssociationDestination(ctx, req.Storage, *record); err != nil {
+		return logical.ErrorResponse(err.Error()), nil
+	}
+
+	wasEnabled := record.Enabled
+	now := nowUTC().Format(timeFormatRFC3339)
+	record.Enabled = true
+	record.UpdatedTime = now
+	if err := putAssociation(ctx, req.Storage, *record); err != nil {
+		return nil, err
+	}
+	operationIDs := []string{}
+	if !wasEnabled {
+		operationID, err := enqueueAssociationCurrentVersion(ctx, req.Storage, *record, *metadata, now)
+		if err != nil {
+			return logical.ErrorResponse(err.Error()), nil
+		}
+		operationIDs = append(operationIDs, operationID)
+	}
+	return &logical.Response{Data: newResponseData(
+		responseField("association", associationResponse(*record)),
+		responseField("sync_operation_ids", operationIDs),
+	)}, nil
+}
+
+func pathAssociationSync(
+	ctx context.Context,
+	req *logical.Request,
+	data *framework.FieldData,
+) (*logical.Response, error) {
+	record, response, err := associationFromLifecycleRequest(ctx, req, data)
+	if response != nil || err != nil {
+		return response, err
+	}
+	if record == nil {
+		return nil, nil
+	}
+	if !record.Enabled {
+		return logical.ErrorResponse("association is disabled"), nil
+	}
+	metadata, response, err := metadataForAssociationActivation(ctx, req.Storage, *record)
+	if response != nil || err != nil {
+		return response, err
+	}
+	if err := validateAssociationActivation(*record, *metadata); err != nil {
+		return logical.ErrorResponse(err.Error()), nil
+	}
+	if err := validateAssociationDestination(ctx, req.Storage, *record); err != nil {
+		return logical.ErrorResponse(err.Error()), nil
+	}
+	now := nowUTC().Format(timeFormatRFC3339)
+	operationID, err := enqueueAssociationCurrentVersion(ctx, req.Storage, *record, *metadata, now)
+	if err != nil {
+		return logical.ErrorResponse(err.Error()), nil
+	}
+	return &logical.Response{Data: newResponseData(
+		responseField("association", associationResponse(*record)),
+		responseField("sync_operation_ids", []string{operationID}),
+	)}, nil
 }
 
 func (b *secretSyncBackend) pathAssociationWrite(
@@ -373,6 +538,120 @@ func pathAssociationDelete(
 	return nil, nil
 }
 
+func associationFromLifecycleRequest(
+	ctx context.Context,
+	req *logical.Request,
+	data *framework.FieldData,
+) (*associationRecord, *logical.Response, error) {
+	path, err := normalizeSourcePath(data.Get("path").(string))
+	if err != nil {
+		return nil, logical.ErrorResponse(err.Error()), nil
+	}
+	record, err := getAssociation(ctx, req.Storage, path, data.Get("association_id").(string))
+	if err != nil {
+		return nil, nil, err
+	}
+	if record == nil {
+		return nil, nil, nil
+	}
+	return record, nil, nil
+}
+
+func metadataForAssociationActivation(
+	ctx context.Context,
+	storage logical.Storage,
+	record associationRecord,
+) (*metadataRecord, *logical.Response, error) {
+	metadata, err := getMetadata(ctx, storage, record.Path)
+	if err != nil {
+		return nil, nil, err
+	}
+	if metadata == nil || metadata.CurrentVersion == 0 {
+		return nil, logical.ErrorResponse("source path does not exist"), nil
+	}
+	return metadata, nil, nil
+}
+
+func validateAssociationDestination(ctx context.Context, storage logical.Storage, record associationRecord) error {
+	destination, err := getDestination(ctx, storage, record.DestinationType, record.DestinationName)
+	if err != nil {
+		return err
+	}
+	if destination == nil {
+		return fmt.Errorf("destination %s does not exist", record.DestinationRef)
+	}
+	if destination.Disabled {
+		return fmt.Errorf("destination %s is disabled", record.DestinationRef)
+	}
+	return nil
+}
+
+func enqueueAssociationCurrentVersion(
+	ctx context.Context,
+	storage logical.Storage,
+	record associationRecord,
+	metadata metadataRecord,
+	now string,
+) (string, error) {
+	version, err := getVersion(ctx, storage, record.Path, metadata.CurrentVersion)
+	if err != nil {
+		return "", err
+	}
+	if version == nil || version.Destroyed || version.DeletionTime != "" {
+		return "", fmt.Errorf("current source version is unavailable")
+	}
+	operation := newAssociationOutboxRecord(record, metadata.CurrentVersion, now)
+	existing, err := getOutbox(ctx, storage, operation.ID)
+	if err != nil {
+		return "", err
+	}
+	additionalOperations := 1
+	if existing != nil && isQueuedOutboxState(existing.State) {
+		additionalOperations = 0
+	}
+	if err := ensureQueueCapacityFor(ctx, storage, additionalOperations); err != nil {
+		return "", err
+	}
+	if existing != nil {
+		operation.CreatedTime = existing.CreatedTime
+	}
+	if err := putOutbox(ctx, storage, operation); err != nil {
+		return "", err
+	}
+	return operation.ID, nil
+}
+
+func markAssociationStatusDisabled(
+	ctx context.Context,
+	storage logical.Storage,
+	record associationRecord,
+	now string,
+) error {
+	metadata, err := getMetadata(ctx, storage, record.Path)
+	if err != nil {
+		return err
+	}
+	status, err := getStatus(ctx, storage, record.Path, record.ID, syncObjectIDSecretPath)
+	if err != nil {
+		return err
+	}
+	if status == nil {
+		status = &statusRecord{
+			Path:           record.Path,
+			AssociationID:  record.ID,
+			ObjectID:       syncObjectIDSecretPath,
+			DestinationRef: record.DestinationRef,
+			ResolvedName:   record.ResolvedName,
+		}
+	}
+	if metadata != nil {
+		status.Version = metadata.CurrentVersion
+	}
+	status.State = string(domain.SyncStateDisabled)
+	status.UpdatedTime = now
+	return putStatus(ctx, storage, *status)
+}
+
 func (b *secretSyncBackend) associationRecordFromFieldData(
 	ctx context.Context,
 	storage logical.Storage,
@@ -398,6 +677,7 @@ func (b *secretSyncBackend) associationRecordFromFieldData(
 
 	granularity := stringFromField(data, "granularity", syncObjectIDSecretPath)
 	format := stringFromField(data, "format", defaultAssociationFormat)
+	deleteMode := stringFromField(data, "delete_mode", defaultDeleteMode)
 	nameTemplate := stringFromField(data, "name_template", defaultNameTemplate)
 	resolvedName := stringFromField(data, "resolved_name", "")
 	if resolvedName == "" {
@@ -412,6 +692,9 @@ func (b *secretSyncBackend) associationRecordFromFieldData(
 		return associationRecord{}, fmt.Errorf("resolved_name must not be empty")
 	}
 	if err := validateAssociationCapabilities(provider.Capabilities(), granularity, format); err != nil {
+		return associationRecord{}, err
+	}
+	if err := validateDeleteMode(provider.Capabilities(), deleteMode); err != nil {
 		return associationRecord{}, err
 	}
 
@@ -444,6 +727,7 @@ func (b *secretSyncBackend) associationRecordFromFieldData(
 		ResolvedName:    resolvedName,
 		Granularity:     granularity,
 		Format:          format,
+		DeleteMode:      deleteMode,
 		Enabled:         enabled,
 		CreatedTime:     now,
 		UpdatedTime:     now,
@@ -461,6 +745,20 @@ func validateAssociationCapabilities(capabilities providers.Capabilities, granul
 		return fmt.Errorf("destination provider does not support secret-path granularity")
 	}
 	return nil
+}
+
+func validateDeleteMode(capabilities providers.Capabilities, deleteMode string) error {
+	switch deleteMode {
+	case deleteModeRetain, deleteModeOrphan:
+		return nil
+	case deleteModeDelete:
+		if !capabilities.SupportsDeleteIfOwned {
+			return fmt.Errorf("delete_mode %q requires provider delete-if-owned capability", deleteMode)
+		}
+		return nil
+	default:
+		return fmt.Errorf("unsupported delete_mode %q", deleteMode)
+	}
 }
 
 func validateAssociationActivation(record associationRecord, metadata metadataRecord) error {
@@ -515,8 +813,16 @@ func associationResponse(record associationRecord) map[string]interface{} { //no
 		responseField("resolved_name", record.ResolvedName),
 		responseField("granularity", record.Granularity),
 		responseField("format", record.Format),
+		responseField("delete_mode", normalizedDeleteMode(record.DeleteMode)),
 		responseField("enabled", record.Enabled),
 		responseField("created_time", record.CreatedTime),
 		responseField("updated_time", record.UpdatedTime),
 	)
+}
+
+func normalizedDeleteMode(deleteMode string) string {
+	if deleteMode == "" {
+		return defaultDeleteMode
+	}
+	return deleteMode
 }

@@ -101,6 +101,10 @@ Required delete modes:
 Providers must return `ownership` or `collision` error classes when they cannot
 honor the requested safety mode.
 
+The core engine owns delete-mode selection. Providers only receive delete
+requests when the selected mode requires remote deletion and provider
+capabilities declare owned delete support.
+
 ## Plan And Diagnostics
 
 Plan requests use the same resolved name and canonical payload metadata that
@@ -148,6 +152,23 @@ type UpsertRequest struct {
 The core engine builds `Payload`, enforces `MaxPayloadBytes`, and computes
 `PayloadSHA256` before the provider is called. Providers must not reformat the
 payload before writing if they also persist or compare the payload hash.
+
+## Delete Input
+
+Providers receive resolved delete requests after the core engine has validated
+association policy and destination capability:
+
+```go
+type DeleteRequest struct {
+    Destination   DestinationConfig
+    ResolvedName  string
+    SourcePath    string
+    SourceVersion int
+}
+```
+
+Provider delete implementations must only delete owned objects. If ownership
+cannot be proven, return `ownership` rather than deleting.
 
 ## Ownership Metadata
 
@@ -259,9 +280,11 @@ const (
 )
 ```
 
-Retry only `rate_limit`, `unavailable`, and explicitly retryable internal
-errors. Validation, authentication, authorization, ownership, collision, and
-provider policy errors should remain terminal until configuration changes.
+Automatically retry only `rate_limit` and `unavailable` errors. A later
+provider-contract extension may add an explicit retryable-internal marker, but
+plain `internal` errors are terminal for now. Validation, authentication,
+authorization, ownership, collision, and provider policy errors should remain
+terminal until configuration changes.
 
 ## Provider MVP Choices
 

@@ -6,6 +6,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/adfinis/openbao-secret-sync/internal/outbox"
 	"github.com/openbao/openbao/sdk/v2/logical"
 )
 
@@ -291,7 +292,14 @@ func getAssociation(ctx context.Context, storage logical.Storage, path string, i
 	if err := entry.DecodeJSON(&record); err != nil {
 		return nil, err
 	}
+	normalizeAssociationDefaults(&record)
 	return &record, nil
+}
+
+func normalizeAssociationDefaults(record *associationRecord) {
+	if record.DeleteMode == "" {
+		record.DeleteMode = defaultDeleteMode
+	}
 }
 
 func deleteAssociation(ctx context.Context, storage logical.Storage, record associationRecord) error {
@@ -418,6 +426,77 @@ func deleteQueuedOutboxForAssociation(
 			continue
 		}
 		if err := deleteOutbox(ctx, storage, *record); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func cancelQueuedOutboxForAssociation(
+	ctx context.Context,
+	storage logical.Storage,
+	association associationRecord,
+	now string,
+) ([]string, error) {
+	ids, err := listQueuedOutboxIDsForPath(ctx, storage, association.Path)
+	if err != nil {
+		return nil, err
+	}
+	canceledIDs := []string{}
+	for _, id := range ids {
+		record, err := getOutbox(ctx, storage, id)
+		if err != nil {
+			return nil, err
+		}
+		if record == nil || record.AssociationID != association.ID {
+			continue
+		}
+		record.State = outboxStateCanceled
+		record.UpdatedTime = now
+		if err := putOutbox(ctx, storage, *record); err != nil {
+			return nil, err
+		}
+		canceledIDs = append(canceledIDs, record.ID)
+	}
+	return canceledIDs, nil
+}
+
+func queuedUpsertIDsForPathVersion(
+	ctx context.Context,
+	storage logical.Storage,
+	path string,
+	version int,
+) ([]string, error) {
+	ids, err := listQueuedOutboxIDsForPath(ctx, storage, path)
+	if err != nil {
+		return nil, err
+	}
+	matchingIDs := []string{}
+	for _, id := range ids {
+		record, err := getOutbox(ctx, storage, id)
+		if err != nil {
+			return nil, err
+		}
+		if record == nil || record.Version != version || record.Type != outbox.OperationTypeUpsert {
+			continue
+		}
+		matchingIDs = append(matchingIDs, record.ID)
+	}
+	return matchingIDs, nil
+}
+
+func cancelQueuedOutboxIDs(ctx context.Context, storage logical.Storage, ids []string, now string) error {
+	for _, id := range ids {
+		record, err := getOutbox(ctx, storage, id)
+		if err != nil {
+			return err
+		}
+		if record == nil || !isQueuedOutboxState(record.State) {
+			continue
+		}
+		record.State = outboxStateCanceled
+		record.UpdatedTime = now
+		if err := putOutbox(ctx, storage, *record); err != nil {
 			return err
 		}
 	}

@@ -146,6 +146,14 @@ If ownership metadata is absent or conflicts, the plugin reports
 `REMOTE_OWNERSHIP_LOST` or `DRIFTED` and does not overwrite unless policy
 explicitly allows weaker behavior.
 
+Current delete behavior:
+
+- association `delete_mode` defaults to `retain`;
+- remote delete is enqueued only for `delete_mode=delete`;
+- provider delete must prove ownership or return an `ownership` error;
+- local source delete cancels queued upserts for the deleted version before any
+  remote delete is processed.
+
 ## Audit Model
 
 OpenBao audit devices capture requests to plugin paths according to normal
@@ -254,6 +262,16 @@ Rate limits should exist at three levels:
 
 Retries should use jitter to avoid synchronized bursts after external outages.
 Rate-limit state must be visible in status and queue output.
+
+Current automatic retry policy:
+
+- retry provider `rate_limit` and `unavailable` errors only;
+- use a bounded attempt budget before marking the operation terminal;
+- keep validation, authentication, authorization, ownership, collision, and
+  capacity failures terminal until an operator changes configuration or retries
+  manually;
+- manual queue retry resets the attempt counter and schedules the operation
+  immediately.
 
 ## Packaging And Release
 

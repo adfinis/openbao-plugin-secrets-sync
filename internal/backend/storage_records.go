@@ -33,6 +33,10 @@ const (
 	providerTypeFake           = "fake"
 	defaultAssociationFormat   = "json"
 	defaultNameTemplate        = "{{ path }}"
+	defaultDeleteMode          = deleteModeRetain
+	deleteModeRetain           = "retain"
+	deleteModeDelete           = "delete"
+	deleteModeOrphan           = "orphan"
 )
 
 type secretPayload map[string]interface{} //nolint:forbidigo // OpenBao SDK TypeMap uses map[string]interface{}.
@@ -81,6 +85,7 @@ type associationRecord struct {
 	ResolvedName    string `json:"resolved_name"`
 	Granularity     string `json:"granularity"`
 	Format          string `json:"format"`
+	DeleteMode      string `json:"delete_mode"`
 	Enabled         bool   `json:"enabled"`
 	CreatedTime     string `json:"created_time"`
 	UpdatedTime     string `json:"updated_time"`

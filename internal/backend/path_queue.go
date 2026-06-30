@@ -144,6 +144,7 @@ func pathQueueOperationRetry(
 	case outboxStateRetryWait, outboxStateFailedTerminal, outboxStateCanceled:
 		now := nowUTC().Format(timeFormatRFC3339)
 		record.State = outboxStatePending
+		record.Attempts = 0
 		record.NotBefore = now
 		record.UpdatedTime = now
 		if err := putOutbox(ctx, req.Storage, *record); err != nil {

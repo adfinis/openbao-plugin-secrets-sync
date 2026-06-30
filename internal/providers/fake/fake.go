@@ -73,7 +73,10 @@ func (Provider) Upsert(_ context.Context, req providers.UpsertRequest) (*provide
 	return &providers.SyncResult{RemoteVersion: "fake"}, nil
 }
 
-func (Provider) Delete(context.Context, providers.DeleteRequest) (*providers.SyncResult, error) {
+func (Provider) Delete(_ context.Context, req providers.DeleteRequest) (*providers.SyncResult, error) {
+	if err := fakeMutationError(req.ResolvedName); err != nil {
+		return nil, err
+	}
 	return &providers.SyncResult{RemoteVersion: "deleted"}, nil
 }
 

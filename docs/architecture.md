@@ -242,6 +242,19 @@ claimed    -> pending        when claim expires
 applying   -> pending        when claim expires and provider operation is idempotent
 ```
 
+The MVP dispatcher may process due `retry_wait` records directly without a
+separate persisted claim record. Automatic retry is reserved for provider
+`rate_limit` and `unavailable` classes, with a bounded attempt budget and
+`not_before` delay. Manual queue retry moves canceled, retry-wait, or terminal
+failed work back to `pending` and resets the attempt counter.
+
+Source delete uses the same durable outbox model. Deleting the latest local
+version cancels queued upsert work for that version. Associations with
+`delete_mode=delete` enqueue provider delete operations; other delete modes
+leave the remote object untouched. Delete enqueue intent recovery is
+type-aware: upsert intents recover only while the source version is live,
+delete intents recover only after the source version is deleted.
+
 Claims must include owner, expiry, and attempt number. In-memory locks are only
 an optimization. Correctness comes from durable claims, idempotency keys, and
 provider-side version or ownership checks.

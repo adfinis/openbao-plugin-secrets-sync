@@ -3,6 +3,26 @@
 Status: draft
 Date: 2026-06-30
 
+## Current Implementation Baseline
+
+Implemented backend slices now include:
+
+- KV-v2-like local source storage with CAS, metadata operations, soft delete,
+  undelete, destroy, and metadata deletion guards;
+- destination registry with redacted reads, validation, health, and a fake
+  provider;
+- provider-agnostic dispatch through the provider registry;
+- association creation, planning, deletion, source eligibility checks, name
+  reservations, and template rendering;
+- per-association disable, enable, and manual sync controls;
+- association `delete_mode` with source-delete enqueue semantics;
+- durable outbox, enqueue-intent recovery, queue summary, operation read,
+  cancel, and manual retry;
+- provider delete dispatch for durable delete operations;
+- automatic retry for `rate_limit` and `unavailable` provider errors with a
+  bounded retry budget;
+- status records with payload hashes and no secret payload disclosure.
+
 ## MVP Scope
 
 ### Must Have
@@ -30,6 +50,7 @@ Date: 2026-06-30
 - Safety modes: `fail_if_exists`, `overwrite_owned_only`, `overwrite_any`.
 - Delete modes: `retain`, `delete`, `orphan`.
 - Global pause, restore guard, and queue capacity.
+- Queue cancellation and retry endpoints.
 - Unit tests for storage, queue, templates, capabilities, redaction, and fake
   provider behavior.
 - Integration test against a local OpenBao dev server and fake destination
@@ -38,7 +59,6 @@ Date: 2026-06-30
 ### Should Have
 
 - Per-destination rate limit.
-- Queue cancellation and retry endpoints.
 - Drift detection.
 - Metrics endpoint.
 - Provider-specific local integration using localstack, envtest, or kind.
@@ -110,6 +130,7 @@ Tasks:
 - Implement destination config validation.
 - Implement dry-run plan endpoint.
 - Implement source eligibility checks for association activation.
+- Implement association disable, enable, and manual sync lifecycle controls.
 - Implement fake provider test harness.
 
 Exit criteria:
@@ -124,7 +145,13 @@ Exit criteria:
 - destination credentials are redacted on read;
 - invalid templates fail at association creation;
 - name collisions are rejected or require explicit operator resolution;
-- enabled associations cannot bypass source eligibility.
+- enabled associations cannot bypass source eligibility;
+- disabled associations do not enqueue new work and cancel queued work when
+  disabled;
+- manual sync and enable use the same activation gates as association
+  creation;
+- source delete cancels queued upserts and enqueues owned delete operations
+  only for `delete_mode=delete`.
 
 ## Phase 3: AWS Secrets Manager Provider
 

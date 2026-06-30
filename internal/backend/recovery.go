@@ -5,6 +5,7 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/adfinis/openbao-secret-sync/internal/outbox"
 	"github.com/openbao/openbao/sdk/v2/logical"
 )
 
@@ -34,10 +35,8 @@ func recoverEnqueueIntent(
 	if err != nil {
 		return err
 	}
-	if version == nil || version.Destroyed || version.DeletionTime != "" {
-		return completeRecoveredIntent(ctx, storage, intent, now)
-	}
-	operations, err := recoverableIntentOperations(ctx, storage, intent, now)
+	versionAvailable := version != nil && !version.Destroyed && version.DeletionTime == ""
+	operations, err := recoverableIntentOperations(ctx, storage, intent, now, versionAvailable)
 	if err != nil {
 		return err
 	}
@@ -61,11 +60,12 @@ func recoverableIntentOperations(
 	storage logical.Storage,
 	intent enqueueIntentRecord,
 	now string,
+	versionAvailable bool,
 ) ([]outboxRecord, error) {
 	if len(intent.Operations) > 0 {
-		return outboxRecordsFromIntentOperations(ctx, storage, intent, now)
+		return outboxRecordsFromIntentOperations(ctx, storage, intent, now, versionAvailable)
 	}
-	return legacyOutboxRecordsForIntent(ctx, storage, intent, now)
+	return legacyOutboxRecordsForIntent(ctx, storage, intent, now, versionAvailable)
 }
 
 func outboxRecordsFromIntentOperations(
@@ -73,9 +73,13 @@ func outboxRecordsFromIntentOperations(
 	storage logical.Storage,
 	intent enqueueIntentRecord,
 	now string,
+	versionAvailable bool,
 ) ([]outboxRecord, error) {
 	records := make([]outboxRecord, 0, len(intent.Operations))
 	for _, operation := range intent.Operations {
+		if !shouldRecoverIntentOperation(operation.Type, versionAvailable) {
+			continue
+		}
 		association, err := getAssociation(ctx, storage, intent.Path, operation.AssociationID)
 		if err != nil {
 			return nil, err
@@ -107,7 +111,11 @@ func legacyOutboxRecordsForIntent(
 	storage logical.Storage,
 	intent enqueueIntentRecord,
 	now string,
+	versionAvailable bool,
 ) ([]outboxRecord, error) {
+	if !versionAvailable {
+		return nil, nil
+	}
 	associations, err := listAssociationsForPath(ctx, storage, intent.Path)
 	if err != nil {
 		return nil, err
@@ -123,6 +131,17 @@ func legacyOutboxRecordsForIntent(
 		}
 	}
 	return records, nil
+}
+
+func shouldRecoverIntentOperation(operationType outbox.OperationType, versionAvailable bool) bool {
+	switch operationType {
+	case outbox.OperationTypeUpsert:
+		return versionAvailable
+	case outbox.OperationTypeDelete:
+		return !versionAvailable
+	default:
+		return false
+	}
 }
 
 func completeRecoveredIntent(

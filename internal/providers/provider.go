@@ -101,7 +101,10 @@ type UpsertRequest struct {
 
 // DeleteRequest describes a remote delete operation.
 type DeleteRequest struct {
-	ResolvedName string
+	Destination   DestinationConfig
+	ResolvedName  string
+	SourcePath    string
+	SourceVersion int
 }
 
 // ReadStateRequest describes a remote state lookup.

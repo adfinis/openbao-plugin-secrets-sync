@@ -13,6 +13,12 @@ import (
 	"github.com/openbao/openbao/sdk/v2/logical"
 )
 
+const (
+	maxAutomaticRetryAttempts = 3
+	retryBaseDelay            = 30 * time.Second
+	retryMaxDelay             = 5 * time.Minute
+)
+
 func (b *secretSyncBackend) processDueOutbox(ctx context.Context, storage logical.Storage, now time.Time) error {
 	ids, err := listOutboxIDs(ctx, storage)
 	if err != nil {
@@ -23,16 +29,16 @@ func (b *secretSyncBackend) processDueOutbox(ctx context.Context, storage logica
 		if err != nil {
 			return err
 		}
-		if record == nil || record.State != outboxStatePending {
+		if record == nil || !isDispatchableOutboxState(record.State) {
 			continue
 		}
 		if !isOutboxDue(*record, now) {
 			continue
 		}
-		if !isSupportedUpsertOperation(*record) {
+		if !isSupportedOperation(*record) {
 			continue
 		}
-		if err := b.processUpsert(ctx, storage, *record, now); err != nil {
+		if err := b.processOutboxRecord(ctx, storage, *record, now); err != nil {
 			return err
 		}
 	}
@@ -50,9 +56,31 @@ func isOutboxDue(record outboxRecord, now time.Time) bool {
 	return !notBefore.After(now)
 }
 
-func isSupportedUpsertOperation(record outboxRecord) bool {
-	return record.Type == outbox.OperationTypeUpsert &&
-		record.ObjectID == syncObjectIDSecretPath
+func isSupportedOperation(record outboxRecord) bool {
+	if record.ObjectID != syncObjectIDSecretPath {
+		return false
+	}
+	return record.Type == outbox.OperationTypeUpsert || record.Type == outbox.OperationTypeDelete
+}
+
+func isDispatchableOutboxState(state string) bool {
+	return state == outboxStatePending || state == outboxStateRetryWait
+}
+
+func (b *secretSyncBackend) processOutboxRecord(
+	ctx context.Context,
+	storage logical.Storage,
+	record outboxRecord,
+	now time.Time,
+) error {
+	switch record.Type {
+	case outbox.OperationTypeUpsert:
+		return b.processUpsert(ctx, storage, record, now)
+	case outbox.OperationTypeDelete:
+		return b.processDelete(ctx, storage, record, now)
+	default:
+		return nil
+	}
 }
 
 func (b *secretSyncBackend) processUpsert(
@@ -116,6 +144,59 @@ func (b *secretSyncBackend) processUpsert(
 	})
 }
 
+func (b *secretSyncBackend) processDelete(
+	ctx context.Context,
+	storage logical.Storage,
+	record outboxRecord,
+	now time.Time,
+) error {
+	deleteContext, failure, err := b.loadDeleteContext(ctx, storage, record)
+	if err != nil {
+		return err
+	}
+	if failure != nil {
+		return markOperationFailed(ctx, storage, record, *failure, now)
+	}
+	result, err := deleteContext.provider.Delete(ctx, providers.DeleteRequest{
+		Destination: providers.DestinationConfig{
+			Name: deleteContext.destination.Name,
+		},
+		ResolvedName:  deleteContext.association.ResolvedName,
+		SourcePath:    record.Path,
+		SourceVersion: record.Version,
+	})
+	if err != nil {
+		return markOperationFailed(ctx, storage, record, operationFailure{
+			class:        providerErrorClass(err),
+			message:      "provider delete failed",
+			resolvedName: deleteContext.association.ResolvedName,
+		}, now)
+	}
+	if result == nil {
+		result = &providers.SyncResult{}
+	}
+
+	record.State = outboxStateSucceeded
+	record.Attempts++
+	record.UpdatedTime = now.Format(timeFormatRFC3339)
+	if err := putOutbox(ctx, storage, record); err != nil {
+		return err
+	}
+	return putStatus(ctx, storage, statusRecord{
+		Path:            record.Path,
+		Version:         record.Version,
+		AssociationID:   record.AssociationID,
+		ObjectID:        record.ObjectID,
+		DestinationRef:  record.DestinationRef,
+		ResolvedName:    deleteContext.association.ResolvedName,
+		State:           string(domain.SyncStateRemoteMissing),
+		RemoteVersion:   result.RemoteVersion,
+		LastOperationID: record.ID,
+		LastSuccessTime: now.Format(timeFormatRFC3339),
+		UpdatedTime:     now.Format(timeFormatRFC3339),
+	})
+}
+
 type upsertContext struct {
 	version     *versionRecord
 	association *associationRecord
@@ -170,6 +251,71 @@ func (b *secretSyncBackend) loadUpsertContext(
 	}
 	return &upsertContext{
 		version:     version,
+		association: association,
+		destination: destination,
+		provider:    provider,
+	}, nil, nil
+}
+
+type deleteContext struct {
+	association *associationRecord
+	destination *destinationRecord
+	provider    providers.Provider
+}
+
+func (b *secretSyncBackend) loadDeleteContext(
+	ctx context.Context,
+	storage logical.Storage,
+	record outboxRecord,
+) (*deleteContext, *operationFailure, error) {
+	version, err := getVersion(ctx, storage, record.Path, record.Version)
+	if err != nil {
+		return nil, nil, err
+	}
+	if version != nil && !version.Destroyed && version.DeletionTime == "" {
+		return nil, &operationFailure{class: providers.ErrorClassValidation, message: "source version is not deleted"}, nil
+	}
+	association, err := getAssociation(ctx, storage, record.Path, record.AssociationID)
+	if err != nil {
+		return nil, nil, err
+	}
+	if association == nil {
+		return nil, &operationFailure{class: providers.ErrorClassInternal, message: "association is missing"}, nil
+	}
+	if normalizedDeleteMode(association.DeleteMode) != deleteModeDelete {
+		return nil, &operationFailure{
+			class:        providers.ErrorClassValidation,
+			message:      "association delete_mode does not permit remote delete",
+			resolvedName: association.ResolvedName,
+		}, nil
+	}
+	destination, err := getDestination(ctx, storage, association.DestinationType, association.DestinationName)
+	if err != nil {
+		return nil, nil, err
+	}
+	if destination == nil {
+		return nil, &operationFailure{
+			class:        providers.ErrorClassInternal,
+			message:      "destination is missing",
+			resolvedName: association.ResolvedName,
+		}, nil
+	}
+	provider, err := b.providerRegistry.MustGet(destination.Type)
+	if err != nil {
+		return nil, &operationFailure{
+			class:        providers.ErrorClassValidation,
+			message:      "destination provider is unsupported",
+			resolvedName: association.ResolvedName,
+		}, nil
+	}
+	if destination.Disabled || !association.Enabled {
+		return nil, &operationFailure{
+			class:        providers.ErrorClassValidation,
+			message:      "association or destination is disabled",
+			resolvedName: association.ResolvedName,
+		}, nil
+	}
+	return &deleteContext{
 		association: association,
 		destination: destination,
 		provider:    provider,
@@ -246,6 +392,12 @@ func markOperationFailed(
 	}
 	record.State = outboxStateFailedTerminal
 	record.Attempts++
+	if shouldRetryAutomatically(failure.class, record.Attempts) {
+		record.State = outboxStateRetryWait
+		record.NotBefore = now.Add(retryDelay(record.Attempts)).Format(timeFormatRFC3339)
+	} else {
+		record.NotBefore = ""
+	}
 	record.UpdatedTime = now.Format(timeFormatRFC3339)
 	if err := putOutbox(ctx, storage, record); err != nil {
 		return err
@@ -264,4 +416,22 @@ func markOperationFailed(
 		LastError:       fmt.Sprintf("dispatch failed: %s", failure.message),
 		UpdatedTime:     now.Format(timeFormatRFC3339),
 	})
+}
+
+func shouldRetryAutomatically(errorClass providers.ErrorClass, attempts int) bool {
+	if attempts >= maxAutomaticRetryAttempts {
+		return false
+	}
+	return errorClass == providers.ErrorClassRateLimit || errorClass == providers.ErrorClassUnavailable
+}
+
+func retryDelay(attempts int) time.Duration {
+	if attempts <= 1 {
+		return retryBaseDelay
+	}
+	delay := retryBaseDelay << (attempts - 1)
+	if delay > retryMaxDelay {
+		return retryMaxDelay
+	}
+	return delay
 }

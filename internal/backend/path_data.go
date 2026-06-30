@@ -202,21 +202,123 @@ func pathDataDelete(ctx context.Context, req *logical.Request, data *framework.F
 	if err != nil {
 		return logical.ErrorResponse(err.Error()), nil
 	}
-	metadata, err := getMetadata(ctx, req.Storage, path)
+	metadata, shouldDelete, err := metadataForSourceDelete(ctx, req.Storage, path)
 	if err != nil {
 		return nil, err
 	}
-	if metadata == nil || metadata.CurrentVersion == 0 {
+	if !shouldDelete {
 		return nil, nil
 	}
 	now := nowUTC().Format(timeFormatRFC3339)
+	deletePlan, err := buildSourceDeletePlan(ctx, req.Storage, path, metadata.CurrentVersion, now)
+	if err != nil {
+		return nil, err
+	}
+	if err := ensureQueueCapacityAfterReplacement(
+		ctx,
+		req.Storage,
+		deletePlan.additionalOperations,
+		len(deletePlan.staleUpsertIDs),
+	); err != nil {
+		return logical.ErrorResponse(err.Error()), nil
+	}
+	if err := putPendingEnqueueIntent(
+		ctx,
+		req.Storage,
+		path,
+		metadata.CurrentVersion,
+		deletePlan.operations,
+		now,
+	); err != nil {
+		return nil, err
+	}
 	if err := softDeleteVersion(ctx, req.Storage, metadata, path, metadata.CurrentVersion, now); err != nil {
 		return logical.ErrorResponse(err.Error()), nil
+	}
+	if err := cancelQueuedOutboxIDs(ctx, req.Storage, deletePlan.staleUpsertIDs, now); err != nil {
+		return nil, err
+	}
+	if err := putOutboxRecords(ctx, req.Storage, deletePlan.operations); err != nil {
+		return nil, err
+	}
+	if err := completeEnqueueIntent(
+		ctx,
+		req.Storage,
+		path,
+		metadata.CurrentVersion,
+		deletePlan.operations,
+		now,
+	); err != nil {
+		return nil, err
 	}
 	if err := putMetadata(ctx, req.Storage, path, *metadata); err != nil {
 		return nil, err
 	}
-	return nil, nil
+	return &logical.Response{Data: newResponseData(
+		responseField("metadata", newResponseData(
+			responseField("version", metadata.CurrentVersion),
+			responseField("deletion_time", now),
+			responseField("sync_operation_ids", deletePlan.operationIDs),
+			responseField("sync_state", string(syncStateForOperationIDs(deletePlan.operationIDs))),
+		)),
+	)}, nil
+}
+
+func metadataForSourceDelete(
+	ctx context.Context,
+	storage logical.Storage,
+	path string,
+) (*metadataRecord, bool, error) {
+	metadata, err := getMetadata(ctx, storage, path)
+	if err != nil {
+		return nil, false, err
+	}
+	if metadata == nil || metadata.CurrentVersion == 0 {
+		return nil, false, nil
+	}
+	version, err := getVersion(ctx, storage, path, metadata.CurrentVersion)
+	if err != nil {
+		return nil, false, err
+	}
+	if version == nil || version.Destroyed || version.DeletionTime != "" {
+		return nil, false, nil
+	}
+	return metadata, true, nil
+}
+
+type sourceDeletePlan struct {
+	operations           []outboxRecord
+	operationIDs         []string
+	staleUpsertIDs       []string
+	additionalOperations int
+}
+
+func buildSourceDeletePlan(
+	ctx context.Context,
+	storage logical.Storage,
+	path string,
+	version int,
+	now string,
+) (sourceDeletePlan, error) {
+	associations, err := enabledAssociationsForPath(ctx, storage, path)
+	if err != nil {
+		return sourceDeletePlan{}, err
+	}
+	operations, operationIDs := newAssociationDeleteOutboxRecords(associations, version, now)
+	staleUpsertIDs, err := queuedUpsertIDsForPathVersion(ctx, storage, path, version)
+	if err != nil {
+		return sourceDeletePlan{}, err
+	}
+	additionalOperations, err := additionalQueuedOperationCount(ctx, storage, operations)
+	if err != nil {
+		return sourceDeletePlan{}, err
+	}
+	return sourceDeletePlan{
+		operations:           operations,
+		operationIDs:         operationIDs,
+		staleUpsertIDs:       staleUpsertIDs,
+		additionalOperations: additionalOperations,
+	}, nil
 }
 
 func payloadFromField(data *framework.FieldData) (secretPayload, error) {
@@ -300,6 +402,18 @@ func ensureQueueCapacityFor(ctx context.Context, storage logical.Storage, additi
 	if additionalOperations == 0 {
 		return nil
 	}
+	return ensureQueueCapacityAfterReplacement(ctx, storage, additionalOperations, 0)
+}
+
+func ensureQueueCapacityAfterReplacement(
+	ctx context.Context,
+	storage logical.Storage,
+	additionalOperations int,
+	replacedOperations int,
+) error {
+	if additionalOperations <= replacedOperations {
+		return nil
+	}
 	cfg, err := readGlobalConfig(ctx, storage)
 	if err != nil {
 		return err
@@ -308,7 +422,8 @@ func ensureQueueCapacityFor(ctx context.Context, storage logical.Storage, additi
 	if err != nil {
 		return err
 	}
-	if len(ids)+additionalOperations > cfg.QueueCapacity {
+	projectedDepth := len(ids) - replacedOperations + additionalOperations
+	if projectedDepth > cfg.QueueCapacity {
 		return fmt.Errorf("sync queue is full: capacity %d", cfg.QueueCapacity)
 	}
 	return nil
@@ -327,6 +442,42 @@ func newAssociationOutboxRecords(
 		operationIDs = append(operationIDs, operation.ID)
 	}
 	return operations, operationIDs
+}
+
+func newAssociationDeleteOutboxRecords(
+	associations []associationRecord,
+	version int,
+	now string,
+) ([]outboxRecord, []string) {
+	operations := []outboxRecord{}
+	operationIDs := []string{}
+	for _, association := range associations {
+		if normalizedDeleteMode(association.DeleteMode) != deleteModeDelete {
+			continue
+		}
+		operation := newAssociationDeleteOutboxRecord(association, version, now)
+		operations = append(operations, operation)
+		operationIDs = append(operationIDs, operation.ID)
+	}
+	return operations, operationIDs
+}
+
+func additionalQueuedOperationCount(
+	ctx context.Context,
+	storage logical.Storage,
+	operations []outboxRecord,
+) (int, error) {
+	count := 0
+	for _, operation := range operations {
+		existing, err := getOutbox(ctx, storage, operation.ID)
+		if err != nil {
+			return 0, err
+		}
+		if existing == nil || !isQueuedOutboxState(existing.State) {
+			count++
+		}
+	}
+	return count, nil
 }
 
 func putPendingEnqueueIntent(
@@ -431,6 +582,30 @@ func newAssociationOutboxRecord(association associationRecord, version int, now 
 		CreatedTime:    now,
 		UpdatedTime:    now,
 		IdempotencyKey: association.Path + ":" + strconv.Itoa(version) + ":" + association.ID + ":secret-path:upsert",
+	}
+}
+
+func newAssociationDeleteOutboxRecord(association associationRecord, version int, now string) outboxRecord {
+	id := newOperationID(
+		association.Path,
+		version,
+		association.ID,
+		syncObjectIDSecretPath,
+		outbox.OperationTypeDelete,
+	)
+	return outboxRecord{
+		ID:             id,
+		Type:           outbox.OperationTypeDelete,
+		Path:           association.Path,
+		Version:        version,
+		AssociationID:  association.ID,
+		ObjectID:       syncObjectIDSecretPath,
+		DestinationRef: association.DestinationRef,
+		State:          outboxStatePending,
+		NotBefore:      now,
+		CreatedTime:    now,
+		UpdatedTime:    now,
+		IdempotencyKey: association.Path + ":" + strconv.Itoa(version) + ":" + association.ID + ":secret-path:delete",
 	}
 }
 

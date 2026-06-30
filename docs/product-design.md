@@ -127,6 +127,16 @@ Deletion policy is explicit per association or destination:
 - `delete`: delete remote objects only when ownership can be proven.
 - `orphan`: remove association and stop managing remote objects.
 
+Current MVP source-delete behavior:
+
+- association `delete_mode` defaults to `retain`;
+- deleting the latest local source version cancels queued upserts for that
+  source version;
+- `delete_mode=delete` enqueues a provider delete operation for enabled
+  associations whose destination is active;
+- successful provider delete sets object status to `REMOTE_MISSING`;
+- `retain` and `orphan` do not mutate remote objects on source delete.
+
 The plugin must distinguish:
 
 - deleting a source secret version;
@@ -217,9 +227,9 @@ GET    associations/<path>
 LIST   associations
 DELETE associations/<path>/<association-id>
 POST   associations/<path>/plan
-POST   associations/<path>/sync
-POST   associations/<path>/disable
-POST   associations/<path>/enable
+POST   associations/<path>/<association-id>/sync
+POST   associations/<path>/<association-id>/disable
+POST   associations/<path>/<association-id>/enable
 ```
 
 Association activation requires:
@@ -235,6 +245,15 @@ Source eligibility should be enforced with at least one of:
 - caller has read permission for `data/<path>` at creation/update time;
 - source metadata contains required `custom_metadata.syncable=true`;
 - an operator-only path creates the association on behalf of source owners.
+
+Association lifecycle controls are per association, not per source path:
+
+- disable sets the association inactive, cancels queued work for that
+  association, and marks its object status `DISABLED`;
+- enable revalidates source eligibility and destination availability before
+  queueing the current source version;
+- manual sync revalidates the same activation gates and queues the current
+  source version for an enabled association.
 
 ### Status And Operations
 
