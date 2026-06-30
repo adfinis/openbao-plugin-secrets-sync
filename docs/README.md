@@ -30,6 +30,8 @@ and operator diagnostics are OpenBao-native and plugin-first.
   current recommendation.
 - [Product design](product-design.md) - goals, non-goals, design principles,
   user-facing behavior, and API shape.
+- [User guide](user-guide.md) - install, configure, sync, inspect, and
+  troubleshoot the plugin.
 - [API compatibility](api-compatibility.md) - KV-v2-like compatibility claim,
   intentional differences, and source metadata policy.
 - [Architecture](architecture.md) - plugin boundary, components, storage model,
@@ -42,6 +44,8 @@ and operator diagnostics are OpenBao-native and plugin-first.
   strategy, and open decisions.
 - [LocalStack e2e workflow](../test/e2e/localstack/README.md) - self-contained
   OpenBao plus LocalStack test stack for AWS Secrets Manager sync behavior.
+- [Manual AWS e2e workflow](../test/e2e/aws/README.md) - opt-in real AWS
+  sandbox test with OpenTofu-managed IAM fixtures.
 
 ## How To Use These Docs
 

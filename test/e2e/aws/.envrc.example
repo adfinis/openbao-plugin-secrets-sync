@@ -1,0 +1,34 @@
+# Copy to .envrc, set AWS_VAULT_PROFILE, then run: direnv allow
+
+export AWS_VAULT_PROFILE="your-sandbox-profile"
+export E2E_AWS_REGION="${E2E_AWS_REGION:-${AWS_REGION:-us-east-1}}"
+export AWS_REGION="${AWS_REGION:-${E2E_AWS_REGION}}"
+export AWS_DEFAULT_REGION="${AWS_DEFAULT_REGION:-${E2E_AWS_REGION}}"
+export E2E_AWS_TOFU_DIR="${PWD}/tofu"
+export E2E_AWS_SECRET_PREFIX="${E2E_AWS_SECRET_PREFIX:-openbao-secret-sync-manual/}"
+export E2E_AWS_OPENBAO_PORT="${E2E_AWS_OPENBAO_PORT:-18201}"
+export BAO_ADDR="http://127.0.0.1:${E2E_AWS_OPENBAO_PORT}"
+export BAO_TOKEN="root"
+
+tofu_output() {
+  tofu -chdir="${E2E_AWS_TOFU_DIR}" output -raw "$1" 2>/dev/null || true
+}
+
+if command -v tofu >/dev/null 2>&1; then
+  role_arn="$(tofu_output role_arn)"
+  external_id="$(tofu_output external_id)"
+  secret_name_prefix="$(tofu_output secret_name_prefix)"
+
+  if [ -n "${role_arn}" ]; then
+    export E2E_AWS_ROLE_ARN="${role_arn}"
+  fi
+  if [ -n "${external_id}" ]; then
+    export E2E_AWS_EXTERNAL_ID="${external_id}"
+  fi
+  if [ -n "${secret_name_prefix}" ]; then
+    export E2E_AWS_SECRET_PREFIX="${secret_name_prefix}"
+  fi
+fi
+
+unset -f tofu_output
+unset role_arn external_id secret_name_prefix

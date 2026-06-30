@@ -1,0 +1,29 @@
+services:
+  openbao:
+    image: ghcr.io/openbao/openbao:2.5.5@sha256:6150c4a6b62067db6141c8da7a6a6b5763f4f47c315343d0c848b40fecdfd452
+    cap_add:
+      - IPC_LOCK
+    environment:
+      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:?AWS_ACCESS_KEY_ID is required}
+      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:?AWS_SECRET_ACCESS_KEY is required}
+      AWS_SESSION_TOKEN: ${AWS_SESSION_TOKEN:-}
+      AWS_SECURITY_TOKEN: ${AWS_SECURITY_TOKEN:-}
+      AWS_REGION: ${AWS_REGION:-us-east-1}
+      AWS_DEFAULT_REGION: ${AWS_DEFAULT_REGION:-us-east-1}
+      BAO_ADDR: http://127.0.0.1:8200
+      BAO_TOKEN: root
+    command:
+      - server
+      - -dev
+      - -dev-root-token-id=root
+      - -dev-listen-address=0.0.0.0:8200
+      - -dev-plugin-dir=/openbao/plugins
+    ports:
+      - "127.0.0.1:${E2E_AWS_OPENBAO_PORT:-18201}:8200"
+    volumes:
+      - ../../../bin/e2e:/openbao/plugins:ro
+    healthcheck:
+      test: ["CMD", "bao", "status", "-address=http://127.0.0.1:8200"]
+      interval: 2s
+      timeout: 5s
+      retries: 30

@@ -189,6 +189,9 @@ Completed foundation:
 - The self-contained OpenBao plus LocalStack e2e path proves plugin catalog
   registration, mount configuration, AWS create/update/delete dispatch,
   ownership tags, and status updates.
+- A manual real-AWS e2e path is scaffolded with OpenTofu-managed IAM fixtures,
+  explicit operator confirmation, and cleanup under a disposable Secrets
+  Manager name prefix.
 
 Remaining tasks:
 
@@ -198,7 +201,8 @@ Remaining tasks:
   endpoint deployments.
 - Broaden LocalStack coverage for auth variants and AWS failure paths after
   sensitive destination config storage exists.
-- Add opt-in real AWS e2e coverage with strict tagging and cleanup controls.
+- Extend opt-in real AWS e2e coverage as provider auth modes and reconcile
+  behavior grow.
 
 Exit criteria:
 
