@@ -453,6 +453,8 @@ func providerPlanRequest(
 		PayloadBytes:  len(preparedPayload.Bytes),
 		SourcePath:    record.Path,
 		SourceVersion: version,
+		AssociationID: record.ID,
+		ObjectID:      record.Granularity,
 	}
 }
 

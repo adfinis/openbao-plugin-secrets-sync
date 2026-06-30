@@ -23,8 +23,10 @@ Implemented backend slices now include:
 - automatic retry for `rate_limit` and `unavailable` provider errors with a
   bounded retry budget;
 - status records with payload hashes and no secret payload disclosure;
-- AWS Secrets Manager provider scaffold with type, capabilities, validation,
-  and conformance smoke coverage, not yet backend-registered.
+- AWS Secrets Manager provider with type, capabilities, validation, SDK-backed
+  client boundary, mocked plan/upsert/delete/read-state/health behavior, AWS
+  error classification, and ownership tag handling, not yet
+  backend-registered.
 
 ## MVP Scope
 
@@ -158,16 +160,28 @@ Exit criteria:
 
 ## Phase 3: AWS Secrets Manager Provider
 
-Tasks:
+Completed foundation:
 
-- Extend the provider conformance harness with AWS-specific mocked client
-  cases.
-- Implement AWS auth options, preferring workload identity and role assumption.
-- Implement upsert, delete, read-state, and health.
-- Add ownership tags.
-- Add collision policy behavior.
-- Add AWS error classification.
-- Add local integration tests with mocks or localstack where practical.
+- AWS-specific mocked client cases exercise health, plan, upsert, delete,
+  read-state, ownership rejection, and error classification.
+- SDK client boundary uses the AWS SDK default configuration chain.
+- Upsert, owned delete, read-state, and health behavior are implemented behind
+  the provider interface.
+- Ownership tags include association id, source path, source version, object id,
+  and payload hash.
+- Collision, ownership loss, throttling, authorization, and service failure
+  paths map to stable provider results or error classes.
+- Stale update and delete attempts are rejected when AWS metadata shows a newer
+  managed source version.
+
+Remaining tasks:
+
+- Implement destination configuration for AWS auth options, preferring workload
+  identity and role assumption before static keys.
+- Validate region and endpoint controls.
+- Register the AWS provider in the backend once destination auth/config shape is
+  implemented.
+- Add local integration tests with localstack where practical.
 
 Exit criteria:
 

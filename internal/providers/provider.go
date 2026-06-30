@@ -81,6 +81,8 @@ type PlanRequest struct {
 	PayloadBytes  int
 	SourcePath    string
 	SourceVersion int
+	AssociationID string
+	ObjectID      string
 }
 
 // PlanResult describes the provider action that would be taken.
@@ -97,6 +99,10 @@ type UpsertRequest struct {
 	Format        string
 	Payload       []byte
 	PayloadSHA256 string
+	SourcePath    string
+	SourceVersion int
+	AssociationID string
+	ObjectID      string
 }
 
 // DeleteRequest describes a remote delete operation.
@@ -105,6 +111,8 @@ type DeleteRequest struct {
 	ResolvedName  string
 	SourcePath    string
 	SourceVersion int
+	AssociationID string
+	ObjectID      string
 }
 
 // ReadStateRequest describes a remote state lookup.

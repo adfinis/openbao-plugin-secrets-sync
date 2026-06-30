@@ -109,6 +109,10 @@ func (b *secretSyncBackend) processUpsert(
 		Format:        preparedPayload.Format,
 		Payload:       preparedPayload.Bytes,
 		PayloadSHA256: preparedPayload.SHA256,
+		SourcePath:    record.Path,
+		SourceVersion: record.Version,
+		AssociationID: record.AssociationID,
+		ObjectID:      record.ObjectID,
 	})
 	if err != nil {
 		return markOperationFailed(ctx, storage, record, operationFailure{
@@ -164,6 +168,8 @@ func (b *secretSyncBackend) processDelete(
 		ResolvedName:  deleteContext.association.ResolvedName,
 		SourcePath:    record.Path,
 		SourceVersion: record.Version,
+		AssociationID: record.AssociationID,
+		ObjectID:      record.ObjectID,
 	})
 	if err != nil {
 		return markOperationFailed(ctx, storage, record, operationFailure{

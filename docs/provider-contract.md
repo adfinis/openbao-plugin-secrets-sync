@@ -56,23 +56,14 @@ Each provider must declare capabilities before associations are accepted.
 
 ```go
 type Capabilities struct {
-    MaxPayloadBytes             int
-    SupportsTags                bool
-    SupportsLabels              bool
-    SupportsAnnotations         bool
     SupportsValueReadback       bool
     SupportsMetadataReadback    bool
-    SupportsVersionCompare      bool
     SupportsPayloadHashMetadata bool
-    SupportsCreateIfAbsent      bool
     SupportsUpdateIfOwned       bool
     SupportsDeleteIfOwned       bool
-    SupportsSoftDelete          bool
-    SupportsBinaryPayload       bool
     SupportsSecretPath          bool
     SupportsSecretKey           bool
-    NameRequirements            NameRequirements
-    RateLimitModel              RateLimitModel
+    MaxPayloadBytes             int
 }
 ```
 
@@ -81,6 +72,10 @@ valid. For example, `overwrite_owned_only` requires some combination of
 metadata readback and provider-specific conditional update semantics. If a
 provider cannot prove ownership, the association must either be rejected or
 forced into a weaker explicitly acknowledged safety mode.
+
+Future capability fields such as explicit name requirements, binary payload
+support, soft-delete semantics, and provider rate-limit models should be added
+when the first provider needs them and the core engine can enforce them.
 
 ## Safety Modes
 
@@ -119,6 +114,8 @@ type PlanRequest struct {
     PayloadBytes  int
     SourcePath    string
     SourceVersion int
+    AssociationID string
+    ObjectID      string
 }
 
 type PlanResult struct {
@@ -146,12 +143,20 @@ type UpsertRequest struct {
     Format        string
     Payload       []byte
     PayloadSHA256 string
+    SourcePath    string
+    SourceVersion int
+    AssociationID string
+    ObjectID      string
 }
 ```
 
 The core engine builds `Payload`, enforces `MaxPayloadBytes`, and computes
 `PayloadSHA256` before the provider is called. Providers must not reformat the
 payload before writing if they also persist or compare the payload hash.
+`SourcePath`, `SourceVersion`, `AssociationID`, and `ObjectID` let providers
+persist ownership metadata without reaching back into OpenBao storage. Providers
+with metadata readback should reject stale mutations when the remote managed
+source version is newer than the request source version.
 
 ## Delete Input
 
@@ -164,11 +169,15 @@ type DeleteRequest struct {
     ResolvedName  string
     SourcePath    string
     SourceVersion int
+    AssociationID string
+    ObjectID      string
 }
 ```
 
 Provider delete implementations must only delete owned objects. If ownership
-cannot be proven, return `ownership` rather than deleting.
+cannot be proven, return `ownership` rather than deleting. Delete requests carry
+the same ownership identity as upsert requests so providers can prove that the
+remote object belongs to the association that requested deletion.
 
 ## Ownership Metadata
 
@@ -325,19 +334,23 @@ combinations needed by unit and integration tests, including:
 AWS Secrets Manager is a strong MVP provider because it has common customer
 demand and a useful ownership model through tags and version metadata.
 
-Current status: package scaffold exists with provider type `aws-sm`, conservative
-capabilities, basic destination-name validation, and conformance smoke tests.
-It is not registered in the backend until the SDK-backed client implements
-health, plan, upsert, owned delete, read-state, and AWS error classification.
+Current status: package has provider type `aws-sm`, conservative capabilities,
+basic destination-name validation, an SDK-backed client boundary, and mocked
+behavior tests for health, plan, upsert, owned delete, read-state, ownership
+checks, and AWS error classification. It is not registered in the backend until
+destination auth/config shape and integration coverage are implemented.
 
 Required implementation behavior:
 
 - support workload identity or role assumption before static keys;
 - validate region and endpoint controls;
-- write ownership tags;
-- enforce max payload size;
+- write ownership tags for association id, source path, source version, object
+  id, and payload hash;
+- enforce max payload size before remote calls;
 - classify AWS throttling and service errors;
-- detect ownership loss;
+- reject stale update or delete attempts when the remote managed source version
+  is newer than the request source version;
+- detect ownership loss before update or delete;
 - avoid logging AWS responses that may include secret material.
 
 ### Kubernetes Secrets
