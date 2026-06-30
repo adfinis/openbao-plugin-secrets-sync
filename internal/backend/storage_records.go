@@ -26,6 +26,7 @@ const (
 	outboxStateRetryWait       = "retry_wait"
 	outboxStateFailedTerminal  = "failed_terminal"
 	outboxStateSucceeded       = "succeeded"
+	outboxStateCanceled        = "canceled"
 	syncObjectIDSecretPath     = "secret-path"
 	statusStoragePrefix        = "status/"
 	providerTypeFake           = "fake"

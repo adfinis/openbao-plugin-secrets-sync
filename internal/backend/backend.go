@@ -43,7 +43,8 @@ func Backend(_ *logical.BackendConfig) *secretSyncBackend {
 			pathAssociations(&b),
 			pathMetadata(&b),
 			pathVersionMutations(&b),
-			[]*framework.Path{pathData(&b), pathStatus(&b), pathQueue(&b)},
+			[]*framework.Path{pathData(&b), pathStatus(&b)},
+			pathQueue(&b),
 		),
 		Invalidate: func(_ context.Context, _ string) {
 			b.invalidate()

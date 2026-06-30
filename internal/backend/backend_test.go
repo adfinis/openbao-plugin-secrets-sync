@@ -412,6 +412,64 @@ func TestPeriodicProcessesFakeOutbox(t *testing.T) {
 	}
 }
 
+func TestQueueOperationReadCancelAndRetry(t *testing.T) {
+	b := Backend(&logical.BackendConfig{})
+	storage := &logical.InmemStorage{}
+
+	writeAppDBSecret(t, b, storage, "initial")
+	createFakeDestination(t, b, storage, "default")
+	associationResp := createDefaultFakeAssociation(t, b, storage)
+	operationID := operationIDsFromResponse(t, associationResp)[0]
+
+	readResp := handleRequest(t, b, storage, logical.ReadOperation, "queue/"+operationID, nil)
+	assertNoErrorResponse(t, readResp)
+	if got := readResp.Data["state"]; got != outboxStatePending {
+		t.Fatalf("operation state = %v, want %s", got, outboxStatePending)
+	}
+
+	cancelResp := handleRequest(t, b, storage, logical.UpdateOperation, "queue/"+operationID+"/cancel", nil)
+	assertNoErrorResponse(t, cancelResp)
+	if got := cancelResp.Data["state"]; got != outboxStateCanceled {
+		t.Fatalf("canceled operation state = %v, want %s", got, outboxStateCanceled)
+	}
+	queueResp := handleRequest(t, b, storage, logical.ReadOperation, "queue", nil)
+	assertNoErrorResponse(t, queueResp)
+	if got := queueResp.Data["pending"]; got != 0 {
+		t.Fatalf("pending queue count = %v, want 0", got)
+	}
+	if got := queueResp.Data["canceled"]; got != 1 {
+		t.Fatalf("canceled queue count = %v, want 1", got)
+	}
+
+	retryResp := handleRequest(t, b, storage, logical.UpdateOperation, "queue/"+operationID+"/retry", nil)
+	assertNoErrorResponse(t, retryResp)
+	if got := retryResp.Data["state"]; got != outboxStatePending {
+		t.Fatalf("retried operation state = %v, want %s", got, outboxStatePending)
+	}
+}
+
+func TestQueueOperationRejectsRetryAfterSuccess(t *testing.T) {
+	b := Backend(&logical.BackendConfig{})
+	storage := &logical.InmemStorage{}
+
+	writeAppDBSecret(t, b, storage, "initial")
+	createFakeDestination(t, b, storage, "default")
+	associationResp := createDefaultFakeAssociation(t, b, storage)
+	operationID := operationIDsFromResponse(t, associationResp)[0]
+	if err := b.periodic(context.Background(), &logical.Request{Storage: storage}); err != nil {
+		t.Fatalf("periodic: %v", err)
+	}
+
+	retryResp := handleRequest(t, b, storage, logical.UpdateOperation, "queue/"+operationID+"/retry", nil)
+	if retryResp == nil || !retryResp.IsError() {
+		t.Fatalf("retry succeeded operation response = %#v, want error", retryResp)
+	}
+	cancelResp := handleRequest(t, b, storage, logical.UpdateOperation, "queue/"+operationID+"/cancel", nil)
+	if cancelResp == nil || !cancelResp.IsError() {
+		t.Fatalf("cancel succeeded operation response = %#v, want error", cancelResp)
+	}
+}
+
 func TestPeriodicHonorsDisabledConfig(t *testing.T) {
 	b := Backend(&logical.BackendConfig{})
 	storage := &logical.InmemStorage{}
