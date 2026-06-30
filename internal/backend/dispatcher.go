@@ -20,14 +20,25 @@ const (
 )
 
 func (b *secretSyncBackend) processDueOutbox(ctx context.Context, storage logical.Storage, now time.Time) error {
+	_, err := b.processDueOutboxLimit(ctx, storage, now, 0)
+	return err
+}
+
+func (b *secretSyncBackend) processDueOutboxLimit(
+	ctx context.Context,
+	storage logical.Storage,
+	now time.Time,
+	maxOperations int,
+) (int, error) {
 	ids, err := listOutboxIDs(ctx, storage)
 	if err != nil {
-		return err
+		return 0, err
 	}
+	processed := 0
 	for _, id := range ids {
 		record, err := getOutbox(ctx, storage, id)
 		if err != nil {
-			return err
+			return processed, err
 		}
 		if record == nil || !isDispatchableOutboxState(record.State) {
 			continue
@@ -39,10 +50,14 @@ func (b *secretSyncBackend) processDueOutbox(ctx context.Context, storage logica
 			continue
 		}
 		if err := b.processOutboxRecord(ctx, storage, *record, now); err != nil {
-			return err
+			return processed, err
+		}
+		processed++
+		if maxOperations > 0 && processed >= maxOperations {
+			break
 		}
 	}
-	return nil
+	return processed, nil
 }
 
 func isOutboxDue(record outboxRecord, now time.Time) bool {

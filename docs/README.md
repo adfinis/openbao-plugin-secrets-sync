@@ -40,6 +40,8 @@ and operator diagnostics are OpenBao-native and plugin-first.
   authorization, redaction, ownership, audit, metrics, restore, and runbooks.
 - [Implementation plan](implementation-plan.md) - MVP scope, phased plan, test
   strategy, and open decisions.
+- [LocalStack e2e workflow](../test/e2e/localstack/README.md) - self-contained
+  OpenBao plus LocalStack test stack for AWS Secrets Manager sync behavior.
 
 ## How To Use These Docs
 

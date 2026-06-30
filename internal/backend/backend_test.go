@@ -966,6 +966,46 @@ func TestQueueOperationReadCancelAndRetry(t *testing.T) {
 	}
 }
 
+func TestQueueDrainProcessesDueOperations(t *testing.T) {
+	b := Backend(&logical.BackendConfig{})
+	storage := &logical.InmemStorage{}
+
+	writeAppDBSecret(t, b, storage, "initial")
+	createFakeDestination(t, b, storage, "default")
+	associationResp := createDefaultFakeAssociation(t, b, storage)
+	operationID := operationIDsFromResponse(t, associationResp)[0]
+
+	drainResp := handleRequest(t, b, storage, logical.UpdateOperation, "queue/drain", map[string]interface{}{
+		"max_operations": 1,
+	})
+	assertNoErrorResponse(t, drainResp)
+	if got := drainResp.Data["processed"]; got != 1 {
+		t.Fatalf("processed = %v, want 1", got)
+	}
+	queue := drainResp.Data["queue"].(map[string]interface{})
+	if got := queue["pending"]; got != 0 {
+		t.Fatalf("pending = %v, want 0", got)
+	}
+	assertOutboxOperation(t, storage, operationID, 1, outboxStateSucceeded)
+}
+
+func TestQueueDrainHonorsDisabledConfig(t *testing.T) {
+	b := Backend(&logical.BackendConfig{})
+	storage := &logical.InmemStorage{}
+
+	configResp := handleRequest(t, b, storage, logical.UpdateOperation, configPath, map[string]interface{}{
+		"disabled": true,
+	})
+	if configResp != nil && configResp.IsError() {
+		t.Fatalf("unexpected config write error: %v", configResp.Error())
+	}
+
+	drainResp := handleRequest(t, b, storage, logical.UpdateOperation, "queue/drain", nil)
+	if drainResp == nil || !drainResp.IsError() {
+		t.Fatalf("drain disabled response = %#v, want error", drainResp)
+	}
+}
+
 func TestQueueOperationRejectsRetryAfterSuccess(t *testing.T) {
 	b := Backend(&logical.BackendConfig{})
 	storage := &logical.InmemStorage{}

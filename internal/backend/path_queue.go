@@ -7,7 +7,16 @@ import (
 	"github.com/openbao/openbao/sdk/v2/logical"
 )
 
-func pathQueue(_ *secretSyncBackend) []*framework.Path {
+const defaultDrainMaxOperations = 100
+
+type queueSummary struct {
+	Pending   int
+	RetryWait int
+	Terminal  int
+	Canceled  int
+}
+
+func pathQueue(b *secretSyncBackend) []*framework.Path {
 	return []*framework.Path{
 		{
 			Pattern: "queue/?",
@@ -19,6 +28,23 @@ func pathQueue(_ *secretSyncBackend) []*framework.Path {
 			},
 			HelpSynopsis:    "Inspect sync queue state.",
 			HelpDescription: "Returns queue counters from durable outbox records.",
+		},
+		{
+			Pattern: "queue/drain",
+			Fields: map[string]*framework.FieldSchema{
+				"max_operations": {
+					Type:        framework.TypeInt,
+					Description: "Maximum due operations to process in this drain request. Defaults to 100.",
+				},
+			},
+			Operations: map[logical.Operation]framework.OperationHandler{
+				logical.UpdateOperation: &framework.PathOperation{
+					Callback: b.pathQueueDrain,
+					Summary:  "Process due sync queue operations.",
+				},
+			},
+			HelpSynopsis:    "Drain due sync queue work.",
+			HelpDescription: "Runs the same durable outbox dispatcher used by the periodic function.",
 		},
 		{
 			Pattern: "queue/" + framework.GenericNameRegex("operation_id"),
@@ -75,40 +101,87 @@ func pathQueue(_ *secretSyncBackend) []*framework.Path {
 }
 
 func pathQueueRead(ctx context.Context, req *logical.Request, _ *framework.FieldData) (*logical.Response, error) {
-	ids, err := listOutboxIDs(ctx, req.Storage)
+	summary, err := readQueueSummary(ctx, req.Storage)
 	if err != nil {
 		return nil, err
 	}
-	pending := 0
-	retryWait := 0
-	terminal := 0
-	canceled := 0
+	return &logical.Response{Data: queueSummaryResponse(summary)}, nil
+}
+
+func (b *secretSyncBackend) pathQueueDrain(
+	ctx context.Context,
+	req *logical.Request,
+	data *framework.FieldData,
+) (*logical.Response, error) {
+	cfg, err := readGlobalConfig(ctx, req.Storage)
+	if err != nil {
+		return nil, err
+	}
+	if cfg.Disabled {
+		return logical.ErrorResponse("secret sync is disabled"), nil
+	}
+	maxOperations := data.Get("max_operations").(int)
+	if maxOperations < 0 {
+		return logical.ErrorResponse("max_operations must be greater than or equal to zero"), nil
+	}
+	if maxOperations == 0 {
+		maxOperations = defaultDrainMaxOperations
+	}
+	now := nowUTC()
+	if err := recoverIncompleteEnqueueIntents(ctx, req.Storage, now); err != nil {
+		return nil, err
+	}
+	processed, err := b.processDueOutboxLimit(ctx, req.Storage, now, maxOperations)
+	if err != nil {
+		return nil, err
+	}
+	summary, err := readQueueSummary(ctx, req.Storage)
+	if err != nil {
+		return nil, err
+	}
+	return &logical.Response{Data: newResponseData(
+		responseField("processed", processed),
+		responseField("max_operations", maxOperations),
+		responseField("queue", queueSummaryResponse(summary)),
+	)}, nil
+}
+
+func readQueueSummary(ctx context.Context, storage logical.Storage) (queueSummary, error) {
+	ids, err := listOutboxIDs(ctx, storage)
+	if err != nil {
+		return queueSummary{}, err
+	}
+	summary := queueSummary{}
 	for _, id := range ids {
-		record, err := getOutbox(ctx, req.Storage, id)
+		record, err := getOutbox(ctx, storage, id)
 		if err != nil {
-			return nil, err
+			return queueSummary{}, err
 		}
 		if record == nil {
 			continue
 		}
 		switch record.State {
 		case outboxStatePending:
-			pending++
+			summary.Pending++
 		case outboxStateRetryWait:
-			retryWait++
+			summary.RetryWait++
 		case outboxStateFailedTerminal:
-			terminal++
+			summary.Terminal++
 		case outboxStateCanceled:
-			canceled++
+			summary.Canceled++
 		}
 	}
-	return &logical.Response{Data: newResponseData(
-		responseField("pending", pending),
-		responseField("retry_wait", retryWait),
-		responseField("terminal", terminal),
-		responseField("canceled", canceled),
+	return summary, nil
+}
+
+func queueSummaryResponse(summary queueSummary) map[string]interface{} { //nolint:forbidigo
+	return newResponseData(
+		responseField("pending", summary.Pending),
+		responseField("retry_wait", summary.RetryWait),
+		responseField("terminal", summary.Terminal),
+		responseField("canceled", summary.Canceled),
 		responseField("oldest_age_seconds", 0),
-	)}, nil
+	)
 }
 
 func pathQueueOperationRead(

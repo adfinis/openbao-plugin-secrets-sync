@@ -18,7 +18,7 @@ Implemented backend slices now include:
 - per-association disable, enable, and manual sync controls;
 - association `delete_mode` with source-delete enqueue semantics;
 - durable outbox, enqueue-intent recovery, queue summary, operation read,
-  cancel, and manual retry;
+  cancel, manual retry, and bounded manual drain;
 - provider delete dispatch for durable delete operations;
 - automatic retry for `rate_limit` and `unavailable` provider errors with a
   bounded retry budget;
@@ -27,6 +27,9 @@ Implemented backend slices now include:
   client boundary, mocked plan/upsert/delete/read-state/health behavior, AWS
   error classification, ownership tag handling, destination config for default
   and assume-role auth, optional endpoint override, and backend registration.
+- self-contained OpenBao plus LocalStack e2e coverage for plugin registration,
+  mounting, AWS destination configuration, queue drain, create, update, delete,
+  ownership tags, and status transitions.
 
 ## MVP Scope
 
@@ -60,6 +63,8 @@ Implemented backend slices now include:
   provider behavior.
 - Integration test against a local OpenBao dev server and fake destination
   provider.
+- Self-contained e2e test against OpenBao dev mode and LocalStack-backed AWS
+  Secrets Manager.
 
 ### Should Have
 
@@ -178,13 +183,17 @@ Completed foundation:
   managed source version.
 - The backend registers `aws-sm` and passes destination config through
   validation, health, plan, upsert, and delete paths.
+- The self-contained OpenBao plus LocalStack e2e path proves plugin catalog
+  registration, mount configuration, AWS create/update/delete dispatch,
+  ownership tags, and status updates.
 
 Remaining tasks:
 
 - Add a seal-wrapped sensitive destination config path before supporting static
   AWS keys or session tokens.
 - Add stricter production network controls for custom endpoint URLs.
-- Add local integration tests with localstack where practical.
+- Broaden LocalStack coverage for auth variants and AWS failure paths after
+  sensitive destination config storage exists.
 
 Exit criteria:
 
@@ -254,6 +263,7 @@ Exit criteria:
 ### Integration Tests
 
 - plugin registration and mount;
+- deterministic queue drain for due work;
 - write/read/list/delete;
 - association creation;
 - association rejection without source eligibility;
@@ -268,6 +278,8 @@ Exit criteria:
 ### Provider Tests
 
 - AWS Secrets Manager using mocks and optional localstack;
+- AWS Secrets Manager LocalStack e2e for plugin registration, mount,
+  create/update/delete, ownership tags, and status;
 - Kubernetes using envtest or kind;
 - ownership metadata behavior;
 - collision behavior;

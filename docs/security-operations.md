@@ -66,6 +66,11 @@ Destination authority can be proven through:
 - association-level provider constraints;
 - optional required metadata such as team, environment, or owner.
 
+`queue/drain` is an operator action because it can execute remote mutations for
+all due operations in the durable queue. It must be policy-gated like retry and
+cancel operations, honors the global disabled flag, recovers incomplete enqueue
+intents before dispatch, and must not expose source payload data in responses.
+
 ## Confused-Deputy Controls
 
 The plugin should support:
@@ -302,6 +307,7 @@ MVP runbooks should cover:
 - create association;
 - validate destination;
 - inspect queue and status;
+- drain due queue work for deterministic verification or controlled catch-up;
 - retry failed operation;
 - pause and resume sync;
 - restore-safe reconciliation;

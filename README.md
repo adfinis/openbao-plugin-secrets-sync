@@ -11,10 +11,10 @@ diagnostics from the start.
 
 ## Status
 
-This repository is in early scaffold state. The current code builds a logical
-backend plugin with initial path surfaces and repository quality gates. The KV,
-outbox, provider, reconciliation, and destination implementations are still
-planned work.
+This repository is in early implementation state. The current code builds a
+logical backend plugin with KV-v2-like source storage, associations, a durable
+outbox, provider-agnostic dispatch, a fake provider, and an AWS Secrets Manager
+provider foundation.
 
 ## Documentation
 
@@ -27,6 +27,12 @@ implementation-plan documents.
 ```sh
 make test
 make build
+```
+
+The self-contained OpenBao plus LocalStack e2e path is available with:
+
+```sh
+make test-e2e
 ```
 
 The project follows the tool and CI layout used by the OpenBao Kubernetes KMS
