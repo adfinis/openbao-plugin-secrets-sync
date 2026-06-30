@@ -36,6 +36,14 @@ type DestinationConfig struct {
 type ErrorClass string
 
 const (
+	PlanActionCreate   = "create"
+	PlanActionUpdate   = "update"
+	PlanActionNoop     = "noop"
+	PlanActionConflict = "conflict"
+	PlanActionBlocked  = "blocked"
+)
+
+const (
 	ErrorClassValidation  ErrorClass = "validation"
 	ErrorClassAuthn       ErrorClass = "authn"
 	ErrorClassAuthz       ErrorClass = "authz"
@@ -66,12 +74,20 @@ func (e *Error) Error() string {
 
 // PlanRequest describes a dry-run provider operation.
 type PlanRequest struct {
-	ResolvedName string
+	Destination   DestinationConfig
+	ResolvedName  string
+	Format        string
+	PayloadSHA256 string
+	PayloadBytes  int
+	SourcePath    string
+	SourceVersion int
 }
 
 // PlanResult describes the provider action that would be taken.
 type PlanResult struct {
-	Action string
+	Action     string
+	Message    string
+	ErrorClass ErrorClass
 }
 
 // UpsertRequest describes a remote create or update operation.
@@ -105,5 +121,7 @@ type SyncResult struct {
 
 // HealthResult describes destination health.
 type HealthResult struct {
-	Healthy bool
+	Healthy    bool
+	Message    string
+	ErrorClass ErrorClass
 }

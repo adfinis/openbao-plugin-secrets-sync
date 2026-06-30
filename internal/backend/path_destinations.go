@@ -28,6 +28,32 @@ func pathDestinations(b *secretSyncBackend) []*framework.Path {
 			HelpDescription: "Lists configured destination names for a provider type.",
 		},
 		{
+			Pattern: "destinations/" + framework.GenericNameRegex("type") + "/" +
+				framework.GenericNameRegex("name") + "/validate",
+			Fields: destinationIdentityFields(),
+			Operations: map[logical.Operation]framework.OperationHandler{
+				logical.UpdateOperation: &framework.PathOperation{
+					Callback: b.pathDestinationValidate,
+					Summary:  "Validate a configured destination.",
+				},
+			},
+			HelpSynopsis:    "Validate a destination.",
+			HelpDescription: "Runs provider validation for a configured destination without mutating remote state.",
+		},
+		{
+			Pattern: "destinations/" + framework.GenericNameRegex("type") + "/" +
+				framework.GenericNameRegex("name") + "/health",
+			Fields: destinationIdentityFields(),
+			Operations: map[logical.Operation]framework.OperationHandler{
+				logical.ReadOperation: &framework.PathOperation{
+					Callback: b.pathDestinationHealth,
+					Summary:  "Check destination health.",
+				},
+			},
+			HelpSynopsis:    "Check destination health.",
+			HelpDescription: "Runs provider health checks for a configured destination without mutating remote state.",
+		},
+		{
 			Pattern: "destinations/" + framework.GenericNameRegex("type") + "/" + framework.GenericNameRegex("name"),
 			Fields: map[string]*framework.FieldSchema{
 				"type": {
@@ -71,6 +97,19 @@ func pathDestinations(b *secretSyncBackend) []*framework.Path {
 	}
 }
 
+func destinationIdentityFields() map[string]*framework.FieldSchema {
+	return map[string]*framework.FieldSchema{
+		"type": {
+			Type:        framework.TypeString,
+			Description: "Destination provider type.",
+		},
+		"name": {
+			Type:        framework.TypeString,
+			Description: "Destination name.",
+		},
+	}
+}
+
 func (b *secretSyncBackend) pathDestinationWrite(
 	ctx context.Context,
 	req *logical.Request,
@@ -104,6 +143,61 @@ func (b *secretSyncBackend) pathDestinationWrite(
 	return nil, nil
 }
 
+func (b *secretSyncBackend) pathDestinationValidate(
+	ctx context.Context,
+	req *logical.Request,
+	data *framework.FieldData,
+) (*logical.Response, error) {
+	record, provider, response, err := b.destinationProviderFromRequest(ctx, req, data)
+	if response != nil || err != nil {
+		return response, err
+	}
+	providerErr := provider.Validate(ctx, destinationConfig(*record))
+	if providerErr != nil {
+		return &logical.Response{Data: newResponseData(
+			responseField("valid", false),
+			responseField("destination", destinationRefResponse(*record)),
+			responseField("error_class", string(providerErrorClass(providerErr))),
+			responseField("error", providerErr.Error()),
+		)}, nil
+	}
+	return &logical.Response{Data: newResponseData(
+		responseField("valid", true),
+		responseField("destination", destinationRefResponse(*record)),
+		responseField("capabilities", capabilitiesResponse(provider.Capabilities())),
+	)}, nil
+}
+
+func (b *secretSyncBackend) pathDestinationHealth(
+	ctx context.Context,
+	req *logical.Request,
+	data *framework.FieldData,
+) (*logical.Response, error) {
+	record, provider, response, err := b.destinationProviderFromRequest(ctx, req, data)
+	if response != nil || err != nil {
+		return response, err
+	}
+	result, providerErr := provider.Health(ctx, destinationConfig(*record))
+	if providerErr != nil {
+		return &logical.Response{Data: newResponseData(
+			responseField("healthy", false),
+			responseField("destination", destinationRefResponse(*record)),
+			responseField("error_class", string(providerErrorClass(providerErr))),
+			responseField("message", providerErr.Error()),
+		)}, nil
+	}
+	if result == nil {
+		result = &providers.HealthResult{}
+	}
+	return &logical.Response{Data: newResponseData(
+		responseField("healthy", result.Healthy),
+		responseField("destination", destinationRefResponse(*record)),
+		responseField("disabled", record.Disabled),
+		responseField("error_class", string(result.ErrorClass)),
+		responseField("message", result.Message),
+	)}, nil
+}
+
 func (b *secretSyncBackend) pathDestinationRead(
 	ctx context.Context,
 	req *logical.Request,
@@ -121,6 +215,30 @@ func (b *secretSyncBackend) pathDestinationRead(
 		return logical.ErrorResponse(err.Error()), nil
 	}
 	return &logical.Response{Data: destinationResponse(*record, provider.Capabilities())}, nil
+}
+
+func (b *secretSyncBackend) destinationProviderFromRequest(
+	ctx context.Context,
+	req *logical.Request,
+	data *framework.FieldData,
+) (*destinationRecord, providers.Provider, *logical.Response, error) {
+	destinationType := data.Get("type").(string)
+	name := data.Get("name").(string)
+	if err := b.validateDestinationType(destinationType); err != nil {
+		return nil, nil, logical.ErrorResponse(err.Error()), nil
+	}
+	record, err := getDestination(ctx, req.Storage, destinationType, name)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	if record == nil {
+		return nil, nil, logical.ErrorResponse("destination does not exist"), nil
+	}
+	provider, err := b.providerRegistry.MustGet(record.Type)
+	if err != nil {
+		return nil, nil, logical.ErrorResponse(err.Error()), nil
+	}
+	return record, provider, nil, nil
 }
 
 func (b *secretSyncBackend) pathDestinationList(
@@ -183,6 +301,19 @@ func destinationResponse(
 		)),
 		responseField("capabilities", capabilitiesResponse(capabilities)),
 	)
+}
+
+func destinationRefResponse(record destinationRecord) map[string]interface{} { //nolint:forbidigo
+	return newResponseData(
+		responseField("type", record.Type),
+		responseField("name", record.Name),
+	)
+}
+
+func destinationConfig(record destinationRecord) providers.DestinationConfig {
+	return providers.DestinationConfig{
+		Name: record.Name,
+	}
 }
 
 func capabilitiesResponse(capabilities providers.Capabilities) map[string]interface{} { //nolint:forbidigo

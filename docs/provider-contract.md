@@ -101,6 +101,36 @@ Required delete modes:
 Providers must return `ownership` or `collision` error classes when they cannot
 honor the requested safety mode.
 
+## Plan And Diagnostics
+
+Plan requests use the same resolved name and canonical payload metadata that
+dispatch uses, but never include secret values in the response:
+
+```go
+type PlanRequest struct {
+    Destination   DestinationConfig
+    ResolvedName  string
+    Format        string
+    PayloadSHA256 string
+    PayloadBytes  int
+    SourcePath    string
+    SourceVersion int
+}
+
+type PlanResult struct {
+    Action     string
+    Message    string
+    ErrorClass ErrorClass
+}
+```
+
+Provider actions are stable strings: `create`, `update`, `noop`, `conflict`,
+and `blocked`.
+
+Destination validation and health endpoints are diagnostic surfaces. Provider
+validation or health failures should be returned as structured response fields
+with an error class, not as leaked raw provider responses.
+
 ## Upsert Input
 
 Providers receive prepared payload bytes, not source secret maps:
@@ -241,12 +271,12 @@ The fake provider is required in Phase 0. It should support all capability
 combinations needed by unit and integration tests, including:
 
 - success;
-- transient failure;
-- rate limit;
-- terminal validation failure;
-- ownership conflict;
-- partial success for `secret-key`;
-- delayed read-after-write consistency.
+- deterministic plan actions for create, update, noop, conflict, and blocked;
+- validation, authentication, authorization, rate-limit, unavailable,
+  ownership, collision, and validation error classes;
+- unhealthy destination diagnostics;
+- partial success for `secret-key` in a later slice;
+- delayed read-after-write consistency in a later slice.
 
 ### AWS Secrets Manager
 

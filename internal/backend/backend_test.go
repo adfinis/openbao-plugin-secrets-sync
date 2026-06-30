@@ -2,6 +2,7 @@ package backend
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -96,6 +97,48 @@ func TestDestinationLifecycle(t *testing.T) {
 	readDeletedResp := handleRequest(t, b, storage, logical.ReadOperation, "destinations/fake/primary", nil)
 	if readDeletedResp != nil {
 		t.Fatalf("deleted destination response = %#v, want nil", readDeletedResp)
+	}
+}
+
+func TestDestinationValidateAndHealth(t *testing.T) {
+	b := Backend(&logical.BackendConfig{})
+	storage := &logical.InmemStorage{}
+
+	createFakeDestination(t, b, storage, "primary")
+	createFakeDestination(t, b, storage, "invalid")
+	createFakeDestination(t, b, storage, "unhealthy")
+
+	validateResp := handleRequest(t, b, storage, logical.UpdateOperation, "destinations/fake/primary/validate", nil)
+	assertNoErrorResponse(t, validateResp)
+	if got := validateResp.Data["valid"]; got != true {
+		t.Fatalf("valid = %v, want true", got)
+	}
+	if _, ok := validateResp.Data["capabilities"]; !ok {
+		t.Fatal("validate response must include capabilities")
+	}
+
+	invalidResp := handleRequest(t, b, storage, logical.UpdateOperation, "destinations/fake/invalid/validate", nil)
+	assertNoErrorResponse(t, invalidResp)
+	if got := invalidResp.Data["valid"]; got != false {
+		t.Fatalf("invalid valid = %v, want false", got)
+	}
+	if got := invalidResp.Data["error_class"]; got != string(providers.ErrorClassValidation) {
+		t.Fatalf("invalid error_class = %v, want %s", got, providers.ErrorClassValidation)
+	}
+
+	healthResp := handleRequest(t, b, storage, logical.ReadOperation, "destinations/fake/primary/health", nil)
+	assertNoErrorResponse(t, healthResp)
+	if got := healthResp.Data["healthy"]; got != true {
+		t.Fatalf("healthy = %v, want true", got)
+	}
+
+	unhealthyResp := handleRequest(t, b, storage, logical.ReadOperation, "destinations/fake/unhealthy/health", nil)
+	assertNoErrorResponse(t, unhealthyResp)
+	if got := unhealthyResp.Data["healthy"]; got != false {
+		t.Fatalf("unhealthy healthy = %v, want false", got)
+	}
+	if got := unhealthyResp.Data["error_class"]; got != string(providers.ErrorClassUnavailable) {
+		t.Fatalf("unhealthy error_class = %v, want %s", got, providers.ErrorClassUnavailable)
 	}
 }
 
@@ -452,6 +495,54 @@ func TestAssociationRequiresSyncableMetadata(t *testing.T) {
 		"format":           defaultAssociationFormat,
 	})
 	assertNoErrorResponse(t, allowedResp)
+}
+
+func TestAssociationPlan(t *testing.T) {
+	b := Backend(&logical.BackendConfig{})
+	storage := &logical.InmemStorage{}
+
+	writeAppDBSecret(t, b, storage, "initial")
+	createFakeDestination(t, b, storage, "default")
+
+	blockedResp := planDefaultFakeAssociation(t, b, storage, "prod/app/db")
+	assertNoErrorResponse(t, blockedResp)
+	if got := blockedResp.Data["action"]; got != providers.PlanActionBlocked {
+		t.Fatalf("blocked action = %v, want %s", got, providers.PlanActionBlocked)
+	}
+	if got := blockedResp.Data["source_eligible"]; got != false {
+		t.Fatalf("blocked source_eligible = %v, want false", got)
+	}
+	if got := blockedResp.Data["error_class"]; got != string(providers.ErrorClassValidation) {
+		t.Fatalf("blocked error_class = %v, want %s", got, providers.ErrorClassValidation)
+	}
+
+	markAppDBSyncable(t, b, storage)
+	createResp := planDefaultFakeAssociation(t, b, storage, "prod/app/db")
+	assertNoErrorResponse(t, createResp)
+	if got := createResp.Data["action"]; got != providers.PlanActionCreate {
+		t.Fatalf("create action = %v, want %s", got, providers.PlanActionCreate)
+	}
+	if got := createResp.Data["source_eligible"]; got != true {
+		t.Fatalf("create source_eligible = %v, want true", got)
+	}
+	if got := createResp.Data["payload_sha256"].(string); !strings.HasPrefix(got, "sha256:") {
+		t.Fatalf("payload_sha256 = %q, want sha256 prefix", got)
+	}
+	if got := createResp.Data["payload_bytes"].(int); got <= 0 {
+		t.Fatalf("payload_bytes = %d, want positive", got)
+	}
+	if strings.Contains(fmt.Sprint(createResp.Data), "initial") {
+		t.Fatalf("plan response contains secret value: %#v", createResp.Data)
+	}
+
+	conflictResp := planDefaultFakeAssociation(t, b, storage, "prod/conflict/app/db")
+	assertNoErrorResponse(t, conflictResp)
+	if got := conflictResp.Data["action"]; got != providers.PlanActionConflict {
+		t.Fatalf("conflict action = %v, want %s", got, providers.PlanActionConflict)
+	}
+	if got := conflictResp.Data["error_class"]; got != string(providers.ErrorClassCollision) {
+		t.Fatalf("conflict error_class = %v, want %s", got, providers.ErrorClassCollision)
+	}
 }
 
 func TestDataWriteCAS(t *testing.T) {
@@ -940,6 +1031,22 @@ func createDefaultFakeAssociation(t *testing.T, b logical.Backend, storage logic
 		"destination_type": providerTypeFake,
 		"destination_name": "default",
 		"resolved_name":    "prod/app/db",
+		"granularity":      syncObjectIDSecretPath,
+		"format":           defaultAssociationFormat,
+	})
+}
+
+func planDefaultFakeAssociation(
+	t *testing.T,
+	b logical.Backend,
+	storage logical.Storage,
+	resolvedName string,
+) *logical.Response {
+	t.Helper()
+	return handleRequest(t, b, storage, logical.UpdateOperation, "associations/app/db/plan", map[string]interface{}{
+		"destination_type": providerTypeFake,
+		"destination_name": "default",
+		"resolved_name":    resolvedName,
 		"granularity":      syncObjectIDSecretPath,
 		"format":           defaultAssociationFormat,
 	})

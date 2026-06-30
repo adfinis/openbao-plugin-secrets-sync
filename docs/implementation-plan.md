@@ -117,6 +117,8 @@ Exit criteria:
 - fake provider can report create, update, delete, conflict, and partial-success
   plans;
 - fake provider dispatch runs through the same registry path as real providers;
+- destination validation, health, and association plan endpoints return
+  structured diagnostics;
 - payload size limits are enforced before provider mutation;
 - status records include payload hashes but never secret values;
 - destination credentials are redacted on read;

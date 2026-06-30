@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 
+	payloadpkg "github.com/adfinis/openbao-secret-sync/internal/payload"
 	"github.com/adfinis/openbao-secret-sync/internal/providers"
 	"github.com/openbao/openbao/sdk/v2/framework"
 	"github.com/openbao/openbao/sdk/v2/logical"
@@ -22,6 +23,18 @@ func pathAssociations(b *secretSyncBackend) []*framework.Path {
 			},
 			HelpSynopsis:    "List associations.",
 			HelpDescription: "Lists configured association source path prefixes.",
+		},
+		{
+			Pattern: "associations/(?P<path>.+)/plan",
+			Fields:  associationRequestFields(),
+			Operations: map[logical.Operation]framework.OperationHandler{
+				logical.UpdateOperation: &framework.PathOperation{
+					Callback: b.pathAssociationPlan,
+					Summary:  "Plan an association sync operation.",
+				},
+			},
+			HelpSynopsis:    "Plan association sync.",
+			HelpDescription: "Builds a non-mutating provider plan for the current source version.",
 		},
 		{
 			Pattern: "associations/(?P<path>.+)/(?P<association_id>assoc-[0-9a-f]+)",
@@ -46,40 +59,7 @@ func pathAssociations(b *secretSyncBackend) []*framework.Path {
 		},
 		{
 			Pattern: "associations/" + framework.MatchAllRegex("path"),
-			Fields: map[string]*framework.FieldSchema{
-				"path": {
-					Type:        framework.TypeString,
-					Description: "Source secret path.",
-				},
-				"destination_type": {
-					Type:        framework.TypeString,
-					Description: "Destination provider type.",
-				},
-				"destination_name": {
-					Type:        framework.TypeString,
-					Description: "Destination name.",
-				},
-				"name_template": {
-					Type:        framework.TypeString,
-					Description: "Destination object name template.",
-				},
-				"resolved_name": {
-					Type:        framework.TypeString,
-					Description: "Explicit resolved destination object name.",
-				},
-				"granularity": {
-					Type:        framework.TypeString,
-					Description: "Sync granularity. This phase supports secret-path.",
-				},
-				"format": {
-					Type:        framework.TypeString,
-					Description: "Payload format. This phase supports json.",
-				},
-				"enabled": {
-					Type:        framework.TypeBool,
-					Description: "Whether the association should enqueue sync work.",
-				},
-			},
+			Fields:  associationRequestFields(),
 			Operations: map[logical.Operation]framework.OperationHandler{
 				logical.CreateOperation: &framework.PathOperation{
 					Callback: b.pathAssociationWrite,
@@ -96,6 +76,43 @@ func pathAssociations(b *secretSyncBackend) []*framework.Path {
 			},
 			HelpSynopsis:    "Manage associations.",
 			HelpDescription: "Associates source secrets with fake destinations for asynchronous sync.",
+		},
+	}
+}
+
+func associationRequestFields() map[string]*framework.FieldSchema {
+	return map[string]*framework.FieldSchema{
+		"path": {
+			Type:        framework.TypeString,
+			Description: "Source secret path.",
+		},
+		"destination_type": {
+			Type:        framework.TypeString,
+			Description: "Destination provider type.",
+		},
+		"destination_name": {
+			Type:        framework.TypeString,
+			Description: "Destination name.",
+		},
+		"name_template": {
+			Type:        framework.TypeString,
+			Description: "Destination object name template.",
+		},
+		"resolved_name": {
+			Type:        framework.TypeString,
+			Description: "Explicit resolved destination object name.",
+		},
+		"granularity": {
+			Type:        framework.TypeString,
+			Description: "Sync granularity. This phase supports secret-path.",
+		},
+		"format": {
+			Type:        framework.TypeString,
+			Description: "Payload format. This phase supports json.",
+		},
+		"enabled": {
+			Type:        framework.TypeBool,
+			Description: "Whether the association should enqueue sync work.",
 		},
 	}
 }
@@ -155,6 +172,149 @@ func (b *secretSyncBackend) pathAssociationWrite(
 		responseField("association", associationResponse(record)),
 		responseField("sync_operation_ids", operationIDs),
 	)}, nil
+}
+
+func (b *secretSyncBackend) pathAssociationPlan(
+	ctx context.Context,
+	req *logical.Request,
+	data *framework.FieldData,
+) (*logical.Response, error) {
+	path, metadata, version, response, err := currentSourceVersionFromPlanRequest(ctx, req, data)
+	if response != nil || err != nil {
+		return response, err
+	}
+	record, err := b.associationRecordFromFieldData(ctx, req.Storage, path, data)
+	if err != nil {
+		return logical.ErrorResponse(err.Error()), nil
+	}
+	provider, err := b.providerRegistry.MustGet(record.DestinationType)
+	if err != nil {
+		return logical.ErrorResponse(err.Error()), nil
+	}
+	preparedPayload, err := buildCanonicalPayload(record.Format, version.Data)
+	if err != nil {
+		return logical.ErrorResponse("source payload encoding failed"), nil
+	}
+	if eligibilityErr := validateAssociationActivation(record, *metadata); eligibilityErr != nil {
+		return &logical.Response{Data: associationPlanResponse(
+			record,
+			metadata.CurrentVersion,
+			preparedPayload,
+			false,
+			providers.PlanResult{
+				Action:     providers.PlanActionBlocked,
+				Message:    eligibilityErr.Error(),
+				ErrorClass: providers.ErrorClassValidation,
+			},
+		)}, nil
+	}
+	if limitErr := enforceProviderPayloadLimit(provider.Capabilities(), preparedPayload); limitErr != nil {
+		return &logical.Response{Data: associationPlanResponse(
+			record,
+			metadata.CurrentVersion,
+			preparedPayload,
+			true,
+			providers.PlanResult{
+				Action:     providers.PlanActionBlocked,
+				Message:    limitErr.Error(),
+				ErrorClass: providers.ErrorClassCapacity,
+			},
+		)}, nil
+	}
+	plan, providerErr := provider.Plan(ctx, providerPlanRequest(record, metadata.CurrentVersion, preparedPayload))
+	if providerErr != nil {
+		return &logical.Response{Data: associationPlanResponse(
+			record,
+			metadata.CurrentVersion,
+			preparedPayload,
+			true,
+			providers.PlanResult{
+				Action:     providers.PlanActionBlocked,
+				Message:    providerErr.Error(),
+				ErrorClass: providerErrorClass(providerErr),
+			},
+		)}, nil
+	}
+	if plan == nil {
+		plan = &providers.PlanResult{Action: providers.PlanActionBlocked}
+	}
+	return &logical.Response{Data: associationPlanResponse(
+		record,
+		metadata.CurrentVersion,
+		preparedPayload,
+		true,
+		*plan,
+	)}, nil
+}
+
+func currentSourceVersionFromPlanRequest(
+	ctx context.Context,
+	req *logical.Request,
+	data *framework.FieldData,
+) (string, *metadataRecord, *versionRecord, *logical.Response, error) {
+	path, err := normalizeSourcePath(data.Get("path").(string))
+	if err != nil {
+		return "", nil, nil, logical.ErrorResponse(err.Error()), nil
+	}
+	metadata, err := getMetadata(ctx, req.Storage, path)
+	if err != nil {
+		return "", nil, nil, nil, err
+	}
+	if metadata == nil || metadata.CurrentVersion == 0 {
+		return "", nil, nil, logical.ErrorResponse("source path does not exist"), nil
+	}
+	version, err := getVersion(ctx, req.Storage, path, metadata.CurrentVersion)
+	if err != nil {
+		return "", nil, nil, nil, err
+	}
+	if version == nil || version.Destroyed || version.DeletionTime != "" {
+		return "", nil, nil, logical.ErrorResponse("current source version is unavailable"), nil
+	}
+	return path, metadata, version, nil, nil
+}
+
+func providerPlanRequest(
+	record associationRecord,
+	version int,
+	preparedPayload payloadpkg.CanonicalPayload,
+) providers.PlanRequest {
+	return providers.PlanRequest{
+		Destination: providers.DestinationConfig{
+			Name: record.DestinationName,
+		},
+		ResolvedName:  record.ResolvedName,
+		Format:        preparedPayload.Format,
+		PayloadSHA256: preparedPayload.SHA256,
+		PayloadBytes:  len(preparedPayload.Bytes),
+		SourcePath:    record.Path,
+		SourceVersion: version,
+	}
+}
+
+func associationPlanResponse(
+	record associationRecord,
+	version int,
+	preparedPayload payloadpkg.CanonicalPayload,
+	sourceEligible bool,
+	plan providers.PlanResult,
+) map[string]interface{} { //nolint:forbidigo
+	return newResponseData(
+		responseField("path", record.Path),
+		responseField("version", version),
+		responseField("action", plan.Action),
+		responseField("source_eligible", sourceEligible),
+		responseField("association", associationResponse(record)),
+		responseField("destination", newResponseData(
+			responseField("type", record.DestinationType),
+			responseField("name", record.DestinationName),
+		)),
+		responseField("resolved_name", record.ResolvedName),
+		responseField("format", preparedPayload.Format),
+		responseField("payload_sha256", preparedPayload.SHA256),
+		responseField("payload_bytes", len(preparedPayload.Bytes)),
+		responseField("error_class", string(plan.ErrorClass)),
+		responseField("message", plan.Message),
+	)
 }
 
 func pathAssociationRead(
