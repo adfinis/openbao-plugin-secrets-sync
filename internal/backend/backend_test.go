@@ -10,6 +10,7 @@ import (
 	"github.com/adfinis/openbao-secret-sync/internal/domain"
 	"github.com/adfinis/openbao-secret-sync/internal/outbox"
 	"github.com/adfinis/openbao-secret-sync/internal/providers"
+	"github.com/adfinis/openbao-secret-sync/internal/providers/awssecretsmanager"
 	"github.com/openbao/openbao/sdk/v2/logical"
 )
 
@@ -99,6 +100,44 @@ func TestDestinationLifecycle(t *testing.T) {
 	readDeletedResp := handleRequest(t, b, storage, logical.ReadOperation, "destinations/fake/primary", nil)
 	if readDeletedResp != nil {
 		t.Fatalf("deleted destination response = %#v, want nil", readDeletedResp)
+	}
+}
+
+func TestAWSDestinationConfigLifecycle(t *testing.T) {
+	b := Backend(&logical.BackendConfig{})
+	storage := &logical.InmemStorage{}
+
+	writeResp := handleRequest(t, b, storage, logical.UpdateOperation, "destinations/aws-sm/prod", map[string]interface{}{
+		"description":                          "aws production",
+		awssecretsmanager.ConfigKeyRegion:      "eu-central-1",
+		awssecretsmanager.ConfigKeyEndpointURL: "http://localhost:4566",
+		awssecretsmanager.ConfigKeyAuthMode:    awssecretsmanager.AuthModeAssumeRole,
+		awssecretsmanager.ConfigKeyRoleARN:     "arn:aws:iam::123456789012:role/openbao-secret-sync",
+		awssecretsmanager.ConfigKeyExternalID:  "tenant-1",
+		awssecretsmanager.ConfigKeySessionName: "openbao-sync",
+	})
+	if writeResp != nil && writeResp.IsError() {
+		t.Fatalf("unexpected destination write error: %v", writeResp.Error())
+	}
+
+	readResp := handleRequest(t, b, storage, logical.ReadOperation, "destinations/aws-sm/prod", nil)
+	assertNoErrorResponse(t, readResp)
+	config := readResp.Data["config"].(map[string]interface{})
+	if got := config[awssecretsmanager.ConfigKeyRegion]; got != "eu-central-1" {
+		t.Fatalf("aws destination region = %v, want eu-central-1", got)
+	}
+	if got := config[awssecretsmanager.ConfigKeyAuthMode]; got != awssecretsmanager.AuthModeAssumeRole {
+		t.Fatalf("aws auth_mode = %v, want %s", got, awssecretsmanager.AuthModeAssumeRole)
+	}
+	sensitiveConfig := readResp.Data["sensitive_config"].(map[string]interface{})
+	if got := sensitiveConfig["redacted"]; got != true {
+		t.Fatalf("sensitive_config redacted = %v, want true", got)
+	}
+
+	validateResp := handleRequest(t, b, storage, logical.UpdateOperation, "destinations/aws-sm/prod/validate", nil)
+	assertNoErrorResponse(t, validateResp)
+	if got := validateResp.Data["valid"]; got != true {
+		t.Fatalf("aws validation valid = %v, want true", got)
 	}
 }
 

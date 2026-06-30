@@ -21,6 +21,9 @@ const (
 	testObjectID        = "secret-path"
 	testPayloadSHAOld   = "sha256:old"
 	testPayloadSHANew   = "sha256:new"
+	testRegion          = "eu-central-1"
+	testEndpointURL     = "http://localhost:4566"
+	testRoleARN         = "arn:aws:iam::123456789012:role/openbao-secret-sync"
 )
 
 func TestProviderConformance(t *testing.T) {
@@ -70,6 +73,82 @@ func TestProviderConformance(t *testing.T) {
 			Exists:  true,
 		},
 	})
+}
+
+func TestValidateDestinationConfig(t *testing.T) {
+	tests := []struct {
+		name       string
+		config     map[string]string
+		errorClass providers.ErrorClass
+	}{
+		{
+			name: "default auth",
+			config: map[string]string{
+				ConfigKeyRegion:      testRegion,
+				ConfigKeyEndpointURL: testEndpointURL,
+			},
+		},
+		{
+			name: "assume role auth",
+			config: map[string]string{
+				ConfigKeyAuthMode:    AuthModeAssumeRole,
+				ConfigKeyRegion:      testRegion,
+				ConfigKeyRoleARN:     testRoleARN,
+				ConfigKeyExternalID:  "tenant-1",
+				ConfigKeySessionName: "openbao-sync",
+			},
+		},
+		{
+			name: "unsupported static auth",
+			config: map[string]string{
+				ConfigKeyAuthMode: "static",
+			},
+			errorClass: providers.ErrorClassValidation,
+		},
+		{
+			name: "assume role missing role arn",
+			config: map[string]string{
+				ConfigKeyAuthMode: AuthModeAssumeRole,
+			},
+			errorClass: providers.ErrorClassValidation,
+		},
+		{
+			name: "default auth rejects role fields",
+			config: map[string]string{
+				ConfigKeyRoleARN: testRoleARN,
+			},
+			errorClass: providers.ErrorClassValidation,
+		},
+		{
+			name: "invalid endpoint scheme",
+			config: map[string]string{
+				ConfigKeyEndpointURL: "ftp://localhost",
+			},
+			errorClass: providers.ErrorClassValidation,
+		},
+		{
+			name: "endpoint userinfo rejected",
+			config: map[string]string{
+				ConfigKeyEndpointURL: "https://user@example.com",
+			},
+			errorClass: providers.ErrorClassValidation,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := (Provider{}).Validate(context.Background(), providers.DestinationConfig{
+				Name:   testDestinationName,
+				Config: tt.config,
+			})
+			if tt.errorClass == "" {
+				if err != nil {
+					t.Fatalf("validate: %v", err)
+				}
+				return
+			}
+			assertProviderErrorClass(t, err, tt.errorClass)
+		})
+	}
 }
 
 func TestPlanActions(t *testing.T) {
@@ -261,6 +340,50 @@ func TestHealthClassifiesAWSFailure(t *testing.T) {
 	}
 }
 
+func TestHealthClassifiesDestinationValidationFailure(t *testing.T) {
+	provider := Provider{
+		clientFactory: func(context.Context, providers.DestinationConfig) (secretsManagerClient, error) {
+			return nil, validationError("invalid destination config")
+		},
+	}
+	result, err := provider.Health(context.Background(), providers.DestinationConfig{Name: testDestinationName})
+	if err != nil {
+		t.Fatalf("health: %v", err)
+	}
+	if result.Healthy {
+		t.Fatal("health must be unhealthy on validation failure")
+	}
+	if result.ErrorClass != providers.ErrorClassValidation {
+		t.Fatalf("health error class = %s, want %s", result.ErrorClass, providers.ErrorClassValidation)
+	}
+}
+
+func TestHealthPassesDestinationConfigToFactory(t *testing.T) {
+	client := &mockSecretsManagerClient{listSecretsOutput: &secretsmanager.ListSecretsOutput{}}
+	var capturedConfig providers.DestinationConfig
+	provider := Provider{
+		clientFactory: func(_ context.Context, cfg providers.DestinationConfig) (secretsManagerClient, error) {
+			capturedConfig = cfg
+			return client, nil
+		},
+	}
+	result, err := provider.Health(context.Background(), providers.DestinationConfig{
+		Name: testDestinationName,
+		Config: map[string]string{
+			ConfigKeyRegion: testRegion,
+		},
+	})
+	if err != nil {
+		t.Fatalf("health: %v", err)
+	}
+	if !result.Healthy {
+		t.Fatalf("health healthy = %v, want true", result.Healthy)
+	}
+	if capturedConfig.Config[ConfigKeyRegion] != testRegion {
+		t.Fatalf("captured region = %q, want %q", capturedConfig.Config[ConfigKeyRegion], testRegion)
+	}
+}
+
 func TestErrorClassification(t *testing.T) {
 	tests := map[string]providers.ErrorClass{
 		"ThrottlingException":         providers.ErrorClassRateLimit,
@@ -285,7 +408,7 @@ func TestErrorClassification(t *testing.T) {
 
 func defaultPlanRequest(payloadSHA256 string) providers.PlanRequest {
 	return providers.PlanRequest{
-		Destination:   providers.DestinationConfig{Name: testDestinationName},
+		Destination:   defaultDestinationConfig(),
 		ResolvedName:  testResolvedName,
 		PayloadSHA256: payloadSHA256,
 		PayloadBytes:  21,
@@ -298,7 +421,7 @@ func defaultPlanRequest(payloadSHA256 string) providers.PlanRequest {
 
 func defaultUpsertRequest() providers.UpsertRequest {
 	return providers.UpsertRequest{
-		Destination:   providers.DestinationConfig{Name: testDestinationName},
+		Destination:   defaultDestinationConfig(),
 		ResolvedName:  testResolvedName,
 		Format:        "json",
 		Payload:       []byte(`{"password":"secret"}`),
@@ -312,12 +435,21 @@ func defaultUpsertRequest() providers.UpsertRequest {
 
 func defaultDeleteRequest() providers.DeleteRequest {
 	return providers.DeleteRequest{
-		Destination:   providers.DestinationConfig{Name: testDestinationName},
+		Destination:   defaultDestinationConfig(),
 		ResolvedName:  testResolvedName,
 		SourcePath:    testSourcePath,
 		SourceVersion: 1,
 		AssociationID: testAssociationID,
 		ObjectID:      testObjectID,
+	}
+}
+
+func defaultDestinationConfig() providers.DestinationConfig {
+	return providers.DestinationConfig{
+		Name: testDestinationName,
+		Config: map[string]string{
+			ConfigKeyRegion: testRegion,
+		},
 	}
 }
 

@@ -6,20 +6,41 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
+	"net/url"
 	"strconv"
 	"strings"
 
 	"github.com/adfinis/openbao-secret-sync/internal/providers"
 	"github.com/aws/aws-sdk-go-v2/aws"
-	"github.com/aws/aws-sdk-go-v2/config"
+	awsconfig "github.com/aws/aws-sdk-go-v2/config"
+	"github.com/aws/aws-sdk-go-v2/credentials/stscreds"
 	"github.com/aws/aws-sdk-go-v2/service/secretsmanager"
 	smtypes "github.com/aws/aws-sdk-go-v2/service/secretsmanager/types"
+	"github.com/aws/aws-sdk-go-v2/service/sts"
 	"github.com/aws/smithy-go"
 )
 
 const (
 	// ProviderType is the stable destination type used by associations.
 	ProviderType = "aws-sm"
+
+	// ConfigKeyRegion configures the AWS region. If omitted, the SDK default chain may supply it.
+	ConfigKeyRegion = "region"
+	// ConfigKeyEndpointURL configures a custom Secrets Manager endpoint, primarily for localstack.
+	ConfigKeyEndpointURL = "endpoint_url"
+	// ConfigKeyAuthMode selects AWS credential behavior.
+	ConfigKeyAuthMode = "auth_mode"
+	// ConfigKeyRoleARN configures the role ARN for assume-role auth.
+	ConfigKeyRoleARN = "role_arn"
+	// ConfigKeyExternalID configures the optional external ID for assume-role auth.
+	ConfigKeyExternalID = "external_id"
+	// ConfigKeySessionName configures the optional role session name for assume-role auth.
+	ConfigKeySessionName = "session_name"
+
+	// AuthModeDefault uses the AWS SDK default credential chain.
+	AuthModeDefault = "default"
+	// AuthModeAssumeRole uses the default credential chain and then assumes a configured role.
+	AuthModeAssumeRole = "assume_role"
 
 	// AWS Secrets Manager caps the encrypted secret value at 65,536 bytes.
 	secretValueMaxBytes = 65536
@@ -67,7 +88,7 @@ type secretsManagerClient interface {
 	) (*secretsmanager.ListSecretsOutput, error)
 }
 
-type clientFactory func(context.Context) (secretsManagerClient, error)
+type clientFactory func(context.Context, providers.DestinationConfig) (secretsManagerClient, error)
 
 // Provider is the AWS Secrets Manager provider.
 type Provider struct {
@@ -101,13 +122,16 @@ func (Provider) Validate(_ context.Context, cfg providers.DestinationConfig) err
 	if strings.TrimSpace(cfg.Name) == "" {
 		return &providers.Error{Class: providers.ErrorClassValidation, Message: "aws-sm destination name must not be empty"}
 	}
+	if _, err := awsDestinationOptionsFromConfig(cfg); err != nil {
+		return err
+	}
 	return nil
 }
 
 func (p Provider) Plan(ctx context.Context, req providers.PlanRequest) (*providers.PlanResult, error) {
-	client, err := p.clientFor(ctx)
+	client, err := p.clientFor(ctx, req.Destination)
 	if err != nil {
-		return blockedPlan(providers.ErrorClassInternal), nil
+		return blockedPlan(setupErrorClass(err)), nil
 	}
 	describe, err := client.DescribeSecret(ctx, &secretsmanager.DescribeSecretInput{
 		SecretId: aws.String(req.ResolvedName),
@@ -139,9 +163,9 @@ func (p Provider) Plan(ctx context.Context, req providers.PlanRequest) (*provide
 }
 
 func (p Provider) Upsert(ctx context.Context, req providers.UpsertRequest) (*providers.SyncResult, error) {
-	client, err := p.clientFor(ctx)
+	client, err := p.clientFor(ctx, req.Destination)
 	if err != nil {
-		return nil, providerError(providers.ErrorClassInternal)
+		return nil, providerError(setupErrorClass(err))
 	}
 	describe, err := client.DescribeSecret(ctx, &secretsmanager.DescribeSecretInput{
 		SecretId: aws.String(req.ResolvedName),
@@ -180,9 +204,9 @@ func (p Provider) Upsert(ctx context.Context, req providers.UpsertRequest) (*pro
 }
 
 func (p Provider) Delete(ctx context.Context, req providers.DeleteRequest) (*providers.SyncResult, error) {
-	client, err := p.clientFor(ctx)
+	client, err := p.clientFor(ctx, req.Destination)
 	if err != nil {
-		return nil, providerError(providers.ErrorClassInternal)
+		return nil, providerError(setupErrorClass(err))
 	}
 	describe, err := client.DescribeSecret(ctx, &secretsmanager.DescribeSecretInput{
 		SecretId: aws.String(req.ResolvedName),
@@ -213,9 +237,9 @@ func (p Provider) Delete(ctx context.Context, req providers.DeleteRequest) (*pro
 }
 
 func (p Provider) ReadState(ctx context.Context, req providers.ReadStateRequest) (*providers.RemoteState, error) {
-	client, err := p.clientFor(ctx)
+	client, err := p.clientFor(ctx, req.Destination)
 	if err != nil {
-		return nil, providerError(providers.ErrorClassInternal)
+		return nil, providerError(setupErrorClass(err))
 	}
 	describe, err := client.DescribeSecret(ctx, &secretsmanager.DescribeSecretInput{
 		SecretId: aws.String(req.ResolvedName),
@@ -229,13 +253,13 @@ func (p Provider) ReadState(ctx context.Context, req providers.ReadStateRequest)
 	return &providers.RemoteState{Exists: describe.DeletedDate == nil}, nil
 }
 
-func (p Provider) Health(ctx context.Context, _ providers.DestinationConfig) (*providers.HealthResult, error) {
-	client, err := p.clientFor(ctx)
+func (p Provider) Health(ctx context.Context, cfg providers.DestinationConfig) (*providers.HealthResult, error) {
+	client, err := p.clientFor(ctx, cfg)
 	if err != nil {
 		return &providers.HealthResult{
 			Healthy:    false,
 			Message:    "aws-sm client initialization failed",
-			ErrorClass: providers.ErrorClassInternal,
+			ErrorClass: setupErrorClass(err),
 		}, nil
 	}
 	if _, err := client.ListSecrets(ctx, &secretsmanager.ListSecretsInput{MaxResults: aws.Int32(1)}); err != nil {
@@ -248,7 +272,7 @@ func (p Provider) Health(ctx context.Context, _ providers.DestinationConfig) (*p
 	return &providers.HealthResult{Healthy: true}, nil
 }
 
-func (p Provider) clientFor(ctx context.Context) (secretsManagerClient, error) {
+func (p Provider) clientFor(ctx context.Context, cfg providers.DestinationConfig) (secretsManagerClient, error) {
 	if p.client != nil {
 		return p.client, nil
 	}
@@ -256,15 +280,135 @@ func (p Provider) clientFor(ctx context.Context) (secretsManagerClient, error) {
 	if factory == nil {
 		factory = defaultClientFactory
 	}
-	return factory(ctx)
+	return factory(ctx, cfg)
 }
 
-func defaultClientFactory(ctx context.Context) (secretsManagerClient, error) {
-	cfg, err := config.LoadDefaultConfig(ctx)
+func defaultClientFactory(
+	ctx context.Context,
+	providerConfig providers.DestinationConfig,
+) (secretsManagerClient, error) {
+	options, err := awsDestinationOptionsFromConfig(providerConfig)
 	if err != nil {
 		return nil, err
 	}
-	return secretsmanager.NewFromConfig(cfg), nil
+	loadOptions := []func(*awsconfig.LoadOptions) error{}
+	if options.region != "" {
+		loadOptions = append(loadOptions, awsconfig.WithRegion(options.region))
+	}
+	cfg, err := awsconfig.LoadDefaultConfig(ctx, loadOptions...)
+	if err != nil {
+		return nil, err
+	}
+	if options.authMode == AuthModeAssumeRole {
+		stsClient := sts.NewFromConfig(cfg)
+		assumeRoleProvider := stscreds.NewAssumeRoleProvider(
+			stsClient,
+			options.roleARN,
+			func(assumeOptions *stscreds.AssumeRoleOptions) {
+				if options.externalID != "" {
+					assumeOptions.ExternalID = aws.String(options.externalID)
+				}
+				if options.sessionName != "" {
+					assumeOptions.RoleSessionName = options.sessionName
+				}
+			},
+		)
+		cfg.Credentials = aws.NewCredentialsCache(assumeRoleProvider)
+	}
+	clientOptions := []func(*secretsmanager.Options){}
+	if options.endpointURL != "" {
+		clientOptions = append(clientOptions, func(secretsManagerOptions *secretsmanager.Options) {
+			secretsManagerOptions.BaseEndpoint = aws.String(options.endpointURL)
+		})
+	}
+	return secretsmanager.NewFromConfig(cfg, clientOptions...), nil
+}
+
+type awsDestinationOptions struct {
+	region      string
+	endpointURL string
+	authMode    string
+	roleARN     string
+	externalID  string
+	sessionName string
+}
+
+func awsDestinationOptionsFromConfig(cfg providers.DestinationConfig) (awsDestinationOptions, error) {
+	options := awsDestinationOptions{
+		region:      configValue(cfg, ConfigKeyRegion),
+		endpointURL: configValue(cfg, ConfigKeyEndpointURL),
+		authMode:    normalizedAuthMode(cfg),
+		roleARN:     configValue(cfg, ConfigKeyRoleARN),
+		externalID:  configValue(cfg, ConfigKeyExternalID),
+		sessionName: configValue(cfg, ConfigKeySessionName),
+	}
+	if options.endpointURL != "" {
+		if err := validateEndpointURL(options.endpointURL); err != nil {
+			return awsDestinationOptions{}, err
+		}
+	}
+	switch options.authMode {
+	case AuthModeDefault:
+		if options.roleARN != "" || options.externalID != "" || options.sessionName != "" {
+			return awsDestinationOptions{}, validationError("aws-sm role fields require auth_mode assume_role")
+		}
+	case AuthModeAssumeRole:
+		if options.roleARN == "" {
+			return awsDestinationOptions{}, validationError("aws-sm auth_mode assume_role requires role_arn")
+		}
+		if !isLikelyRoleARN(options.roleARN) {
+			return awsDestinationOptions{}, validationError("aws-sm role_arn must be an IAM role ARN")
+		}
+	default:
+		return awsDestinationOptions{}, validationError(
+			"aws-sm auth_mode must be default or assume_role",
+		)
+	}
+	return options, nil
+}
+
+func normalizedAuthMode(cfg providers.DestinationConfig) string {
+	authMode := configValue(cfg, ConfigKeyAuthMode)
+	if authMode == "" {
+		return AuthModeDefault
+	}
+	return authMode
+}
+
+func configValue(cfg providers.DestinationConfig, key string) string {
+	if cfg.Config == nil {
+		return ""
+	}
+	return strings.TrimSpace(cfg.Config[key])
+}
+
+func validateEndpointURL(rawEndpoint string) error {
+	parsedEndpoint, err := url.Parse(rawEndpoint)
+	if err != nil {
+		return validationError("aws-sm endpoint_url must be a valid URL")
+	}
+	if parsedEndpoint.Scheme != "https" && parsedEndpoint.Scheme != "http" {
+		return validationError("aws-sm endpoint_url must use http or https")
+	}
+	if parsedEndpoint.Host == "" || parsedEndpoint.User != nil {
+		return validationError("aws-sm endpoint_url must include a host and no userinfo")
+	}
+	return nil
+}
+
+func isLikelyRoleARN(roleARN string) bool {
+	parts := strings.SplitN(roleARN, ":", 6)
+	if len(parts) != 6 {
+		return false
+	}
+	return strings.HasPrefix(roleARN, "arn:") &&
+		parts[2] == "iam" &&
+		parts[4] != "" &&
+		strings.HasPrefix(parts[5], "role/")
+}
+
+func validationError(message string) error {
+	return &providers.Error{Class: providers.ErrorClassValidation, Message: message}
 }
 
 func blockedPlan(errorClass providers.ErrorClass) *providers.PlanResult {
@@ -394,6 +538,14 @@ func isResourceNotFound(err error) bool {
 
 func providerError(errorClass providers.ErrorClass) error {
 	return &providers.Error{Class: errorClass, Message: "aws-sm request failed"}
+}
+
+func setupErrorClass(err error) providers.ErrorClass {
+	var providerError *providers.Error
+	if errors.As(err, &providerError) && providerError.Class != "" {
+		return providerError.Class
+	}
+	return providers.ErrorClassInternal
 }
 
 func classifyAWSError(err error) providers.ErrorClass {

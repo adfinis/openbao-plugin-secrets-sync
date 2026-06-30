@@ -25,8 +25,8 @@ Implemented backend slices now include:
 - status records with payload hashes and no secret payload disclosure;
 - AWS Secrets Manager provider with type, capabilities, validation, SDK-backed
   client boundary, mocked plan/upsert/delete/read-state/health behavior, AWS
-  error classification, and ownership tag handling, not yet
-  backend-registered.
+  error classification, ownership tag handling, destination config for default
+  and assume-role auth, optional endpoint override, and backend registration.
 
 ## MVP Scope
 
@@ -165,6 +165,9 @@ Completed foundation:
 - AWS-specific mocked client cases exercise health, plan, upsert, delete,
   read-state, ownership rejection, and error classification.
 - SDK client boundary uses the AWS SDK default configuration chain.
+- Destination config supports `region`, `endpoint_url`, `auth_mode=default`,
+  and `auth_mode=assume_role` with `role_arn`, `external_id`, and
+  `session_name`.
 - Upsert, owned delete, read-state, and health behavior are implemented behind
   the provider interface.
 - Ownership tags include association id, source path, source version, object id,
@@ -173,14 +176,14 @@ Completed foundation:
   paths map to stable provider results or error classes.
 - Stale update and delete attempts are rejected when AWS metadata shows a newer
   managed source version.
+- The backend registers `aws-sm` and passes destination config through
+  validation, health, plan, upsert, and delete paths.
 
 Remaining tasks:
 
-- Implement destination configuration for AWS auth options, preferring workload
-  identity and role assumption before static keys.
-- Validate region and endpoint controls.
-- Register the AWS provider in the backend once destination auth/config shape is
-  implemented.
+- Add a seal-wrapped sensitive destination config path before supporting static
+  AWS keys or session tokens.
+- Add stricter production network controls for custom endpoint URLs.
 - Add local integration tests with localstack where practical.
 
 Exit criteria:

@@ -2,11 +2,22 @@ package backend
 
 import (
 	"context"
+	"strings"
 
 	"github.com/adfinis/openbao-secret-sync/internal/providers"
+	"github.com/adfinis/openbao-secret-sync/internal/providers/awssecretsmanager"
 	"github.com/openbao/openbao/sdk/v2/framework"
 	"github.com/openbao/openbao/sdk/v2/logical"
 )
+
+var destinationConfigFieldKeys = []string{
+	awssecretsmanager.ConfigKeyRegion,
+	awssecretsmanager.ConfigKeyEndpointURL,
+	awssecretsmanager.ConfigKeyAuthMode,
+	awssecretsmanager.ConfigKeyRoleARN,
+	awssecretsmanager.ConfigKeyExternalID,
+	awssecretsmanager.ConfigKeySessionName,
+}
 
 func pathDestinations(b *secretSyncBackend) []*framework.Path {
 	return []*framework.Path{
@@ -55,24 +66,7 @@ func pathDestinations(b *secretSyncBackend) []*framework.Path {
 		},
 		{
 			Pattern: "destinations/" + framework.GenericNameRegex("type") + "/" + framework.GenericNameRegex("name"),
-			Fields: map[string]*framework.FieldSchema{
-				"type": {
-					Type:        framework.TypeString,
-					Description: "Destination provider type.",
-				},
-				"name": {
-					Type:        framework.TypeString,
-					Description: "Destination name.",
-				},
-				"description": {
-					Type:        framework.TypeString,
-					Description: "Human-readable destination description.",
-				},
-				"disabled": {
-					Type:        framework.TypeBool,
-					Description: "Disable dispatch for associations using this destination.",
-				},
-			},
+			Fields:  destinationRequestFields(),
 			Operations: map[logical.Operation]framework.OperationHandler{
 				logical.CreateOperation: &framework.PathOperation{
 					Callback: b.pathDestinationWrite,
@@ -92,9 +86,46 @@ func pathDestinations(b *secretSyncBackend) []*framework.Path {
 				},
 			},
 			HelpSynopsis:    "Manage destinations.",
-			HelpDescription: "Stores destination configuration. This phase supports the fake provider.",
+			HelpDescription: "Stores destination configuration for supported providers.",
 		},
 	}
+}
+
+func destinationRequestFields() map[string]*framework.FieldSchema {
+	fields := destinationIdentityFields()
+	fields["description"] = &framework.FieldSchema{
+		Type:        framework.TypeString,
+		Description: "Human-readable destination description.",
+	}
+	fields["disabled"] = &framework.FieldSchema{
+		Type:        framework.TypeBool,
+		Description: "Disable dispatch for associations using this destination.",
+	}
+	fields[awssecretsmanager.ConfigKeyRegion] = &framework.FieldSchema{
+		Type:        framework.TypeString,
+		Description: "AWS region for aws-sm destinations. If omitted, the AWS SDK may load it from the runtime environment.",
+	}
+	fields[awssecretsmanager.ConfigKeyEndpointURL] = &framework.FieldSchema{
+		Type:        framework.TypeString,
+		Description: "Custom AWS Secrets Manager endpoint URL, primarily for localstack.",
+	}
+	fields[awssecretsmanager.ConfigKeyAuthMode] = &framework.FieldSchema{
+		Type:        framework.TypeString,
+		Description: "AWS auth mode for aws-sm destinations: default or assume_role.",
+	}
+	fields[awssecretsmanager.ConfigKeyRoleARN] = &framework.FieldSchema{
+		Type:        framework.TypeString,
+		Description: "IAM role ARN for aws-sm assume_role destinations.",
+	}
+	fields[awssecretsmanager.ConfigKeyExternalID] = &framework.FieldSchema{
+		Type:        framework.TypeString,
+		Description: "External ID passed to STS for aws-sm assume_role destinations.",
+	}
+	fields[awssecretsmanager.ConfigKeySessionName] = &framework.FieldSchema{
+		Type:        framework.TypeString,
+		Description: "Optional STS session name for aws-sm assume_role destinations.",
+	}
+	return fields
 }
 
 func destinationIdentityFields() map[string]*framework.FieldSchema {
@@ -131,6 +162,7 @@ func (b *secretSyncBackend) pathDestinationWrite(
 		Name:        name,
 		Description: data.Get("description").(string),
 		Disabled:    data.Get("disabled").(bool),
+		Config:      destinationConfigFromFieldData(existing, data),
 		CreatedTime: now,
 		UpdatedTime: now,
 	}
@@ -294,6 +326,7 @@ func destinationResponse(
 		responseField("name", record.Name),
 		responseField("description", record.Description),
 		responseField("disabled", record.Disabled),
+		responseField("config", destinationConfigResponse(record.Config)),
 		responseField("created_time", record.CreatedTime),
 		responseField("updated_time", record.UpdatedTime),
 		responseField("sensitive_config", newResponseData(
@@ -312,8 +345,51 @@ func destinationRefResponse(record destinationRecord) map[string]interface{} { /
 
 func destinationConfig(record destinationRecord) providers.DestinationConfig {
 	return providers.DestinationConfig{
-		Name: record.Name,
+		Name:   record.Name,
+		Config: copyStringMap(record.Config),
 	}
+}
+
+func destinationConfigFromFieldData(
+	existing *destinationRecord,
+	data *framework.FieldData,
+) map[string]string {
+	config := map[string]string{}
+	if existing != nil {
+		config = copyStringMap(existing.Config)
+	}
+	for _, key := range destinationConfigFieldKeys {
+		value, ok := data.GetOk(key)
+		if !ok {
+			continue
+		}
+		stringValue := strings.TrimSpace(value.(string))
+		if stringValue == "" {
+			delete(config, key)
+			continue
+		}
+		config[key] = stringValue
+	}
+	return config
+}
+
+func destinationConfigResponse(config map[string]string) map[string]interface{} { //nolint:forbidigo
+	response := make(map[string]interface{}, len(config)) //nolint:forbidigo
+	for key, value := range config {
+		response[key] = value
+	}
+	return response
+}
+
+func copyStringMap(input map[string]string) map[string]string {
+	if input == nil {
+		return map[string]string{}
+	}
+	output := make(map[string]string, len(input))
+	for key, value := range input {
+		output[key] = value
+	}
+	return output
 }
 
 func capabilitiesResponse(capabilities providers.Capabilities) map[string]interface{} { //nolint:forbidigo

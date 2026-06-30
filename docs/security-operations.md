@@ -113,6 +113,9 @@ credentials must be seal-wrapped.
 
 Destination configs that include custom endpoints must be validated:
 
+- current AWS support validates URL shape and allows `http` endpoints for
+  localstack; the stricter production controls below are still required before
+  treating arbitrary custom endpoints as hardened;
 - default deny private, loopback, link-local, multicast, and special-purpose
   addresses;
 - default allowed ports: 443, optionally 80;

@@ -67,12 +67,13 @@ type metadataRecord struct {
 }
 
 type destinationRecord struct {
-	Type        string `json:"type"`
-	Name        string `json:"name"`
-	Description string `json:"description"`
-	Disabled    bool   `json:"disabled"`
-	CreatedTime string `json:"created_time"`
-	UpdatedTime string `json:"updated_time"`
+	Type        string            `json:"type"`
+	Name        string            `json:"name"`
+	Description string            `json:"description"`
+	Disabled    bool              `json:"disabled"`
+	Config      map[string]string `json:"config"`
+	CreatedTime string            `json:"created_time"`
+	UpdatedTime string            `json:"updated_time"`
 }
 
 type associationRecord struct {

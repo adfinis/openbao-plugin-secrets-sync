@@ -352,6 +352,13 @@ func (b *secretSyncBackend) pathAssociationPlan(
 	if err != nil {
 		return logical.ErrorResponse(err.Error()), nil
 	}
+	destination, err := getDestination(ctx, req.Storage, record.DestinationType, record.DestinationName)
+	if err != nil {
+		return nil, err
+	}
+	if destination == nil {
+		return logical.ErrorResponse("destination does not exist"), nil
+	}
 	provider, err := b.providerRegistry.MustGet(record.DestinationType)
 	if err != nil {
 		return logical.ErrorResponse(err.Error()), nil
@@ -386,7 +393,8 @@ func (b *secretSyncBackend) pathAssociationPlan(
 			},
 		)}, nil
 	}
-	plan, providerErr := provider.Plan(ctx, providerPlanRequest(record, metadata.CurrentVersion, preparedPayload))
+	planRequest := providerPlanRequest(record, *destination, metadata.CurrentVersion, preparedPayload)
+	plan, providerErr := provider.Plan(ctx, planRequest)
 	if providerErr != nil {
 		return &logical.Response{Data: associationPlanResponse(
 			record,
@@ -440,13 +448,12 @@ func currentSourceVersionFromPlanRequest(
 
 func providerPlanRequest(
 	record associationRecord,
+	destination destinationRecord,
 	version int,
 	preparedPayload payloadpkg.CanonicalPayload,
 ) providers.PlanRequest {
 	return providers.PlanRequest{
-		Destination: providers.DestinationConfig{
-			Name: record.DestinationName,
-		},
+		Destination:   destinationConfig(destination),
 		ResolvedName:  record.ResolvedName,
 		Format:        preparedPayload.Format,
 		PayloadSHA256: preparedPayload.SHA256,

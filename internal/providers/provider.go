@@ -29,7 +29,8 @@ type Capabilities struct {
 
 // DestinationConfig is provider-specific destination configuration.
 type DestinationConfig struct {
-	Name string
+	Name   string
+	Config map[string]string
 }
 
 // ErrorClass is a stable class for provider and provider-boundary failures.
@@ -117,6 +118,7 @@ type DeleteRequest struct {
 
 // ReadStateRequest describes a remote state lookup.
 type ReadStateRequest struct {
+	Destination  DestinationConfig
 	ResolvedName string
 }
 

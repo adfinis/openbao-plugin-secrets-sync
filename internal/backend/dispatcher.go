@@ -102,9 +102,7 @@ func (b *secretSyncBackend) processUpsert(
 	}
 
 	result, err := upsertContext.provider.Upsert(ctx, providers.UpsertRequest{
-		Destination: providers.DestinationConfig{
-			Name: upsertContext.destination.Name,
-		},
+		Destination:   destinationConfig(*upsertContext.destination),
 		ResolvedName:  upsertContext.association.ResolvedName,
 		Format:        preparedPayload.Format,
 		Payload:       preparedPayload.Bytes,
@@ -162,9 +160,7 @@ func (b *secretSyncBackend) processDelete(
 		return markOperationFailed(ctx, storage, record, *failure, now)
 	}
 	result, err := deleteContext.provider.Delete(ctx, providers.DeleteRequest{
-		Destination: providers.DestinationConfig{
-			Name: deleteContext.destination.Name,
-		},
+		Destination:   destinationConfig(*deleteContext.destination),
 		ResolvedName:  deleteContext.association.ResolvedName,
 		SourcePath:    record.Path,
 		SourceVersion: record.Version,

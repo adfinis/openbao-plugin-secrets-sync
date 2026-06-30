@@ -35,6 +35,21 @@ type Provider interface {
 }
 ```
 
+Destination config is deliberately split into a stable name and a provider-owned
+non-sensitive string map:
+
+```go
+type DestinationConfig struct {
+    Name   string
+    Config map[string]string
+}
+```
+
+Sensitive destination credentials must not be stored in `Config`. Static
+access keys, session tokens, private keys, client secrets, and similar material
+need a separate seal-wrapped storage path and redacted read surface before they
+are added to any provider.
+
 The core engine resolves provider implementations through the registry. Route
 handlers, association validation, and the dispatcher must use the same registry
 so capability checks and remote mutation cannot drift.
@@ -178,6 +193,17 @@ Provider delete implementations must only delete owned objects. If ownership
 cannot be proven, return `ownership` rather than deleting. Delete requests carry
 the same ownership identity as upsert requests so providers can prove that the
 remote object belongs to the association that requested deletion.
+
+## Read-State Input
+
+Remote state reads receive the same destination config as mutating calls:
+
+```go
+type ReadStateRequest struct {
+    Destination  DestinationConfig
+    ResolvedName string
+}
+```
 
 ## Ownership Metadata
 
@@ -335,15 +361,15 @@ AWS Secrets Manager is a strong MVP provider because it has common customer
 demand and a useful ownership model through tags and version metadata.
 
 Current status: package has provider type `aws-sm`, conservative capabilities,
-basic destination-name validation, an SDK-backed client boundary, and mocked
-behavior tests for health, plan, upsert, owned delete, read-state, ownership
-checks, and AWS error classification. It is not registered in the backend until
-destination auth/config shape and integration coverage are implemented.
+backend registration, destination config for SDK default auth and STS
+assume-role auth, optional custom endpoint support for localstack, an
+SDK-backed client boundary, and mocked behavior tests for health, plan, upsert,
+owned delete, read-state, ownership checks, and AWS error classification.
 
 Required implementation behavior:
 
 - support workload identity or role assumption before static keys;
-- validate region and endpoint controls;
+- validate auth mode, assume-role fields, and endpoint URL shape;
 - write ownership tags for association id, source path, source version, object
   id, and payload hash;
 - enforce max payload size before remote calls;
@@ -352,6 +378,9 @@ Required implementation behavior:
   is newer than the request source version;
 - detect ownership loss before update or delete;
 - avoid logging AWS responses that may include secret material.
+
+Static access keys are intentionally not supported yet. They require a separate
+seal-wrapped sensitive config path, redaction tests, and rotation semantics.
 
 ### Kubernetes Secrets
 
