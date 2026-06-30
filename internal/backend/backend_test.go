@@ -185,6 +185,63 @@ func TestMetadataReadListAndSoftDelete(t *testing.T) {
 	}
 }
 
+func TestUndeleteAndDestroyVersions(t *testing.T) {
+	b := Backend(&logical.BackendConfig{})
+	storage := &logical.InmemStorage{}
+
+	writeAppDBSecret(t, b, storage, "initial")
+	deleteResp := handleRequest(t, b, storage, logical.DeleteOperation, "data/app/db", nil)
+	if deleteResp != nil && deleteResp.IsError() {
+		t.Fatalf("unexpected data delete error: %v", deleteResp.Error())
+	}
+
+	undeleteResp := handleRequest(t, b, storage, logical.UpdateOperation, "undelete/app/db", map[string]interface{}{
+		"versions": []int{1},
+	})
+	if undeleteResp != nil && undeleteResp.IsError() {
+		t.Fatalf("unexpected undelete error: %v", undeleteResp.Error())
+	}
+	readResp := handleRequest(t, b, storage, logical.ReadOperation, "data/app/db", nil)
+	assertNoErrorResponse(t, readResp)
+	payload := readResp.Data["data"].(secretPayload)
+	if got := payload["password"]; got != "initial" {
+		t.Fatalf("password = %v, want initial", got)
+	}
+
+	destroyResp := handleRequest(t, b, storage, logical.UpdateOperation, "destroy/app/db", map[string]interface{}{
+		"versions": []int{1},
+	})
+	if destroyResp != nil && destroyResp.IsError() {
+		t.Fatalf("unexpected destroy error: %v", destroyResp.Error())
+	}
+	readDestroyedResp := handleRequest(t, b, storage, logical.ReadOperation, "data/app/db", nil)
+	if readDestroyedResp != nil {
+		t.Fatalf("destroyed data response = %#v, want nil", readDestroyedResp)
+	}
+	metadataResp := handleRequest(t, b, storage, logical.ReadOperation, "metadata/app/db", nil)
+	assertNoErrorResponse(t, metadataResp)
+	versions := metadataResp.Data["versions"].(map[string]versionMetadata)
+	if !versions["1"].Destroyed {
+		t.Fatal("metadata version destroyed flag must be set after destroy")
+	}
+
+	undeleteDestroyedResp := handleRequest(
+		t,
+		b,
+		storage,
+		logical.UpdateOperation,
+		"undelete/app/db",
+		map[string]interface{}{"versions": []int{1}},
+	)
+	if undeleteDestroyedResp != nil && undeleteDestroyedResp.IsError() {
+		t.Fatalf("unexpected undelete destroyed error: %v", undeleteDestroyedResp.Error())
+	}
+	readStillDestroyedResp := handleRequest(t, b, storage, logical.ReadOperation, "data/app/db", nil)
+	if readStillDestroyedResp != nil {
+		t.Fatalf("undeleted destroyed data response = %#v, want nil", readStillDestroyedResp)
+	}
+}
+
 func TestMetadataDeleteRequiresAssociationRemoval(t *testing.T) {
 	b := Backend(&logical.BackendConfig{})
 	storage := &logical.InmemStorage{}
