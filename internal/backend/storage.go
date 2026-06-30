@@ -117,6 +117,75 @@ func listOutboxIDs(ctx context.Context, storage logical.Storage) ([]string, erro
 	return storage.List(ctx, outboxStoragePrefix)
 }
 
+func listQueuedOutboxIDs(ctx context.Context, storage logical.Storage) ([]string, error) {
+	ids, err := listOutboxIDs(ctx, storage)
+	if err != nil {
+		return nil, err
+	}
+	return filterQueuedOutboxIDs(ctx, storage, ids)
+}
+
 func listOutboxIDsForPath(ctx context.Context, storage logical.Storage, path string) ([]string, error) {
 	return storage.List(ctx, outboxByPathStoragePrefix+path+"/")
+}
+
+func listQueuedOutboxIDsForPath(ctx context.Context, storage logical.Storage, path string) ([]string, error) {
+	ids, err := listOutboxIDsForPath(ctx, storage, path)
+	if err != nil {
+		return nil, err
+	}
+	return filterQueuedOutboxIDs(ctx, storage, ids)
+}
+
+func filterQueuedOutboxIDs(ctx context.Context, storage logical.Storage, ids []string) ([]string, error) {
+	queued := make([]string, 0, len(ids))
+	for _, id := range ids {
+		record, err := getOutbox(ctx, storage, id)
+		if err != nil {
+			return nil, err
+		}
+		if record == nil {
+			continue
+		}
+		if isQueuedOutboxState(record.State) {
+			queued = append(queued, id)
+		}
+	}
+	return queued, nil
+}
+
+func isQueuedOutboxState(state string) bool {
+	return state == outboxStatePending || state == outboxStateRetryWait
+}
+
+func putStatus(ctx context.Context, storage logical.Storage, record statusRecord) error {
+	entry, err := logical.StorageEntryJSON(
+		statusStorageKey(record.Path, record.AssociationID, record.ObjectID),
+		record,
+	)
+	if err != nil {
+		return err
+	}
+	return storage.Put(ctx, entry)
+}
+
+func getStatus(
+	ctx context.Context,
+	storage logical.Storage,
+	path string,
+	associationID string,
+	objectID string,
+) (*statusRecord, error) {
+	entry, err := storage.Get(ctx, statusStorageKey(path, associationID, objectID))
+	if err != nil {
+		return nil, err
+	}
+	if entry == nil {
+		return nil, nil
+	}
+	var record statusRecord
+	if err := entry.DecodeJSON(&record); err != nil {
+		return nil, err
+	}
+	return &record, nil
 }

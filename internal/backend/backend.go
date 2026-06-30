@@ -66,8 +66,18 @@ func (b *secretSyncBackend) invalidate() {
 	defer b.cacheMu.Unlock()
 }
 
-func (b *secretSyncBackend) periodic(_ context.Context, _ *logical.Request) error {
-	return nil
+func (b *secretSyncBackend) periodic(ctx context.Context, req *logical.Request) error {
+	if req == nil || req.Storage == nil {
+		return nil
+	}
+	cfg, err := readGlobalConfig(ctx, req.Storage)
+	if err != nil {
+		return err
+	}
+	if cfg.Disabled {
+		return nil
+	}
+	return processDueFakeOutbox(ctx, req.Storage, nowUTC())
 }
 
 func nowUTC() time.Time {

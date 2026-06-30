@@ -46,19 +46,44 @@ func pathStatusRead(ctx context.Context, req *logical.Request, data *framework.F
 		)}, nil
 	}
 
-	operationIDs, err := listOutboxIDsForPath(ctx, req.Storage, path)
+	operationIDs, err := listQueuedOutboxIDsForPath(ctx, req.Storage, path)
 	if err != nil {
 		return nil, err
 	}
+	status, err := getStatus(ctx, req.Storage, path, fakeAssociationID, syncObjectIDSecretPath)
+	if err != nil {
+		return nil, err
+	}
+
 	state := domain.SyncStateUnknown
 	if len(operationIDs) > 0 {
 		state = domain.SyncStatePending
+	} else if status != nil {
+		state = domain.SyncState(status.State)
+	}
+	objects := []map[string]interface{}{} //nolint:forbidigo // OpenBao response boundary.
+	if status != nil {
+		objects = append(objects, statusResponseObject(*status))
 	}
 	return &logical.Response{Data: newResponseData(
 		responseField("path", path),
 		responseField("version", metadata.CurrentVersion),
 		responseField("state", string(state)),
 		responseField("operation_ids", operationIDs),
-		responseField("objects", []string{}),
+		responseField("objects", objects),
 	)}, nil
+}
+
+func statusResponseObject(record statusRecord) map[string]interface{} { //nolint:forbidigo // OpenBao response boundary.
+	return newResponseData(
+		responseField("association_id", record.AssociationID),
+		responseField("object_id", record.ObjectID),
+		responseField("destination_ref", record.DestinationRef),
+		responseField("resolved_name", record.ResolvedName),
+		responseField("state", record.State),
+		responseField("version", record.Version),
+		responseField("remote_version", record.RemoteVersion),
+		responseField("last_operation_id", record.LastOperationID),
+		responseField("last_success_time", record.LastSuccessTime),
+	)
 }

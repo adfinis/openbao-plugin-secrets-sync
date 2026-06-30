@@ -249,7 +249,7 @@ func ensureQueueCapacity(ctx context.Context, storage logical.Storage) error {
 	if err != nil {
 		return err
 	}
-	ids, err := listOutboxIDs(ctx, storage)
+	ids, err := listQueuedOutboxIDs(ctx, storage)
 	if err != nil {
 		return err
 	}

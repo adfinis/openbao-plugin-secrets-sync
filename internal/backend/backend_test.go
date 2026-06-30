@@ -184,6 +184,79 @@ func TestQueueCapacityRejectsWriteBeforeVersionCommit(t *testing.T) {
 	}
 }
 
+func TestPeriodicProcessesFakeOutbox(t *testing.T) {
+	b := Backend(&logical.BackendConfig{})
+	storage := &logical.InmemStorage{}
+
+	writeResp := writeTestSecret(t, b, storage, "data/app/db", "initial")
+	writeMetadata := writeResp.Data["metadata"].(map[string]interface{})
+	operationID := writeMetadata["sync_operation_id"].(string)
+
+	if err := b.periodic(context.Background(), &logical.Request{Storage: storage}); err != nil {
+		t.Fatalf("periodic: %v", err)
+	}
+
+	queueResp := handleRequest(t, b, storage, logical.ReadOperation, "queue", nil)
+	assertNoErrorResponse(t, queueResp)
+	if got := queueResp.Data["pending"]; got != 0 {
+		t.Fatalf("pending queue count = %v, want 0", got)
+	}
+
+	statusResp := handleRequest(t, b, storage, logical.ReadOperation, "status/app/db", nil)
+	assertNoErrorResponse(t, statusResp)
+	if got := statusResp.Data["state"]; got != string(domain.SyncStateSynced) {
+		t.Fatalf("status state = %v, want %s", got, domain.SyncStateSynced)
+	}
+	assertSyncedStatusObject(t, statusResp.Data["objects"], operationID)
+
+	operation, err := getOutbox(context.Background(), storage, operationID)
+	if err != nil {
+		t.Fatalf("read outbox operation: %v", err)
+	}
+	if operation == nil || operation.State != outboxStateSucceeded {
+		t.Fatalf("outbox operation = %#v, want succeeded", operation)
+	}
+}
+
+func TestPeriodicHonorsDisabledConfig(t *testing.T) {
+	b := Backend(&logical.BackendConfig{})
+	storage := &logical.InmemStorage{}
+
+	writeTestSecret(t, b, storage, "data/app/db", "initial")
+	handleRequest(t, b, storage, logical.UpdateOperation, configPath, map[string]interface{}{
+		"disabled": true,
+	})
+
+	if err := b.periodic(context.Background(), &logical.Request{Storage: storage}); err != nil {
+		t.Fatalf("periodic: %v", err)
+	}
+
+	queueResp := handleRequest(t, b, storage, logical.ReadOperation, "queue", nil)
+	assertNoErrorResponse(t, queueResp)
+	if got := queueResp.Data["pending"]; got != 1 {
+		t.Fatalf("pending queue count = %v, want 1", got)
+	}
+}
+
+func TestQueueCapacityCountsQueuedOperationsOnly(t *testing.T) {
+	b := Backend(&logical.BackendConfig{})
+	storage := &logical.InmemStorage{}
+
+	handleRequest(t, b, storage, logical.UpdateOperation, configPath, map[string]interface{}{
+		"queue_capacity": 1,
+	})
+	writeTestSecret(t, b, storage, "data/app/db", "initial")
+	if err := b.periodic(context.Background(), &logical.Request{Storage: storage}); err != nil {
+		t.Fatalf("periodic: %v", err)
+	}
+
+	secondResp := writeTestSecret(t, b, storage, "data/app/api", "allowed")
+	metadata := secondResp.Data["metadata"].(map[string]interface{})
+	if got := metadata["version"]; got != 1 {
+		t.Fatalf("second write version = %v, want 1", got)
+	}
+}
+
 func handleRequest(
 	t *testing.T,
 	b logical.Backend,
@@ -246,5 +319,43 @@ func assertCompleteEnqueueIntent(
 	}
 	if got := operation.ObjectID; got != syncObjectIDSecretPath {
 		t.Fatalf("outbox object ID = %v, want %s", got, syncObjectIDSecretPath)
+	}
+}
+
+func writeTestSecret(
+	t *testing.T,
+	b logical.Backend,
+	storage logical.Storage,
+	path string,
+	password string,
+) *logical.Response {
+	t.Helper()
+	resp := handleRequest(t, b, storage, logical.UpdateOperation, path, map[string]interface{}{
+		"data": map[string]interface{}{
+			"password": password,
+		},
+	})
+	assertNoErrorResponse(t, resp)
+	return resp
+}
+
+func assertSyncedStatusObject(t *testing.T, raw interface{}, operationID string) { //nolint:forbidigo
+	t.Helper()
+	objects, ok := raw.([]map[string]interface{})
+	if !ok {
+		t.Fatalf("objects = %T, want []map[string]interface{}", raw)
+	}
+	if len(objects) != 1 {
+		t.Fatalf("objects length = %d, want 1", len(objects))
+	}
+	object := objects[0]
+	if got := object["state"]; got != string(domain.SyncStateSynced) {
+		t.Fatalf("object state = %v, want %s", got, domain.SyncStateSynced)
+	}
+	if got := object["last_operation_id"]; got != operationID {
+		t.Fatalf("object last operation ID = %v, want %s", got, operationID)
+	}
+	if got := object["remote_version"]; got != "fake" {
+		t.Fatalf("object remote version = %v, want fake", got)
 	}
 }

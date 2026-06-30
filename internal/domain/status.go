@@ -5,9 +5,10 @@ package domain
 type SyncState string
 
 const (
-	SyncStateUnknown  SyncState = "UNKNOWN"
-	SyncStatePending  SyncState = "PENDING"
-	SyncStateSynced   SyncState = "SYNCED"
-	SyncStateDrifted  SyncState = "DRIFTED"
-	SyncStateDisabled SyncState = "DISABLED"
+	SyncStateUnknown       SyncState = "UNKNOWN"
+	SyncStatePending       SyncState = "PENDING"
+	SyncStateSynced        SyncState = "SYNCED"
+	SyncStateDrifted       SyncState = "DRIFTED"
+	SyncStateDisabled      SyncState = "DISABLED"
+	SyncStateInternalError SyncState = "INTERNAL_ERROR"
 )

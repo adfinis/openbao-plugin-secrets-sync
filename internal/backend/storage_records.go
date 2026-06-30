@@ -21,9 +21,11 @@ const (
 	outboxStatePending         = "pending"
 	outboxStateRetryWait       = "retry_wait"
 	outboxStateFailedTerminal  = "failed_terminal"
+	outboxStateSucceeded       = "succeeded"
 	fakeAssociationID          = "local-pending"
 	fakeDestinationRef         = "fake/default"
 	syncObjectIDSecretPath     = "secret-path"
+	statusStoragePrefix        = "status/"
 )
 
 type secretPayload map[string]interface{} //nolint:forbidigo // OpenBao SDK TypeMap uses map[string]interface{}.
@@ -77,6 +79,22 @@ type outboxRecord struct {
 	IdempotencyKey string               `json:"idempotency_key"`
 }
 
+type statusRecord struct {
+	Path            string `json:"path"`
+	Version         int    `json:"version"`
+	AssociationID   string `json:"association_id"`
+	ObjectID        string `json:"object_id"`
+	DestinationRef  string `json:"destination_ref"`
+	ResolvedName    string `json:"resolved_name"`
+	State           string `json:"state"`
+	RemoteVersion   string `json:"remote_version"`
+	LastOperationID string `json:"last_operation_id"`
+	LastSuccessTime string `json:"last_success_time"`
+	LastErrorClass  string `json:"last_error_class"`
+	LastError       string `json:"last_error"`
+	UpdatedTime     string `json:"updated_time"`
+}
+
 func normalizeSourcePath(input string) (string, error) {
 	path := strings.Trim(input, "/")
 	if path == "" {
@@ -109,6 +127,10 @@ func outboxStorageKey(id string) string {
 
 func outboxByPathStorageKey(path string, id string) string {
 	return outboxByPathStoragePrefix + path + "/" + id
+}
+
+func statusStorageKey(path string, associationID string, objectID string) string {
+	return statusStoragePrefix + path + "/" + associationID + "/" + objectID
 }
 
 func newOperationID(
