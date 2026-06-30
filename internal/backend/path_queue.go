@@ -2,6 +2,7 @@ package backend
 
 import (
 	"context"
+	"time"
 
 	"github.com/openbao/openbao/sdk/v2/framework"
 	"github.com/openbao/openbao/sdk/v2/logical"
@@ -10,10 +11,11 @@ import (
 const defaultDrainMaxOperations = 100
 
 type queueSummary struct {
-	Pending   int
-	RetryWait int
-	Terminal  int
-	Canceled  int
+	Pending          int
+	RetryWait        int
+	Terminal         int
+	Canceled         int
+	OldestAgeSeconds int
 }
 
 func pathQueue(b *secretSyncBackend) []*framework.Path {
@@ -101,7 +103,7 @@ func pathQueue(b *secretSyncBackend) []*framework.Path {
 }
 
 func pathQueueRead(ctx context.Context, req *logical.Request, _ *framework.FieldData) (*logical.Response, error) {
-	summary, err := readQueueSummary(ctx, req.Storage)
+	summary, err := readQueueSummary(ctx, req.Storage, nowUTC())
 	if err != nil {
 		return nil, err
 	}
@@ -135,18 +137,23 @@ func (b *secretSyncBackend) pathQueueDrain(
 	if err != nil {
 		return nil, err
 	}
-	summary, err := readQueueSummary(ctx, req.Storage)
+	summary, err := readQueueSummary(ctx, req.Storage, now)
 	if err != nil {
 		return nil, err
 	}
 	return &logical.Response{Data: newResponseData(
 		responseField("processed", processed),
 		responseField("max_operations", maxOperations),
+		responseField("queue_pending", summary.Pending),
+		responseField("queue_retry_wait", summary.RetryWait),
+		responseField("queue_terminal", summary.Terminal),
+		responseField("queue_canceled", summary.Canceled),
+		responseField("queue_oldest_age_seconds", summary.OldestAgeSeconds),
 		responseField("queue", queueSummaryResponse(summary)),
 	)}, nil
 }
 
-func readQueueSummary(ctx context.Context, storage logical.Storage) (queueSummary, error) {
+func readQueueSummary(ctx context.Context, storage logical.Storage, now time.Time) (queueSummary, error) {
 	ids, err := listOutboxIDs(ctx, storage)
 	if err != nil {
 		return queueSummary{}, err
@@ -170,8 +177,25 @@ func readQueueSummary(ctx context.Context, storage logical.Storage) (queueSummar
 		case outboxStateCanceled:
 			summary.Canceled++
 		}
+		if isQueuedOutboxState(record.State) {
+			summary.recordQueuedAge(*record, now)
+		}
 	}
 	return summary, nil
+}
+
+func (summary *queueSummary) recordQueuedAge(record outboxRecord, now time.Time) {
+	if record.CreatedTime == "" {
+		return
+	}
+	createdTime, err := time.Parse(timeFormatRFC3339, record.CreatedTime)
+	if err != nil || createdTime.After(now) {
+		return
+	}
+	ageSeconds := int(now.Sub(createdTime).Seconds())
+	if ageSeconds > summary.OldestAgeSeconds {
+		summary.OldestAgeSeconds = ageSeconds
+	}
 }
 
 func queueSummaryResponse(summary queueSummary) map[string]interface{} { //nolint:forbidigo
@@ -180,7 +204,7 @@ func queueSummaryResponse(summary queueSummary) map[string]interface{} { //nolin
 		responseField("retry_wait", summary.RetryWait),
 		responseField("terminal", summary.Terminal),
 		responseField("canceled", summary.Canceled),
-		responseField("oldest_age_seconds", 0),
+		responseField("oldest_age_seconds", summary.OldestAgeSeconds),
 	)
 }
 

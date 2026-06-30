@@ -336,8 +336,8 @@ func TestDataWriteReadAndQueueStatus(t *testing.T) {
 	if got := writeMetadata["version"]; got != 1 {
 		t.Fatalf("write version = %v, want 1", got)
 	}
-	if got := writeMetadata["sync_state"]; got != string(domain.SyncStateUnknown) {
-		t.Fatalf("sync state = %v, want %s", got, domain.SyncStateUnknown)
+	if got := writeMetadata["sync_state"]; got != string(domain.SyncStateNoAssociation) {
+		t.Fatalf("sync state = %v, want %s", got, domain.SyncStateNoAssociation)
 	}
 	assertOperationIDs(t, writeMetadata, 0)
 
@@ -360,8 +360,8 @@ func TestDataWriteReadAndQueueStatus(t *testing.T) {
 
 	statusResp := handleRequest(t, b, storage, logical.ReadOperation, "status/app/db", nil)
 	assertNoErrorResponse(t, statusResp)
-	if got := statusResp.Data["state"]; got != string(domain.SyncStateUnknown) {
-		t.Fatalf("status state = %v, want %s", got, domain.SyncStateUnknown)
+	if got := statusResp.Data["state"]; got != string(domain.SyncStateNoAssociation) {
+		t.Fatalf("status state = %v, want %s", got, domain.SyncStateNoAssociation)
 	}
 	if got := statusResp.Data["version"]; got != 1 {
 		t.Fatalf("status version = %v, want 1", got)
@@ -969,6 +969,14 @@ func TestPeriodicProcessesFakeOutbox(t *testing.T) {
 	createFakeDestination(t, b, storage, "default")
 	associationResp := createDefaultFakeAssociation(t, b, storage)
 	operationID := operationIDsFromResponse(t, associationResp)[0]
+	association := associationResp.Data["association"].(map[string]interface{})
+	associationID := association["id"]
+	if got := associationResp.Data["association_id"]; got != associationID {
+		t.Fatalf("association_id = %v, want %v", got, associationID)
+	}
+	if got := associationResp.Data["destination_ref"]; got != "fake/default" {
+		t.Fatalf("destination_ref = %v, want fake/default", got)
+	}
 
 	if err := b.periodic(context.Background(), &logical.Request{Storage: storage}); err != nil {
 		t.Fatalf("periodic: %v", err)
@@ -984,6 +992,15 @@ func TestPeriodicProcessesFakeOutbox(t *testing.T) {
 	assertNoErrorResponse(t, statusResp)
 	if got := statusResp.Data["state"]; got != string(domain.SyncStateSynced) {
 		t.Fatalf("status state = %v, want %s", got, domain.SyncStateSynced)
+	}
+	if got := statusResp.Data["association_id"]; got != associationID {
+		t.Fatalf("status association_id = %v, want %v", got, associationID)
+	}
+	if got := statusResp.Data["destination_ref"]; got != "fake/default" {
+		t.Fatalf("status destination_ref = %v, want fake/default", got)
+	}
+	if got := statusResp.Data["last_operation_id"]; got != operationID {
+		t.Fatalf("status last_operation_id = %v, want %s", got, operationID)
 	}
 	assertSyncedStatusObject(t, statusResp.Data["objects"], operationID)
 
@@ -1120,11 +1137,38 @@ func TestQueueDrainProcessesDueOperations(t *testing.T) {
 	if got := drainResp.Data["processed"]; got != 1 {
 		t.Fatalf("processed = %v, want 1", got)
 	}
+	if got := drainResp.Data["queue_pending"]; got != 0 {
+		t.Fatalf("queue_pending = %v, want 0", got)
+	}
 	queue := drainResp.Data["queue"].(map[string]interface{})
 	if got := queue["pending"]; got != 0 {
 		t.Fatalf("pending = %v, want 0", got)
 	}
 	assertOutboxOperation(t, storage, operationID, 1, outboxStateSucceeded)
+}
+
+func TestQueueSummaryOldestAge(t *testing.T) {
+	b := Backend(&logical.BackendConfig{})
+	storage := &logical.InmemStorage{}
+
+	writeAppDBSecret(t, b, storage, "initial")
+	createFakeDestination(t, b, storage, "default")
+	associationResp := createDefaultFakeAssociation(t, b, storage)
+	operationID := operationIDsFromResponse(t, associationResp)[0]
+	operation, err := getOutbox(context.Background(), storage, operationID)
+	if err != nil {
+		t.Fatalf("read outbox operation: %v", err)
+	}
+	operation.CreatedTime = nowUTC().Add(-2 * time.Minute).Format(timeFormatRFC3339)
+	if err := putOutbox(context.Background(), storage, *operation); err != nil {
+		t.Fatalf("write old outbox operation: %v", err)
+	}
+
+	queueResp := handleRequest(t, b, storage, logical.ReadOperation, "queue", nil)
+	assertNoErrorResponse(t, queueResp)
+	if got := queueResp.Data["oldest_age_seconds"].(int); got < 120 {
+		t.Fatalf("oldest_age_seconds = %v, want at least 120", got)
+	}
 }
 
 func TestQueueDrainHonorsDisabledConfig(t *testing.T) {

@@ -6,6 +6,7 @@ type SyncState string
 
 const (
 	SyncStateUnknown       SyncState = "UNKNOWN"
+	SyncStateNoAssociation SyncState = "NO_ASSOCIATION"
 	SyncStatePending       SyncState = "PENDING"
 	SyncStateSynced        SyncState = "SYNCED"
 	SyncStateDrifted       SyncState = "DRIFTED"

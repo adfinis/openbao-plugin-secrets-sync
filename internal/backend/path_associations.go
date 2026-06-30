@@ -196,7 +196,8 @@ func pathAssociationDisable(
 	if err := markAssociationStatusDisabled(ctx, req.Storage, *record, now); err != nil {
 		return nil, err
 	}
-	return &logical.Response{Data: newResponseData(
+	return &logical.Response{Data: associationLifecycleResponse(
+		*record,
 		responseField("association", associationResponse(*record)),
 		responseField("canceled_operation_ids", canceledOperationIDs),
 	)}, nil
@@ -240,7 +241,8 @@ func pathAssociationEnable(
 		}
 		operationIDs = append(operationIDs, operationID)
 	}
-	return &logical.Response{Data: newResponseData(
+	return &logical.Response{Data: associationLifecycleResponse(
+		*record,
 		responseField("association", associationResponse(*record)),
 		responseField("sync_operation_ids", operationIDs),
 	)}, nil
@@ -276,7 +278,8 @@ func pathAssociationSync(
 	if err != nil {
 		return logical.ErrorResponse(err.Error()), nil
 	}
-	return &logical.Response{Data: newResponseData(
+	return &logical.Response{Data: associationLifecycleResponse(
+		*record,
 		responseField("association", associationResponse(*record)),
 		responseField("sync_operation_ids", []string{operationID}),
 	)}, nil
@@ -333,7 +336,8 @@ func (b *secretSyncBackend) pathAssociationWrite(
 		operationIDs = append(operationIDs, operation.ID)
 	}
 
-	return &logical.Response{Data: newResponseData(
+	return &logical.Response{Data: associationLifecycleResponse(
+		record,
 		responseField("association", associationResponse(record)),
 		responseField("sync_operation_ids", operationIDs),
 	)}, nil
@@ -481,6 +485,8 @@ func associationPlanResponse(
 		responseField("version", version),
 		responseField("action", plan.Action),
 		responseField("source_eligible", sourceEligible),
+		responseField("association_id", record.ID),
+		responseField("destination_ref", record.DestinationRef),
 		responseField("association", associationResponse(record)),
 		responseField("destination", newResponseData(
 			responseField("type", record.DestinationType),
@@ -493,6 +499,22 @@ func associationPlanResponse(
 		responseField("error_class", string(plan.ErrorClass)),
 		responseField("message", plan.Message),
 	)
+}
+
+func associationSummaryFields(record associationRecord) []responseEntry {
+	return []responseEntry{
+		responseField("association_id", record.ID),
+		responseField("destination_ref", record.DestinationRef),
+		responseField("resolved_name", record.ResolvedName),
+		responseField("granularity", record.Granularity),
+		responseField("format", record.Format),
+		responseField("delete_mode", normalizedDeleteMode(record.DeleteMode)),
+		responseField("enabled", record.Enabled),
+	}
+}
+
+func associationLifecycleResponse(record associationRecord, fields ...responseEntry) map[string]interface{} {
+	return newResponseData(append(associationSummaryFields(record), fields...)...)
 }
 
 func pathAssociationRead(

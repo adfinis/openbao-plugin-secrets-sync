@@ -55,7 +55,7 @@ func pathStatusRead(ctx context.Context, req *logical.Request, data *framework.F
 		return nil, err
 	}
 
-	state := domain.SyncStateUnknown
+	state := domain.SyncStateNoAssociation
 	if len(operationIDs) > 0 {
 		state = domain.SyncStatePending
 	} else if len(statusRecords) > 0 {
@@ -71,13 +71,17 @@ func pathStatusRead(ctx context.Context, req *logical.Request, data *framework.F
 	for _, record := range statusRecords {
 		objects = append(objects, statusResponseObject(record))
 	}
-	return &logical.Response{Data: newResponseData(
+	summaryFields := statusSummaryFields(statusRecords)
+	fields := make([]responseEntry, 0, 5+len(summaryFields))
+	fields = append(fields,
 		responseField("path", path),
 		responseField("version", metadata.CurrentVersion),
 		responseField("state", string(state)),
 		responseField("operation_ids", operationIDs),
 		responseField("objects", objects),
-	)}, nil
+	)
+	fields = append(fields, summaryFields...)
+	return &logical.Response{Data: newResponseData(fields...)}, nil
 }
 
 func statusResponseObject(record statusRecord) map[string]interface{} { //nolint:forbidigo // OpenBao response boundary.
@@ -95,4 +99,23 @@ func statusResponseObject(record statusRecord) map[string]interface{} { //nolint
 		responseField("last_error_class", record.LastErrorClass),
 		responseField("last_error", record.LastError),
 	)
+}
+
+func statusSummaryFields(statusRecords []statusRecord) []responseEntry {
+	if len(statusRecords) != 1 {
+		return nil
+	}
+	record := statusRecords[0]
+	return []responseEntry{
+		responseField("association_id", record.AssociationID),
+		responseField("object_id", record.ObjectID),
+		responseField("destination_ref", record.DestinationRef),
+		responseField("resolved_name", record.ResolvedName),
+		responseField("payload_sha256", record.PayloadSHA256),
+		responseField("remote_version", record.RemoteVersion),
+		responseField("last_operation_id", record.LastOperationID),
+		responseField("last_success_time", record.LastSuccessTime),
+		responseField("last_error_class", record.LastErrorClass),
+		responseField("last_error", record.LastError),
+	}
 }

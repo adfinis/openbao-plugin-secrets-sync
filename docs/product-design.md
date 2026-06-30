@@ -274,6 +274,7 @@ Stable status states:
 
 ```text
 UNKNOWN
+NO_ASSOCIATION
 PENDING
 SYNCING
 SYNCED
@@ -290,6 +291,10 @@ QUEUE_BLOCKED
 INTERNAL_ERROR
 DISABLED
 ```
+
+`UNKNOWN` is reserved for paths or objects the engine cannot currently
+identify, for example a missing source path. `NO_ASSOCIATION` means the source
+path exists but no enabled or historical sync object currently exists for it.
 
 ### Global Configuration
 

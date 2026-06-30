@@ -525,7 +525,7 @@ func syncStateForOperationIDs(operationIDs []string) domain.SyncState {
 	if len(operationIDs) > 0 {
 		return domain.SyncStatePending
 	}
-	return domain.SyncStateUnknown
+	return domain.SyncStateNoAssociation
 }
 
 func newEnqueueIntentRecord(path string, version int, operations []outboxRecord, now string) enqueueIntentRecord {
