@@ -18,8 +18,9 @@ provider foundation.
 
 ## Documentation
 
-Start with [docs/README.md](docs/README.md). The current design package is
-split into product, architecture, provider, security, operations, and
+Start with [docs/README.md](docs/README.md). For hands-on use, see
+[docs/user-guide.md](docs/user-guide.md). The current design package is split
+into product, architecture, provider, security, operations, and
 implementation-plan documents.
 
 ## Development
