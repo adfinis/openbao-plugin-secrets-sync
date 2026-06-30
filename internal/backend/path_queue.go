@@ -4,6 +4,7 @@ import (
 	"context"
 	"time"
 
+	"github.com/adfinis/openbao-secret-sync/internal/observability"
 	"github.com/openbao/openbao/sdk/v2/framework"
 	"github.com/openbao/openbao/sdk/v2/logical"
 )
@@ -28,7 +29,7 @@ func pathQueue(b *secretSyncBackend) []*framework.Path {
 			Pattern: "queue/?",
 			Operations: map[logical.Operation]framework.OperationHandler{
 				logical.ReadOperation: &framework.PathOperation{
-					Callback: pathQueueRead,
+					Callback: b.pathQueueRead,
 					Summary:  "Read outbox queue summary.",
 				},
 			},
@@ -106,11 +107,16 @@ func pathQueue(b *secretSyncBackend) []*framework.Path {
 	}
 }
 
-func pathQueueRead(ctx context.Context, req *logical.Request, _ *framework.FieldData) (*logical.Response, error) {
+func (b *secretSyncBackend) pathQueueRead(
+	ctx context.Context,
+	req *logical.Request,
+	_ *framework.FieldData,
+) (*logical.Response, error) {
 	summary, err := readQueueSummary(ctx, req.Storage, nowUTC())
 	if err != nil {
 		return nil, err
 	}
+	b.recordQueueSummary(ctx, summary)
 	return &logical.Response{Data: queueSummaryResponse(summary)}, nil
 }
 
@@ -148,6 +154,11 @@ func (b *secretSyncBackend) pathQueueDrain(
 	if err != nil {
 		return nil, err
 	}
+	b.recordQueueSummary(ctx, summary)
+	b.observer.Operation(ctx, observability.OperationEvent{
+		Operation: observability.OperationDrain,
+		Result:    observability.ResultSuccess,
+	})
 	return &logical.Response{Data: newResponseData(
 		responseField("processed", processed),
 		responseField("max_operations", maxOperations),
@@ -158,6 +169,13 @@ func (b *secretSyncBackend) pathQueueDrain(
 		responseField("queue_oldest_age_seconds", summary.OldestAgeSeconds),
 		responseField("queue", queueSummaryResponse(summary)),
 	)}, nil
+}
+
+func (b *secretSyncBackend) recordQueueSummary(ctx context.Context, summary queueSummary) {
+	b.observer.QueueDepth(ctx, outboxStatePending, summary.Pending)
+	b.observer.QueueDepth(ctx, outboxStateRetryWait, summary.RetryWait)
+	b.observer.QueueDepth(ctx, outboxStateFailedTerminal, summary.Terminal)
+	b.observer.QueueDepth(ctx, outboxStateCanceled, summary.Canceled)
 }
 
 func readQueueSummary(ctx context.Context, storage logical.Storage, now time.Time) (queueSummary, error) {

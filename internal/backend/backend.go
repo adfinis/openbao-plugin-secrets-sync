@@ -7,6 +7,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/adfinis/openbao-secret-sync/internal/observability"
 	"github.com/adfinis/openbao-secret-sync/internal/providers"
 	"github.com/adfinis/openbao-secret-sync/internal/providers/awssecretsmanager"
 	"github.com/adfinis/openbao-secret-sync/internal/providers/fake"
@@ -33,6 +34,7 @@ func Factory(ctx context.Context, conf *logical.BackendConfig) (logical.Backend,
 func Backend(_ *logical.BackendConfig) *secretSyncBackend {
 	b := secretSyncBackend{
 		providerRegistry: providers.MustNewRegistry(fake.Provider{}, awssecretsmanager.New()),
+		observer:         observability.New(),
 	}
 	b.Backend = &framework.Backend{
 		Help: strings.TrimSpace(backendHelp),
@@ -69,6 +71,7 @@ type secretSyncBackend struct {
 
 	cacheMu          sync.Mutex
 	providerRegistry *providers.Registry
+	observer         observability.Recorder
 }
 
 func (b *secretSyncBackend) invalidate() {

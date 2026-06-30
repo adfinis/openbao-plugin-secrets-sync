@@ -23,6 +23,8 @@ Implemented backend slices now include:
 - manual per-path reconcile plan/apply using provider read-state;
 - automatic retry for `rate_limit` and `unavailable` provider errors with a
   bounded retry budget;
+- OpenTelemetry metric API instrumentation for queue depth, dispatch,
+  provider requests, reconcile results, and restore guard state;
 - status records with payload hashes and no secret payload disclosure;
 - AWS Secrets Manager provider with type, capabilities, validation, SDK-backed
   client boundary, mocked plan/upsert/delete/read-state/health behavior, AWS
@@ -71,7 +73,8 @@ Implemented backend slices now include:
 
 - Per-destination rate limit.
 - Drift detection.
-- Metrics endpoint.
+- OpenBao/plugin telemetry integration, with a metrics endpoint only as a
+  fallback if runtime telemetry cannot expose plugin OTel instruments.
 - Provider-specific local integration using localstack, envtest, or kind.
 - Structured runbook examples.
 
@@ -240,7 +243,8 @@ Exit criteria:
 Tasks:
 
 - Add rate limiting.
-- Add metrics endpoint.
+- Add exporter/runtime integration once the OpenBao plugin telemetry boundary
+  is clear.
 - Add structured redaction tests.
 - Add fault injection tests for transient destination failure.
 - Add e2e tests for plugin restart and OpenBao restart.

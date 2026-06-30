@@ -4,9 +4,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/adfinis/openbao-secret-sync/internal/domain"
+	"github.com/adfinis/openbao-secret-sync/internal/observability"
 	"github.com/adfinis/openbao-secret-sync/internal/outbox"
 	payloadpkg "github.com/adfinis/openbao-secret-sync/internal/payload"
 	"github.com/adfinis/openbao-secret-sync/internal/providers"
@@ -109,10 +111,12 @@ func (b *secretSyncBackend) processUpsert(
 		return err
 	}
 	if failure != nil {
+		b.recordOperationFailure(ctx, record, failure.class)
 		return markOperationFailed(ctx, storage, record, *failure, now)
 	}
 	preparedPayload, failure := prepareProviderPayload(upsertContext)
 	if failure != nil {
+		b.recordOperationFailure(ctx, record, failure.class)
 		return markOperationFailed(ctx, storage, record, *failure, now)
 	}
 
@@ -120,6 +124,7 @@ func (b *secretSyncBackend) processUpsert(
 	if err != nil {
 		return err
 	}
+	providerStart := time.Now()
 	result, err := upsertContext.provider.Upsert(ctx, providers.UpsertRequest{
 		Destination:   resolvedDestinationConfig,
 		ResolvedName:  upsertContext.association.ResolvedName,
@@ -131,9 +136,18 @@ func (b *secretSyncBackend) processUpsert(
 		AssociationID: record.AssociationID,
 		ObjectID:      record.ObjectID,
 	})
+	b.recordProviderRequest(
+		ctx,
+		upsertContext.provider.Type(),
+		observability.OperationUpsert,
+		err,
+		time.Since(providerStart),
+	)
 	if err != nil {
+		errorClass := providerErrorClass(err)
+		b.recordOperationFailure(ctx, record, errorClass)
 		return markOperationFailed(ctx, storage, record, operationFailure{
-			class:         providerErrorClass(err),
+			class:         errorClass,
 			message:       "provider upsert failed",
 			resolvedName:  upsertContext.association.ResolvedName,
 			payloadSHA256: preparedPayload.SHA256,
@@ -149,6 +163,7 @@ func (b *secretSyncBackend) processUpsert(
 	if err := putOutbox(ctx, storage, record); err != nil {
 		return err
 	}
+	b.recordOperationSuccess(ctx, record)
 	return putStatus(ctx, storage, statusRecord{
 		Path:            record.Path,
 		Version:         record.Version,
@@ -176,12 +191,14 @@ func (b *secretSyncBackend) processDelete(
 		return err
 	}
 	if failure != nil {
+		b.recordOperationFailure(ctx, record, failure.class)
 		return markOperationFailed(ctx, storage, record, *failure, now)
 	}
 	resolvedDestinationConfig, err := destinationConfig(ctx, storage, *deleteContext.destination)
 	if err != nil {
 		return err
 	}
+	providerStart := time.Now()
 	result, err := deleteContext.provider.Delete(ctx, providers.DeleteRequest{
 		Destination:   resolvedDestinationConfig,
 		ResolvedName:  deleteContext.association.ResolvedName,
@@ -190,9 +207,18 @@ func (b *secretSyncBackend) processDelete(
 		AssociationID: record.AssociationID,
 		ObjectID:      record.ObjectID,
 	})
+	b.recordProviderRequest(
+		ctx,
+		deleteContext.provider.Type(),
+		observability.OperationDelete,
+		err,
+		time.Since(providerStart),
+	)
 	if err != nil {
+		errorClass := providerErrorClass(err)
+		b.recordOperationFailure(ctx, record, errorClass)
 		return markOperationFailed(ctx, storage, record, operationFailure{
-			class:        providerErrorClass(err),
+			class:        errorClass,
 			message:      "provider delete failed",
 			resolvedName: deleteContext.association.ResolvedName,
 		}, now)
@@ -207,6 +233,7 @@ func (b *secretSyncBackend) processDelete(
 	if err := putOutbox(ctx, storage, record); err != nil {
 		return err
 	}
+	b.recordOperationSuccess(ctx, record)
 	return putStatus(ctx, storage, statusRecord{
 		Path:            record.Path,
 		Version:         record.Version,
@@ -464,6 +491,74 @@ func syncStateForFailureClass(errorClass providers.ErrorClass) domain.SyncState 
 	default:
 		return domain.SyncStateInternalError
 	}
+}
+
+func (b *secretSyncBackend) recordOperationSuccess(ctx context.Context, record outboxRecord) {
+	b.observer.Operation(ctx, observability.OperationEvent{
+		Operation:       observabilityOperation(record.Type),
+		Result:          observability.ResultSuccess,
+		DestinationType: destinationTypeFromRef(record.DestinationRef),
+		Granularity:     record.ObjectID,
+	})
+}
+
+func (b *secretSyncBackend) recordOperationFailure(
+	ctx context.Context,
+	record outboxRecord,
+	errorClass providers.ErrorClass,
+) {
+	result := observability.ResultFailure
+	if shouldRetryAutomatically(errorClass, record.Attempts+1) {
+		result = observability.ResultRetry
+	}
+	b.observer.Operation(ctx, observability.OperationEvent{
+		Operation:       observabilityOperation(record.Type),
+		Result:          result,
+		ErrorClass:      string(errorClass),
+		DestinationType: destinationTypeFromRef(record.DestinationRef),
+		Granularity:     record.ObjectID,
+	})
+}
+
+func (b *secretSyncBackend) recordProviderRequest(
+	ctx context.Context,
+	providerType string,
+	operation string,
+	err error,
+	duration time.Duration,
+) {
+	result := observability.ResultSuccess
+	errorClass := ""
+	if err != nil {
+		result = observability.ResultFailure
+		errorClass = string(providerErrorClass(err))
+	}
+	b.observer.ProviderRequest(ctx, observability.ProviderRequestEvent{
+		Provider:   providerType,
+		Operation:  operation,
+		Result:     result,
+		ErrorClass: errorClass,
+		Duration:   duration,
+	})
+}
+
+func observabilityOperation(operationType outbox.OperationType) string {
+	switch operationType {
+	case outbox.OperationTypeUpsert:
+		return observability.OperationUpsert
+	case outbox.OperationTypeDelete:
+		return observability.OperationDelete
+	default:
+		return string(operationType)
+	}
+}
+
+func destinationTypeFromRef(destinationRef string) string {
+	destinationType, _, ok := strings.Cut(destinationRef, "/")
+	if !ok {
+		return destinationRef
+	}
+	return destinationType
 }
 
 func shouldRetryAutomatically(errorClass providers.ErrorClass, attempts int) bool {

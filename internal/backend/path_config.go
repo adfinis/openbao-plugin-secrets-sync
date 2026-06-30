@@ -10,7 +10,7 @@ import (
 
 const configPath = "config"
 
-func pathConfig(_ *secretSyncBackend) *framework.Path {
+func pathConfig(b *secretSyncBackend) *framework.Path {
 	return &framework.Path{
 		Pattern: configPath,
 		Fields: map[string]*framework.FieldSchema{
@@ -29,11 +29,11 @@ func pathConfig(_ *secretSyncBackend) *framework.Path {
 		},
 		Operations: map[logical.Operation]framework.OperationHandler{
 			logical.ReadOperation: &framework.PathOperation{
-				Callback: pathConfigRead,
+				Callback: b.pathConfigRead,
 				Summary:  "Read global secret sync configuration.",
 			},
 			logical.UpdateOperation: &framework.PathOperation{
-				Callback: pathConfigWrite,
+				Callback: b.pathConfigWrite,
 				Summary:  "Update global secret sync configuration.",
 			},
 		},
@@ -42,12 +42,12 @@ func pathConfig(_ *secretSyncBackend) *framework.Path {
 	}
 }
 
-func pathConfigRestoreGuardAcknowledge(_ *secretSyncBackend) *framework.Path {
+func pathConfigRestoreGuardAcknowledge(b *secretSyncBackend) *framework.Path {
 	return &framework.Path{
 		Pattern: "config/restore-guard/acknowledge",
 		Operations: map[logical.Operation]framework.OperationHandler{
 			logical.UpdateOperation: &framework.PathOperation{
-				Callback: pathConfigRestoreGuardAcknowledgeWrite,
+				Callback: b.pathConfigRestoreGuardAcknowledgeWrite,
 				Summary:  "Acknowledge restore guard and resume remote mutation.",
 			},
 		},
@@ -56,11 +56,16 @@ func pathConfigRestoreGuardAcknowledge(_ *secretSyncBackend) *framework.Path {
 	}
 }
 
-func pathConfigRead(ctx context.Context, req *logical.Request, _ *framework.FieldData) (*logical.Response, error) {
+func (b *secretSyncBackend) pathConfigRead(
+	ctx context.Context,
+	req *logical.Request,
+	_ *framework.FieldData,
+) (*logical.Response, error) {
 	cfg, err := readGlobalConfig(ctx, req.Storage)
 	if err != nil {
 		return nil, err
 	}
+	b.observer.RestoreGuardActive(ctx, cfg.RestoreGuard)
 	return &logical.Response{Data: newResponseData(
 		responseField("disabled", cfg.Disabled),
 		responseField("restore_guard", cfg.RestoreGuard),
@@ -69,7 +74,11 @@ func pathConfigRead(ctx context.Context, req *logical.Request, _ *framework.Fiel
 	)}, nil
 }
 
-func pathConfigWrite(ctx context.Context, req *logical.Request, data *framework.FieldData) (*logical.Response, error) {
+func (b *secretSyncBackend) pathConfigWrite(
+	ctx context.Context,
+	req *logical.Request,
+	data *framework.FieldData,
+) (*logical.Response, error) {
 	cfg, err := readGlobalConfig(ctx, req.Storage)
 	if err != nil {
 		return nil, err
@@ -99,10 +108,11 @@ func pathConfigWrite(ctx context.Context, req *logical.Request, data *framework.
 	if err := putGlobalConfig(ctx, req.Storage, cfg); err != nil {
 		return nil, err
 	}
+	b.observer.RestoreGuardActive(ctx, cfg.RestoreGuard)
 	return nil, nil
 }
 
-func pathConfigRestoreGuardAcknowledgeWrite(
+func (b *secretSyncBackend) pathConfigRestoreGuardAcknowledgeWrite(
 	ctx context.Context,
 	req *logical.Request,
 	_ *framework.FieldData,
@@ -118,6 +128,7 @@ func pathConfigRestoreGuardAcknowledgeWrite(
 	if err := putGlobalConfig(ctx, req.Storage, cfg); err != nil {
 		return nil, err
 	}
+	b.observer.RestoreGuardActive(ctx, cfg.RestoreGuard)
 	return &logical.Response{Data: newResponseData(
 		responseField("disabled", cfg.Disabled),
 		responseField("restore_guard", cfg.RestoreGuard),

@@ -274,8 +274,10 @@ GET  queue
 GET  queue/<operation-id>
 POST queue/<operation-id>/retry
 POST queue/<operation-id>/cancel
-GET  metrics
 ```
+
+A plugin-local `GET metrics` path remains a fallback only if OpenBao/plugin
+telemetry cannot expose OpenTelemetry instruments.
 
 Status must be per resolved remote object, not only per association. This is
 required for `secret-key` granularity and partial provider failures.

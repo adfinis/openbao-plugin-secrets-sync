@@ -3,8 +3,10 @@ package backend
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/adfinis/openbao-secret-sync/internal/domain"
+	"github.com/adfinis/openbao-secret-sync/internal/observability"
 	payloadpkg "github.com/adfinis/openbao-secret-sync/internal/payload"
 	"github.com/adfinis/openbao-secret-sync/internal/providers"
 	"github.com/openbao/openbao/sdk/v2/framework"
@@ -97,6 +99,7 @@ func (b *secretSyncBackend) reconcilePath(
 	for _, association := range associations {
 		result := b.reconcileAssociation(ctx, storage, association, *metadata, *version)
 		results = append(results, result)
+		b.recordReconcileRun(ctx, result)
 		if apply {
 			if err := putReconcileStatus(ctx, storage, result, now); err != nil {
 				return nil, err
@@ -180,12 +183,14 @@ func (b *secretSyncBackend) reconcileAssociation(
 		result.message = "destination config resolution failed"
 		return result
 	}
+	providerStart := time.Now()
 	remoteState, err := provider.ReadState(ctx, providerReadStateRequest(
 		association,
 		resolvedDestinationConfig,
 		metadata.CurrentVersion,
 		payload,
 	))
+	b.recordProviderRequest(ctx, provider.Type(), observability.OperationReadState, err, time.Since(providerStart))
 	if err != nil {
 		result.state = syncStateForFailureClass(providerErrorClass(err))
 		result.errorClass = providerErrorClass(err)
@@ -320,6 +325,26 @@ func reconcileSummaryState(results []reconcileObjectResult) domain.SyncState {
 		}
 	}
 	return state
+}
+
+func (b *secretSyncBackend) recordReconcileRun(ctx context.Context, result reconcileObjectResult) {
+	b.observer.ReconcileRun(ctx, observability.ReconcileRunEvent{
+		Result:          reconcileObservabilityResult(result),
+		ErrorClass:      string(result.errorClass),
+		DestinationType: result.association.DestinationType,
+		Granularity:     result.association.Granularity,
+	})
+}
+
+func reconcileObservabilityResult(result reconcileObjectResult) string {
+	switch result.state {
+	case domain.SyncStateSynced:
+		return observability.ResultSuccess
+	case domain.SyncStateDisabled:
+		return observability.ResultSkipped
+	default:
+		return observability.ResultFailure
+	}
 }
 
 type reconcileObjectResult struct {

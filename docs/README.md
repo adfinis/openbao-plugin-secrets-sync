@@ -40,6 +40,8 @@ and operator diagnostics are OpenBao-native and plugin-first.
   capabilities, naming, payload formatting, and provider test expectations.
 - [Security and operations](security-operations.md) - threat model,
   authorization, redaction, ownership, audit, metrics, restore, and runbooks.
+- [Observability](observability.md) - OpenTelemetry metric surface, attribute
+  policy, and exporter boundary.
 - [Implementation plan](implementation-plan.md) - MVP scope, phased plan, test
   strategy, and open decisions.
 - [LocalStack e2e workflow](../test/e2e/localstack/README.md) - self-contained

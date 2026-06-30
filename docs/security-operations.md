@@ -214,25 +214,27 @@ after restore:
 
 ## Metrics
 
-Expose metrics through OpenBao telemetry where practical. If external plugin
-telemetry is limited, expose a `metrics` path and structured status endpoints
-in MVP.
+Instrument metrics through the OpenTelemetry metric API where practical. The
+plugin must not store exporter credentials in plugin storage; exporter and
+collector setup should remain a deployment concern.
 
-Required metric concepts:
+Initial OpenTelemetry instruments:
 
 ```text
-openbao_secret_sync_queue_depth{mount,destination_type,destination_name}
-openbao_secret_sync_queue_capacity{mount}
-openbao_secret_sync_operation_age_seconds{mount,destination_type}
-openbao_secret_sync_operations_total{mount,destination_type,result}
-openbao_secret_sync_reconcile_runs_total{mount,destination_type,result}
-openbao_secret_sync_destination_health{mount,destination_type,destination_name}
-openbao_secret_sync_drift_total{mount,destination_type}
-openbao_secret_sync_redaction_test_failures_total{mount}
+openbao.secret_sync.queue.depth{state}
+openbao.secret_sync.operations{operation,result,error_class,destination_type,granularity}
+openbao.secret_sync.provider.requests{provider,operation,result,error_class}
+openbao.secret_sync.provider.request.duration{provider,operation,result,error_class}
+openbao.secret_sync.reconcile.runs{result,error_class,destination_type,granularity}
+openbao.secret_sync.restore_guard.active
 ```
 
-Metric labels must not include secret values or high-cardinality source paths by
-default.
+Prometheus exporters may translate instrument names and units into Prometheus
+series such as `openbao_secret_sync_operations_total`.
+
+Metric labels must not include secret values, high-cardinality source paths,
+resolved remote names, destination names, association ids, operation ids,
+payload hashes, ARNs, or cloud account ids by default.
 
 ## Logs
 
