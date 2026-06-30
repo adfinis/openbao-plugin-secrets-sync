@@ -131,6 +131,29 @@ func getEnqueueIntent(
 	return &record, nil
 }
 
+func listEnqueueIntents(ctx context.Context, storage logical.Storage) ([]enqueueIntentRecord, error) {
+	keys, err := logical.CollectKeysWithPrefix(ctx, storage, enqueueIntentStoragePrefix)
+	if err != nil {
+		return nil, err
+	}
+	records := make([]enqueueIntentRecord, 0, len(keys))
+	for _, key := range keys {
+		entry, err := storage.Get(ctx, key)
+		if err != nil {
+			return nil, err
+		}
+		if entry == nil {
+			continue
+		}
+		var record enqueueIntentRecord
+		if err := entry.DecodeJSON(&record); err != nil {
+			return nil, err
+		}
+		records = append(records, record)
+	}
+	return records, nil
+}
+
 func putDestination(ctx context.Context, storage logical.Storage, record destinationRecord) error {
 	entry, err := logical.StorageEntryJSON(destinationStorageKey(record.Type, record.Name), record)
 	if err != nil {

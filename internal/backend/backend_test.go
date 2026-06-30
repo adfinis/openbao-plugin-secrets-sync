@@ -470,6 +470,97 @@ func TestQueueOperationRejectsRetryAfterSuccess(t *testing.T) {
 	}
 }
 
+func TestPeriodicRecoversIncompleteEnqueueIntent(t *testing.T) {
+	b := Backend(&logical.BackendConfig{})
+	storage := &logical.InmemStorage{}
+
+	writeAppDBSecret(t, b, storage, "initial")
+	createFakeDestination(t, b, storage, "default")
+	createDefaultFakeAssociation(t, b, storage)
+	if err := b.periodic(context.Background(), &logical.Request{Storage: storage}); err != nil {
+		t.Fatalf("periodic: %v", err)
+	}
+
+	secondResp := writeAppDBSecret(t, b, storage, "rotated")
+	metadata := secondResp.Data["metadata"].(map[string]interface{})
+	operationID := operationIDsFromMetadata(t, metadata)[0]
+	operation, err := getOutbox(context.Background(), storage, operationID)
+	if err != nil {
+		t.Fatalf("read outbox operation: %v", err)
+	}
+	if operation == nil {
+		t.Fatal("outbox operation must exist before simulated loss")
+	}
+	if err := deleteOutbox(context.Background(), storage, *operation); err != nil {
+		t.Fatalf("delete outbox operation: %v", err)
+	}
+	intent, err := getEnqueueIntent(context.Background(), storage, "app/db", 2)
+	if err != nil {
+		t.Fatalf("read enqueue intent: %v", err)
+	}
+	intent.Complete = false
+	intent.CompletedTime = ""
+	if err := putEnqueueIntent(context.Background(), storage, *intent); err != nil {
+		t.Fatalf("write incomplete enqueue intent: %v", err)
+	}
+
+	if err := b.periodic(context.Background(), &logical.Request{Storage: storage}); err != nil {
+		t.Fatalf("periodic recovery: %v", err)
+	}
+	recovered, err := getOutbox(context.Background(), storage, operationID)
+	if err != nil {
+		t.Fatalf("read recovered outbox operation: %v", err)
+	}
+	if recovered == nil || recovered.State != outboxStateSucceeded {
+		t.Fatalf("recovered operation = %#v, want succeeded operation", recovered)
+	}
+	intent, err = getEnqueueIntent(context.Background(), storage, "app/db", 2)
+	if err != nil {
+		t.Fatalf("read recovered enqueue intent: %v", err)
+	}
+	if intent == nil || !intent.Complete {
+		t.Fatalf("recovered enqueue intent = %#v, want complete", intent)
+	}
+}
+
+func TestRecoveryCompletesIntentWithoutCommittedVersion(t *testing.T) {
+	b := Backend(&logical.BackendConfig{})
+	storage := &logical.InmemStorage{}
+
+	writeAppDBSecret(t, b, storage, "initial")
+	createFakeDestination(t, b, storage, "default")
+	associationResp := createDefaultFakeAssociation(t, b, storage)
+	associationID := associationIDFromResponse(t, associationResp)
+	association, err := getAssociation(context.Background(), storage, "app/db", associationID)
+	if err != nil {
+		t.Fatalf("read association: %v", err)
+	}
+	now := nowUTC().Format(timeFormatRFC3339)
+	operation := newAssociationOutboxRecord(*association, 99, now)
+	intent := newEnqueueIntentRecord("app/db", 99, []outboxRecord{operation}, now)
+	if err := putEnqueueIntent(context.Background(), storage, intent); err != nil {
+		t.Fatalf("write enqueue intent: %v", err)
+	}
+
+	if err := recoverIncompleteEnqueueIntents(context.Background(), storage, nowUTC()); err != nil {
+		t.Fatalf("recover incomplete enqueue intents: %v", err)
+	}
+	recoveredIntent, err := getEnqueueIntent(context.Background(), storage, "app/db", 99)
+	if err != nil {
+		t.Fatalf("read recovered enqueue intent: %v", err)
+	}
+	if recoveredIntent == nil || !recoveredIntent.Complete {
+		t.Fatalf("recovered enqueue intent = %#v, want complete", recoveredIntent)
+	}
+	recoveredOperation, err := getOutbox(context.Background(), storage, operation.ID)
+	if err != nil {
+		t.Fatalf("read recovered operation: %v", err)
+	}
+	if recoveredOperation != nil {
+		t.Fatalf("recovered operation = %#v, want nil without committed version", recoveredOperation)
+	}
+}
+
 func TestPeriodicHonorsDisabledConfig(t *testing.T) {
 	b := Backend(&logical.BackendConfig{})
 	storage := &logical.InmemStorage{}

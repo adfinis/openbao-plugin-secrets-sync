@@ -84,13 +84,22 @@ type associationRecord struct {
 }
 
 type enqueueIntentRecord struct {
-	Path          string   `json:"path"`
-	Version       int      `json:"version"`
-	OperationIDs  []string `json:"operation_ids"`
-	Complete      bool     `json:"complete"`
-	CreatedTime   string   `json:"created_time"`
-	UpdatedTime   string   `json:"updated_time"`
-	CompletedTime string   `json:"completed_time"`
+	Path          string                   `json:"path"`
+	Version       int                      `json:"version"`
+	OperationIDs  []string                 `json:"operation_ids"`
+	Operations    []enqueueIntentOperation `json:"operations"`
+	Complete      bool                     `json:"complete"`
+	CreatedTime   string                   `json:"created_time"`
+	UpdatedTime   string                   `json:"updated_time"`
+	CompletedTime string                   `json:"completed_time"`
+}
+
+type enqueueIntentOperation struct {
+	ID             string               `json:"id"`
+	Type           outbox.OperationType `json:"type"`
+	AssociationID  string               `json:"association_id"`
+	ObjectID       string               `json:"object_id"`
+	DestinationRef string               `json:"destination_ref"`
 }
 
 type outboxRecord struct {

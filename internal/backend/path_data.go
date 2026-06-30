@@ -93,7 +93,7 @@ func pathDataWrite(ctx context.Context, req *logical.Request, data *framework.Fi
 	nextVersion := metadata.CurrentVersion + 1
 	now := nowUTC().Format(timeFormatRFC3339)
 	operations, operationIDs := newAssociationOutboxRecords(associations, nextVersion, now)
-	if err := putPendingEnqueueIntent(ctx, req.Storage, path, nextVersion, operationIDs, now); err != nil {
+	if err := putPendingEnqueueIntent(ctx, req.Storage, path, nextVersion, operations, now); err != nil {
 		return nil, err
 	}
 
@@ -108,7 +108,7 @@ func pathDataWrite(ctx context.Context, req *logical.Request, data *framework.Fi
 	if err := putOutboxRecords(ctx, req.Storage, operations); err != nil {
 		return nil, err
 	}
-	if err := completeEnqueueIntent(ctx, req.Storage, path, nextVersion, operationIDs, now); err != nil {
+	if err := completeEnqueueIntent(ctx, req.Storage, path, nextVersion, operations, now); err != nil {
 		return nil, err
 	}
 
@@ -318,13 +318,13 @@ func putPendingEnqueueIntent(
 	storage logical.Storage,
 	path string,
 	version int,
-	operationIDs []string,
+	operations []outboxRecord,
 	now string,
 ) error {
-	if len(operationIDs) == 0 {
+	if len(operations) == 0 {
 		return nil
 	}
-	return putEnqueueIntent(ctx, storage, newEnqueueIntentRecord(path, version, operationIDs, now))
+	return putEnqueueIntent(ctx, storage, newEnqueueIntentRecord(path, version, operations, now))
 }
 
 func putOutboxRecords(ctx context.Context, storage logical.Storage, operations []outboxRecord) error {
@@ -341,13 +341,13 @@ func completeEnqueueIntent(
 	storage logical.Storage,
 	path string,
 	version int,
-	operationIDs []string,
+	operations []outboxRecord,
 	now string,
 ) error {
-	if len(operationIDs) == 0 {
+	if len(operations) == 0 {
 		return nil
 	}
-	intent := newEnqueueIntentRecord(path, version, operationIDs, now)
+	intent := newEnqueueIntentRecord(path, version, operations, now)
 	intent.Complete = true
 	intent.CompletedTime = now
 	intent.UpdatedTime = now
@@ -361,14 +361,37 @@ func syncStateForOperationIDs(operationIDs []string) domain.SyncState {
 	return domain.SyncStateUnknown
 }
 
-func newEnqueueIntentRecord(path string, version int, operationIDs []string, now string) enqueueIntentRecord {
+func newEnqueueIntentRecord(path string, version int, operations []outboxRecord, now string) enqueueIntentRecord {
 	return enqueueIntentRecord{
 		Path:         path,
 		Version:      version,
-		OperationIDs: operationIDs,
+		OperationIDs: outboxOperationIDs(operations),
+		Operations:   enqueueIntentOperations(operations),
 		CreatedTime:  now,
 		UpdatedTime:  now,
 	}
+}
+
+func outboxOperationIDs(operations []outboxRecord) []string {
+	ids := make([]string, 0, len(operations))
+	for _, operation := range operations {
+		ids = append(ids, operation.ID)
+	}
+	return ids
+}
+
+func enqueueIntentOperations(operations []outboxRecord) []enqueueIntentOperation {
+	intentOperations := make([]enqueueIntentOperation, 0, len(operations))
+	for _, operation := range operations {
+		intentOperations = append(intentOperations, enqueueIntentOperation{
+			ID:             operation.ID,
+			Type:           operation.Type,
+			AssociationID:  operation.AssociationID,
+			ObjectID:       operation.ObjectID,
+			DestinationRef: operation.DestinationRef,
+		})
+	}
+	return intentOperations
 }
 
 func newAssociationOutboxRecord(association associationRecord, version int, now string) outboxRecord {

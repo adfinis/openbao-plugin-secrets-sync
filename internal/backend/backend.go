@@ -80,7 +80,11 @@ func (b *secretSyncBackend) periodic(ctx context.Context, req *logical.Request) 
 	if cfg.Disabled {
 		return nil
 	}
-	return processDueFakeOutbox(ctx, req.Storage, nowUTC())
+	now := nowUTC()
+	if err := recoverIncompleteEnqueueIntents(ctx, req.Storage, now); err != nil {
+		return err
+	}
+	return processDueFakeOutbox(ctx, req.Storage, now)
 }
 
 func nowUTC() time.Time {
