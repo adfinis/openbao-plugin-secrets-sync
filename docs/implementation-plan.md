@@ -12,6 +12,7 @@ Implemented backend slices now include:
 - destination registry with redacted reads, validation, health, and a fake
   provider;
 - provider-agnostic dispatch through the provider registry;
+- provider conformance harness with fake provider coverage;
 - association creation, planning, deletion, source eligibility checks, name
   reservations, and template rendering;
 - per-association disable, enable, and manual sync controls;
@@ -21,7 +22,9 @@ Implemented backend slices now include:
 - provider delete dispatch for durable delete operations;
 - automatic retry for `rate_limit` and `unavailable` provider errors with a
   bounded retry budget;
-- status records with payload hashes and no secret payload disclosure.
+- status records with payload hashes and no secret payload disclosure;
+- AWS Secrets Manager provider scaffold with type, capabilities, validation,
+  and conformance smoke coverage, not yet backend-registered.
 
 ## MVP Scope
 
@@ -157,6 +160,8 @@ Exit criteria:
 
 Tasks:
 
+- Extend the provider conformance harness with AWS-specific mocked client
+  cases.
 - Implement AWS auth options, preferring workload identity and role assumption.
 - Implement upsert, delete, read-state, and health.
 - Add ownership tags.

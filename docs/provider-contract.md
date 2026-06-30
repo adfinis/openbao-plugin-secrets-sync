@@ -286,6 +286,25 @@ plain `internal` errors are terminal for now. Validation, authentication,
 authorization, ownership, collision, and provider policy errors should remain
 terminal until configuration changes.
 
+## Provider Conformance Tests
+
+Every provider package should use the shared provider conformance harness before
+it is registered in the backend. The harness is not a replacement for
+provider-specific tests, but it locks down the common contract:
+
+- stable non-empty provider type;
+- declared capability bits and payload limits;
+- destination validation error classes;
+- health diagnostics;
+- plan action mapping;
+- upsert and delete success results where implemented;
+- read-state behavior where implemented;
+- provider error-class mapping for retry and terminal failures.
+
+New providers may start with only type, capability, validation, health, and
+plan checks. Backend registration should wait until upsert, owned delete, and
+error classification are implemented for the provider.
+
 ## Provider MVP Choices
 
 ### Fake Provider
@@ -305,6 +324,11 @@ combinations needed by unit and integration tests, including:
 
 AWS Secrets Manager is a strong MVP provider because it has common customer
 demand and a useful ownership model through tags and version metadata.
+
+Current status: package scaffold exists with provider type `aws-sm`, conservative
+capabilities, basic destination-name validation, and conformance smoke tests.
+It is not registered in the backend until the SDK-backed client implements
+health, plan, upsert, owned delete, read-state, and AWS error classification.
 
 Required implementation behavior:
 
