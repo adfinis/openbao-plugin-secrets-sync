@@ -3,6 +3,7 @@ package backend
 import (
 	"context"
 
+	"github.com/adfinis/openbao-secret-sync/internal/domain"
 	"github.com/openbao/openbao/sdk/v2/framework"
 	"github.com/openbao/openbao/sdk/v2/logical"
 )
@@ -23,14 +24,41 @@ func pathStatus(_ *secretSyncBackend) *framework.Path {
 			},
 		},
 		HelpSynopsis:    "Inspect source path sync status.",
-		HelpDescription: "Returns scaffolded status until per-object status records are implemented.",
+		HelpDescription: "Returns current source version and pending sync operation identifiers.",
 	}
 }
 
-func pathStatusRead(_ context.Context, _ *logical.Request, data *framework.FieldData) (*logical.Response, error) {
+func pathStatusRead(ctx context.Context, req *logical.Request, data *framework.FieldData) (*logical.Response, error) {
+	path, err := normalizeSourcePath(data.Get("path").(string))
+	if err != nil {
+		return logical.ErrorResponse(err.Error()), nil
+	}
+	metadata, err := getMetadata(ctx, req.Storage, path)
+	if err != nil {
+		return nil, err
+	}
+	if metadata == nil {
+		return &logical.Response{Data: newResponseData(
+			responseField("path", path),
+			responseField("state", string(domain.SyncStateUnknown)),
+			responseField("operation_ids", []string{}),
+			responseField("objects", []string{}),
+		)}, nil
+	}
+
+	operationIDs, err := listOutboxIDsForPath(ctx, req.Storage, path)
+	if err != nil {
+		return nil, err
+	}
+	state := domain.SyncStateUnknown
+	if len(operationIDs) > 0 {
+		state = domain.SyncStatePending
+	}
 	return &logical.Response{Data: newResponseData(
-		responseField("path", data.Get("path").(string)),
-		responseField("state", "UNKNOWN"),
+		responseField("path", path),
+		responseField("version", metadata.CurrentVersion),
+		responseField("state", string(state)),
+		responseField("operation_ids", operationIDs),
 		responseField("objects", []string{}),
 	)}, nil
 }

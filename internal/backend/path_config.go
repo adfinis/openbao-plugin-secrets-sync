@@ -2,6 +2,7 @@ package backend
 
 import (
 	"context"
+	"fmt"
 
 	"github.com/openbao/openbao/sdk/v2/framework"
 	"github.com/openbao/openbao/sdk/v2/logical"
@@ -42,20 +43,8 @@ func pathConfig(_ *secretSyncBackend) *framework.Path {
 }
 
 func pathConfigRead(ctx context.Context, req *logical.Request, _ *framework.FieldData) (*logical.Response, error) {
-	entry, err := req.Storage.Get(ctx, configPath)
+	cfg, err := readGlobalConfig(ctx, req.Storage)
 	if err != nil {
-		return nil, err
-	}
-	if entry == nil {
-		return &logical.Response{Data: newResponseData(
-			responseField("disabled", false),
-			responseField("restore_guard", true),
-			responseField("queue_capacity", 1000),
-		)}, nil
-	}
-
-	var cfg globalConfig
-	if err := entry.DecodeJSON(&cfg); err != nil {
 		return nil, err
 	}
 	return &logical.Response{Data: newResponseData(
@@ -66,15 +55,27 @@ func pathConfigRead(ctx context.Context, req *logical.Request, _ *framework.Fiel
 }
 
 func pathConfigWrite(ctx context.Context, req *logical.Request, data *framework.FieldData) (*logical.Response, error) {
-	cfg := globalConfig{
-		Disabled:      data.Get("disabled").(bool),
-		RestoreGuard:  data.Get("restore_guard").(bool),
-		QueueCapacity: data.Get("queue_capacity").(int),
-		UpdatedTime:   nowUTC().Format(timeFormatRFC3339),
+	cfg, err := readGlobalConfig(ctx, req.Storage)
+	if err != nil {
+		return nil, err
+	}
+	if value, ok := data.GetOk("disabled"); ok {
+		cfg.Disabled = value.(bool)
+	}
+	if value, ok := data.GetOk("restore_guard"); ok {
+		cfg.RestoreGuard = value.(bool)
+	}
+	if value, ok := data.GetOk("queue_capacity"); ok {
+		queueCapacity := value.(int)
+		if queueCapacity < 0 {
+			return logical.ErrorResponse("queue_capacity must be greater than or equal to zero"), nil
+		}
+		cfg.QueueCapacity = queueCapacity
 	}
 	if cfg.QueueCapacity == 0 {
-		cfg.QueueCapacity = 1000
+		cfg.QueueCapacity = defaultQueueCapacity
 	}
+	cfg.UpdatedTime = nowUTC().Format(timeFormatRFC3339)
 	entry, err := logical.StorageEntryJSON(configPath, cfg)
 	if err != nil {
 		return nil, err
@@ -83,6 +84,34 @@ func pathConfigWrite(ctx context.Context, req *logical.Request, data *framework.
 		return nil, err
 	}
 	return nil, nil
+}
+
+func readGlobalConfig(ctx context.Context, storage logical.Storage) (globalConfig, error) {
+	entry, err := storage.Get(ctx, configPath)
+	if err != nil {
+		return globalConfig{}, err
+	}
+	if entry == nil {
+		return defaultGlobalConfig(), nil
+	}
+	var cfg globalConfig
+	if err := entry.DecodeJSON(&cfg); err != nil {
+		return globalConfig{}, err
+	}
+	if cfg.QueueCapacity < 0 {
+		return globalConfig{}, fmt.Errorf("stored queue_capacity must be greater than or equal to zero")
+	}
+	if cfg.QueueCapacity == 0 {
+		cfg.QueueCapacity = defaultQueueCapacity
+	}
+	return cfg, nil
+}
+
+func defaultGlobalConfig() globalConfig {
+	return globalConfig{
+		RestoreGuard:  true,
+		QueueCapacity: defaultQueueCapacity,
+	}
 }
 
 type globalConfig struct {
