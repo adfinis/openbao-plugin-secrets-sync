@@ -2,6 +2,7 @@ package backend
 
 import (
 	"context"
+	"strconv"
 	"strings"
 
 	"github.com/openbao/openbao/sdk/v2/logical"
@@ -33,6 +34,18 @@ func putMetadata(ctx context.Context, storage logical.Storage, path string, meta
 	return storage.Put(ctx, entry)
 }
 
+func deleteMetadata(ctx context.Context, storage logical.Storage, path string) error {
+	return storage.Delete(ctx, metadataStorageKey(path))
+}
+
+func listMetadataKeys(ctx context.Context, storage logical.Storage, prefix string) ([]string, error) {
+	storagePrefix := metadataStoragePrefix
+	if prefix != "" {
+		storagePrefix += prefix + "/"
+	}
+	return storage.List(ctx, storagePrefix)
+}
+
 func getVersion(ctx context.Context, storage logical.Storage, path string, version int) (*versionRecord, error) {
 	entry, err := storage.Get(ctx, versionStorageKey(path, version))
 	if err != nil {
@@ -54,6 +67,40 @@ func putVersion(ctx context.Context, storage logical.Storage, path string, recor
 		return err
 	}
 	return storage.Put(ctx, entry)
+}
+
+func deleteVersion(ctx context.Context, storage logical.Storage, path string, version int) error {
+	return storage.Delete(ctx, versionStorageKey(path, version))
+}
+
+func listVersionKeys(ctx context.Context, storage logical.Storage, path string) ([]string, error) {
+	return storage.List(ctx, versionStoragePrefix+path+"/versions/")
+}
+
+func deleteSourcePath(ctx context.Context, storage logical.Storage, path string) error {
+	versionKeys, err := listVersionKeys(ctx, storage, path)
+	if err != nil {
+		return err
+	}
+	for _, versionKey := range versionKeys {
+		version, err := strconv.Atoi(versionKey)
+		if err != nil {
+			return err
+		}
+		if err := deleteVersion(ctx, storage, path, version); err != nil {
+			return err
+		}
+	}
+	statusRecords, err := listStatusRecordsForPath(ctx, storage, path)
+	if err != nil {
+		return err
+	}
+	for _, record := range statusRecords {
+		if err := deleteStatus(ctx, storage, record); err != nil {
+			return err
+		}
+	}
+	return deleteMetadata(ctx, storage, path)
 }
 
 func putEnqueueIntent(ctx context.Context, storage logical.Storage, record enqueueIntentRecord) error {
@@ -331,6 +378,10 @@ func putStatus(ctx context.Context, storage logical.Storage, record statusRecord
 		return err
 	}
 	return storage.Put(ctx, entry)
+}
+
+func deleteStatus(ctx context.Context, storage logical.Storage, record statusRecord) error {
+	return storage.Delete(ctx, statusStorageKey(record.Path, record.AssociationID, record.ObjectID))
 }
 
 func getStatus(

@@ -170,8 +170,40 @@ func pathDataRead(ctx context.Context, req *logical.Request, data *framework.Fie
 	)}, nil
 }
 
-func pathDataDelete(_ context.Context, _ *logical.Request, _ *framework.FieldData) (*logical.Response, error) {
-	return logical.ErrorResponse("data delete is scaffolded; KV and remote delete policy implementation pending"), nil
+func pathDataDelete(ctx context.Context, req *logical.Request, data *framework.FieldData) (*logical.Response, error) {
+	path, err := normalizeSourcePath(data.Get("path").(string))
+	if err != nil {
+		return logical.ErrorResponse(err.Error()), nil
+	}
+	metadata, err := getMetadata(ctx, req.Storage, path)
+	if err != nil {
+		return nil, err
+	}
+	if metadata == nil || metadata.CurrentVersion == 0 {
+		return nil, nil
+	}
+	record, err := getVersion(ctx, req.Storage, path, metadata.CurrentVersion)
+	if err != nil {
+		return nil, err
+	}
+	if record == nil || record.Destroyed || record.DeletionTime != "" {
+		return nil, nil
+	}
+
+	now := nowUTC().Format(timeFormatRFC3339)
+	record.DeletionTime = now
+	if err := putVersion(ctx, req.Storage, path, *record); err != nil {
+		return nil, err
+	}
+	versionKey := versionMetadataKey(record.Version)
+	version := metadata.Versions[versionKey]
+	version.DeletionTime = now
+	metadata.Versions[versionKey] = version
+	metadata.UpdatedTime = now
+	if err := putMetadata(ctx, req.Storage, path, *metadata); err != nil {
+		return nil, err
+	}
+	return nil, nil
 }
 
 func payloadFromField(data *framework.FieldData) (secretPayload, error) {

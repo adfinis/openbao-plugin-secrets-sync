@@ -41,6 +41,7 @@ func Backend(_ *logical.BackendConfig) *secretSyncBackend {
 			[]*framework.Path{pathConfig(&b)},
 			pathDestinations(&b),
 			pathAssociations(&b),
+			pathMetadata(&b),
 			[]*framework.Path{pathData(&b), pathStatus(&b), pathQueue(&b)},
 		),
 		Invalidate: func(_ context.Context, _ string) {

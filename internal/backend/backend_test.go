@@ -144,6 +144,83 @@ func TestDataWriteReadAndQueueStatus(t *testing.T) {
 	}
 }
 
+func TestMetadataReadListAndSoftDelete(t *testing.T) {
+	b := Backend(&logical.BackendConfig{})
+	storage := &logical.InmemStorage{}
+
+	writeAppDBSecret(t, b, storage, "initial")
+	resp := handleRequest(t, b, storage, logical.UpdateOperation, "data/app/api", map[string]interface{}{
+		"data": map[string]interface{}{
+			"password": "api",
+		},
+	})
+	assertNoErrorResponse(t, resp)
+
+	listResp := handleRequest(t, b, storage, logical.ListOperation, "metadata/app", nil)
+	assertNoErrorResponse(t, listResp)
+	keys := listResp.Data["keys"].([]string)
+	if !hasKey(keys, "db") || !hasKey(keys, "api") {
+		t.Fatalf("metadata keys = %v, want db and api", keys)
+	}
+
+	metadataResp := handleRequest(t, b, storage, logical.ReadOperation, "metadata/app/db", nil)
+	assertNoErrorResponse(t, metadataResp)
+	if got := metadataResp.Data["current_version"]; got != 1 {
+		t.Fatalf("current version = %v, want 1", got)
+	}
+
+	deleteResp := handleRequest(t, b, storage, logical.DeleteOperation, "data/app/db", nil)
+	if deleteResp != nil && deleteResp.IsError() {
+		t.Fatalf("unexpected data delete error: %v", deleteResp.Error())
+	}
+	readDeletedResp := handleRequest(t, b, storage, logical.ReadOperation, "data/app/db", nil)
+	if readDeletedResp != nil {
+		t.Fatalf("soft-deleted data response = %#v, want nil", readDeletedResp)
+	}
+	metadataResp = handleRequest(t, b, storage, logical.ReadOperation, "metadata/app/db", nil)
+	assertNoErrorResponse(t, metadataResp)
+	versions := metadataResp.Data["versions"].(map[string]versionMetadata)
+	if versions["1"].DeletionTime == "" {
+		t.Fatal("metadata version deletion_time must be set after soft delete")
+	}
+}
+
+func TestMetadataDeleteRequiresAssociationRemoval(t *testing.T) {
+	b := Backend(&logical.BackendConfig{})
+	storage := &logical.InmemStorage{}
+
+	writeAppDBSecret(t, b, storage, "initial")
+	createFakeDestination(t, b, storage, "default")
+	associationResp := createDefaultFakeAssociation(t, b, storage)
+	associationID := associationIDFromResponse(t, associationResp)
+
+	blockedResp := handleRequest(t, b, storage, logical.DeleteOperation, "metadata/app/db", nil)
+	if blockedResp == nil || !blockedResp.IsError() {
+		t.Fatalf("metadata delete with association response = %#v, want error", blockedResp)
+	}
+
+	deleteAssociationResp := handleRequest(
+		t,
+		b,
+		storage,
+		logical.DeleteOperation,
+		"associations/app/db/"+associationID,
+		nil,
+	)
+	if deleteAssociationResp != nil && deleteAssociationResp.IsError() {
+		t.Fatalf("unexpected association delete error: %v", deleteAssociationResp.Error())
+	}
+
+	deleteMetadataResp := handleRequest(t, b, storage, logical.DeleteOperation, "metadata/app/db", nil)
+	if deleteMetadataResp != nil && deleteMetadataResp.IsError() {
+		t.Fatalf("unexpected metadata delete error: %v", deleteMetadataResp.Error())
+	}
+	readResp := handleRequest(t, b, storage, logical.ReadOperation, "metadata/app/db", nil)
+	if readResp != nil {
+		t.Fatalf("deleted metadata response = %#v, want nil", readResp)
+	}
+}
+
 func TestAssociationCreateQueuesCurrentVersion(t *testing.T) {
 	b := Backend(&logical.BackendConfig{})
 	storage := &logical.InmemStorage{}
@@ -409,6 +486,29 @@ func operationIDsFromResponse(t *testing.T, resp *logical.Response) []string {
 		t.Fatalf("sync_operation_ids = %T, want []string", resp.Data["sync_operation_ids"])
 	}
 	return rawIDs
+}
+
+func associationIDFromResponse(t *testing.T, resp *logical.Response) string {
+	t.Helper()
+	assertNoErrorResponse(t, resp)
+	association, ok := resp.Data["association"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("association = %T, want map[string]interface{}", resp.Data["association"])
+	}
+	id, ok := association["id"].(string)
+	if !ok || id == "" {
+		t.Fatalf("association id = %v, want non-empty string", association["id"])
+	}
+	return id
+}
+
+func hasKey(keys []string, expected string) bool {
+	for _, key := range keys {
+		if key == expected {
+			return true
+		}
+	}
+	return false
 }
 
 func writeAppDBSecret(
