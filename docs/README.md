@@ -46,6 +46,8 @@ and operator diagnostics are OpenBao-native and plugin-first.
   strategy, and open decisions.
 - [LocalStack e2e workflow](../test/e2e/localstack/README.md) - self-contained
   OpenBao plus LocalStack test stack for AWS Secrets Manager sync behavior.
+- [Kind e2e workflow](../test/e2e/kind/README.md) - self-contained OpenBao
+  plus kind test stack for Kubernetes Secrets sync behavior.
 - [Manual AWS e2e workflow](../test/e2e/aws/README.md) - opt-in real AWS
   sandbox test with OpenTofu-managed IAM fixtures.
 

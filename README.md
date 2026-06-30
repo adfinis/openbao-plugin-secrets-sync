@@ -30,10 +30,11 @@ make test
 make build
 ```
 
-The self-contained OpenBao plus LocalStack e2e path is available with:
+The self-contained e2e paths are available with:
 
 ```sh
 make test-e2e
+make test-e2e-kind
 ```
 
 The project follows the tool and CI layout used by the OpenBao Kubernetes KMS

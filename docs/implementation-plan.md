@@ -39,6 +39,10 @@ Implemented backend slices now include:
 - self-contained OpenBao plus LocalStack e2e coverage for plugin registration,
   mounting, AWS destination configuration, queue drain, create, update, delete,
   ownership tags, and status transitions.
+- self-contained OpenBao plus kind e2e coverage for plugin registration,
+  mounting, in-cluster Kubernetes auth, destination validation, health,
+  queue drain, create, update, reconcile/read-state, delete, ownership labels,
+  and payload metadata.
 
 ## MVP Scope
 
@@ -74,6 +78,8 @@ Implemented backend slices now include:
   provider.
 - Self-contained e2e test against OpenBao dev mode and LocalStack-backed AWS
   Secrets Manager.
+- Self-contained e2e test against OpenBao dev mode in kind and Kubernetes
+  Secrets.
 
 ### Should Have
 
@@ -242,8 +248,8 @@ Exit criteria:
 - unit-level delete mode works;
 - drift and ownership status are visible;
 - Kubernetes auth and policy errors map to stable classes;
-- envtest or kind-backed integration proves the provider against a real API
-  server.
+- kind-backed integration proves the provider against a real API server using
+  in-cluster auth.
 
 ## Phase 5: Hardening
 

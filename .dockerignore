@@ -13,5 +13,14 @@
 !internal/*.go
 !internal/**/*.go
 
+!bin/
+!bin/e2e/
+!bin/e2e/openbao-plugin-secrets-sync
+
+!test/
+!test/e2e/
+!test/e2e/kind/
+!test/e2e/kind/Dockerfile
+
 **/.DS_Store
 **/artifacts/**
