@@ -11,6 +11,7 @@ import (
 	"github.com/adfinis/openbao-secret-sync/internal/providers"
 	"github.com/adfinis/openbao-secret-sync/internal/providers/awssecretsmanager"
 	"github.com/adfinis/openbao-secret-sync/internal/providers/fake"
+	"github.com/adfinis/openbao-secret-sync/internal/providers/gitlab"
 	"github.com/adfinis/openbao-secret-sync/internal/providers/kubernetessecrets"
 	"github.com/adfinis/openbao-secret-sync/internal/version"
 	"github.com/openbao/openbao/sdk/v2/framework"
@@ -37,6 +38,7 @@ func Backend(_ *logical.BackendConfig) *secretSyncBackend {
 		providerRegistry: providers.MustNewRegistry(
 			fake.Provider{},
 			awssecretsmanager.New(),
+			gitlab.New(),
 			kubernetessecrets.New(),
 		),
 		observer: observability.New(),

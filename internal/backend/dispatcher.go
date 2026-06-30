@@ -433,6 +433,15 @@ func buildCanonicalPayloadForObject(
 		default:
 			return payloadpkg.CanonicalPayload{}, fmt.Errorf("unsupported granularity %q", granularity)
 		}
+	case rawAssociationFormat:
+		if granularity != syncGranularitySecretKey {
+			return payloadpkg.CanonicalPayload{}, fmt.Errorf("raw payload format requires secret-key granularity")
+		}
+		value, ok := data[objectID]
+		if !ok {
+			return payloadpkg.CanonicalPayload{}, fmt.Errorf("source key %q does not exist", objectID)
+		}
+		return payloadpkg.BuildRaw(value)
 	default:
 		return payloadpkg.CanonicalPayload{}, fmt.Errorf("unsupported payload format %q", format)
 	}

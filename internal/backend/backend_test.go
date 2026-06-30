@@ -11,6 +11,7 @@ import (
 	"github.com/adfinis/openbao-secret-sync/internal/outbox"
 	"github.com/adfinis/openbao-secret-sync/internal/providers"
 	"github.com/adfinis/openbao-secret-sync/internal/providers/awssecretsmanager"
+	"github.com/adfinis/openbao-secret-sync/internal/providers/gitlab"
 	"github.com/adfinis/openbao-secret-sync/internal/providers/kubernetessecrets"
 	"github.com/openbao/openbao/sdk/v2/logical"
 )
@@ -209,6 +210,75 @@ func TestKubernetesDestinationConfigLifecycle(t *testing.T) {
 	capabilities := validateResp.Data["capabilities"].(map[string]interface{})
 	if got := capabilities["supports_value_readback"]; got != true {
 		t.Fatalf("k8s supports_value_readback = %v, want true", got)
+	}
+}
+
+func TestGitLabDestinationConfigLifecycle(t *testing.T) {
+	b := Backend(&logical.BackendConfig{})
+	storage := &logical.InmemStorage{}
+
+	writeResp := handleRequest(t, b, storage, logical.UpdateOperation, "destinations/gitlab/prod", map[string]interface{}{
+		"description":                    "gitlab production",
+		gitlab.ConfigKeyBaseURL:          "https://gitlab.example.com",
+		gitlab.ConfigKeyProjectID:        "platform/app",
+		gitlab.ConfigKeyEnvironmentScope: "production",
+		gitlab.ConfigKeyProtected:        "true",
+		gitlab.ConfigKeyMasked:           "false",
+		gitlab.ConfigKeyHidden:           "false",
+		gitlab.ConfigKeyVariableRaw:      "true",
+		gitlab.ConfigKeyVariableType:     gitlab.VariableTypeEnvVar,
+		gitlab.ConfigKeyToken:            "glpat-secret",
+	})
+	if writeResp != nil && writeResp.IsError() {
+		t.Fatalf("unexpected destination write error: %v", writeResp.Error())
+	}
+
+	storedDestination, err := getDestination(context.Background(), storage, gitlab.ProviderType, "prod")
+	if err != nil {
+		t.Fatalf("read stored gitlab destination: %v", err)
+	}
+	if _, ok := storedDestination.Config[gitlab.ConfigKeyToken]; ok {
+		t.Fatal("gitlab token must not be stored in destination config")
+	}
+	if got := storedDestination.Config[gitlab.ConfigKeyProjectID]; got != "platform/app" {
+		t.Fatalf("gitlab project_id = %v, want platform/app", got)
+	}
+	storedSensitiveConfig, err := getDestinationSensitiveConfig(
+		context.Background(),
+		storage,
+		gitlab.ProviderType,
+		"prod",
+	)
+	if err != nil {
+		t.Fatalf("read gitlab sensitive config: %v", err)
+	}
+	if got := storedSensitiveConfig.Config[gitlab.ConfigKeyToken]; got != "glpat-secret" {
+		t.Fatalf("stored gitlab token = %v, want glpat-secret", got)
+	}
+
+	readResp := handleRequest(t, b, storage, logical.ReadOperation, "destinations/gitlab/prod", nil)
+	assertNoErrorResponse(t, readResp)
+	config := readResp.Data["config"].(map[string]interface{})
+	if _, ok := config[gitlab.ConfigKeyToken]; ok {
+		t.Fatal("gitlab token must not be returned in config")
+	}
+	sensitiveConfig := readResp.Data["sensitive_config"].(map[string]interface{})
+	if got := sensitiveConfig["configured"]; got != true {
+		t.Fatalf("gitlab sensitive_config configured = %v, want true", got)
+	}
+	keys := sensitiveConfig["keys"].([]string)
+	if len(keys) != 1 || keys[0] != gitlab.ConfigKeyToken {
+		t.Fatalf("gitlab sensitive keys = %v, want [%s]", keys, gitlab.ConfigKeyToken)
+	}
+
+	validateResp := handleRequest(t, b, storage, logical.UpdateOperation, "destinations/gitlab/prod/validate", nil)
+	assertNoErrorResponse(t, validateResp)
+	if got := validateResp.Data["valid"]; got != true {
+		t.Fatalf("gitlab validation valid = %v, want true", got)
+	}
+	capabilities := validateResp.Data["capabilities"].(map[string]interface{})
+	if got := capabilities["supports_secret_key"]; got != true {
+		t.Fatalf("gitlab supports_secret_key = %v, want true", got)
 	}
 }
 
@@ -865,6 +935,99 @@ func TestAssociationSecretKeyQueuesAndSyncsPerSourceKey(t *testing.T) {
 		t.Fatalf("secret-key update operation IDs = %v, want two operations", updateOperationIDs)
 	}
 	assertOperationObjectIDs(t, storage, updateOperationIDs, 2, outboxStatePending, []string{"password", "username"})
+}
+
+func TestAssociationSecretKeyRawFormat(t *testing.T) {
+	b := Backend(&logical.BackendConfig{})
+	storage := &logical.InmemStorage{}
+
+	writeAppDBSecretData(t, b, storage, map[string]interface{}{
+		"PASSWORD": "initial",
+	})
+	createFakeDestination(t, b, storage, "default")
+	markAppDBSyncable(t, b, storage)
+
+	resp := handleRequest(t, b, storage, logical.UpdateOperation, "associations/app/db/plan", map[string]interface{}{
+		"destination_type": providerTypeFake,
+		"destination_name": "default",
+		"name_template":    "{{ key }}",
+		"granularity":      syncGranularitySecretKey,
+		"format":           rawAssociationFormat,
+	})
+	assertNoErrorResponse(t, resp)
+	objects := objectsByIDFromRaw(t, resp.Data["objects"])
+	object := objects["PASSWORD"]
+	if got := object["payload_bytes"]; got != len("initial") {
+		t.Fatalf("raw payload bytes = %v, want %d", got, len("initial"))
+	}
+	if got := object["payload_sha256"].(string); !strings.HasPrefix(got, "sha256:") {
+		t.Fatalf("raw payload sha = %q, want sha256 prefix", got)
+	}
+}
+
+func TestAssociationRawFormatRequiresSecretKey(t *testing.T) {
+	b := Backend(&logical.BackendConfig{})
+	storage := &logical.InmemStorage{}
+
+	writeAppDBSecretData(t, b, storage, map[string]interface{}{
+		"password": "initial",
+	})
+	createFakeDestination(t, b, storage, "default")
+	markAppDBSyncable(t, b, storage)
+
+	resp := handleRequest(t, b, storage, logical.UpdateOperation, "associations/app/db", map[string]interface{}{
+		"destination_type": providerTypeFake,
+		"destination_name": "default",
+		"resolved_name":    "prod/app/db",
+		"granularity":      syncGranularitySecretPath,
+		"format":           rawAssociationFormat,
+	})
+	if resp == nil || !resp.IsError() {
+		t.Fatalf("raw secret-path association response = %#v, want error", resp)
+	}
+}
+
+func TestAssociationGitLabSecretKeyRawFormat(t *testing.T) {
+	b := Backend(&logical.BackendConfig{})
+	storage := &logical.InmemStorage{}
+
+	writeAppDBSecretData(t, b, storage, map[string]interface{}{
+		"APP_PASSWORD": "initial",
+	})
+	writeResp := handleRequest(t, b, storage, logical.UpdateOperation, "destinations/gitlab/prod", map[string]interface{}{
+		gitlab.ConfigKeyProjectID:        "platform/app",
+		gitlab.ConfigKeyEnvironmentScope: "production",
+		gitlab.ConfigKeyToken:            "glpat-secret",
+	})
+	if writeResp != nil && writeResp.IsError() {
+		t.Fatalf("unexpected gitlab destination write error: %v", writeResp.Error())
+	}
+	markAppDBSyncable(t, b, storage)
+
+	resp := handleRequest(t, b, storage, logical.UpdateOperation, "associations/app/db", map[string]interface{}{
+		"destination_type": gitlab.ProviderType,
+		"destination_name": "prod",
+		"name_template":    "{{ key }}",
+		"granularity":      syncGranularitySecretKey,
+		"format":           rawAssociationFormat,
+		"delete_mode":      deleteModeRetain,
+	})
+	assertNoErrorResponse(t, resp)
+	operationIDs := operationIDsFromResponse(t, resp)
+	if len(operationIDs) != 1 {
+		t.Fatalf("gitlab operation IDs = %v, want one operation", operationIDs)
+	}
+	operation := assertOutboxOperation(t, storage, operationIDs[0], 1, outboxStatePending)
+	if got := operation.ObjectID; got != "APP_PASSWORD" {
+		t.Fatalf("gitlab object ID = %s, want APP_PASSWORD", got)
+	}
+	association := resp.Data["association"].(map[string]interface{})
+	if got := association["destination_ref"]; got != "gitlab/prod" {
+		t.Fatalf("gitlab destination_ref = %v, want gitlab/prod", got)
+	}
+	if got := association["format"]; got != rawAssociationFormat {
+		t.Fatalf("gitlab association format = %v, want %s", got, rawAssociationFormat)
+	}
 }
 
 func TestAssociationSecretKeyDeleteModeQueuesPerSourceKeyDeletes(t *testing.T) {

@@ -160,7 +160,7 @@ func associationRequestFields() map[string]*framework.FieldSchema {
 		},
 		"format": {
 			Type:        framework.TypeString,
-			Description: "Payload format. This phase supports json.",
+			Description: "Payload format: json or raw. Raw requires secret-key granularity.",
 		},
 		"delete_mode": {
 			Type:        framework.TypeString,
@@ -1133,8 +1133,8 @@ func validateAssociationNameReservation(
 }
 
 func validateAssociationCapabilities(capabilities providers.Capabilities, granularity string, format string) error {
-	if format != defaultAssociationFormat {
-		return fmt.Errorf("unsupported format %q", format)
+	if err := validateAssociationFormat(granularity, format); err != nil {
+		return err
 	}
 	switch granularity {
 	case syncGranularitySecretPath:
@@ -1149,6 +1149,20 @@ func validateAssociationCapabilities(capabilities providers.Capabilities, granul
 		return fmt.Errorf("unsupported granularity %q", granularity)
 	}
 	return nil
+}
+
+func validateAssociationFormat(granularity string, format string) error {
+	switch format {
+	case defaultAssociationFormat:
+		return nil
+	case rawAssociationFormat:
+		if granularity != syncGranularitySecretKey {
+			return fmt.Errorf("format %q requires secret-key granularity", rawAssociationFormat)
+		}
+		return nil
+	default:
+		return fmt.Errorf("unsupported format %q", format)
+	}
 }
 
 func validateDeleteMode(capabilities providers.Capabilities, deleteMode string) error {

@@ -148,6 +148,43 @@ bao write -force secret-sync/destinations/k8s/apps/validate
 bao read secret-sync/destinations/k8s/apps/health
 ```
 
+## Configure GitLab Project Variables
+
+The GitLab provider writes project-level CI/CD variables. Use a token with the
+least project scope needed to manage CI/CD variables:
+
+```sh
+bao write secret-sync/destinations/gitlab/prod \
+  project_id=platform/app \
+  environment_scope=production \
+  token="$GITLAB_TOKEN"
+```
+
+For self-managed GitLab, set `base_url`:
+
+```sh
+bao write secret-sync/destinations/gitlab/prod \
+  base_url=https://gitlab.example.com \
+  project_id=platform/app \
+  environment_scope=production \
+  protected=true \
+  variable_raw=true \
+  token="$GITLAB_TOKEN"
+```
+
+Sensitive fields are redacted and seal-wrapped:
+
+```sh
+bao read secret-sync/destinations/gitlab/prod
+```
+
+Validate and check health:
+
+```sh
+bao write -force secret-sync/destinations/gitlab/prod/validate
+bao read secret-sync/destinations/gitlab/prod/health
+```
+
 ## Write Source Data
 
 Mark a source path as syncable:
@@ -230,10 +267,26 @@ objects such as `prod/app/db/password` and `prod/app/db/username`. Source keys
 used with `secret-key` granularity must be non-empty, have no surrounding
 whitespace, and must not contain `/`, `.`, or `..`.
 
+For GitLab project variables, use `secret-key` with `format=raw` so each
+source key becomes one CI/CD variable value. GitLab variable keys may contain
+only letters, digits, and `_`, so choose a compatible template:
+
+```sh
+bao write secret-sync/associations/app/db \
+  destination_type=gitlab \
+  destination_name=prod \
+  name_template='APP_{{ key }}' \
+  granularity=secret-key \
+  format=raw \
+  delete_mode=delete
+```
+
 Current provider support:
 
 - `fake`: `secret-path` and `secret-key`.
 - `aws-sm`: `secret-path` only.
+- `gitlab`: `secret-path` and `secret-key`; `secret-key` with `format=raw` is
+  the recommended shape for CI/CD variables.
 - `k8s`: `secret-path` only.
 
 The write returns `sync_operation_ids`. Queue processing is asynchronous.

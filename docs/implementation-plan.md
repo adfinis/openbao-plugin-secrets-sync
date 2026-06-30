@@ -12,13 +12,15 @@ Implemented backend slices now include:
 - destination registry with redacted reads, validation, health, and a fake
   provider;
 - provider-agnostic dispatch through the provider registry;
-- provider conformance harness with fake, AWS Secrets Manager, and Kubernetes
-  Secrets coverage;
+- provider conformance harness with fake, AWS Secrets Manager, Kubernetes
+  Secrets, and GitLab project variable coverage;
 - association creation, planning, deletion, source eligibility checks, name
   reservations, and template rendering;
 - core `secret-key` granularity expansion for providers that advertise support,
   including per-key operation IDs, per-key status, per-key reconcile, and fake
   provider coverage;
+- `raw` payload format for `secret-key` associations with string or byte source
+  values;
 - per-association disable, enable, and manual sync controls;
 - association `delete_mode` with source-delete enqueue semantics;
 - durable outbox, enqueue-intent recovery, queue summary, operation read,
@@ -39,6 +41,10 @@ Implemented backend slices now include:
   Kubernetes error classification, ownership labels and annotations,
   destination config for in-cluster and kubeconfig auth, and backend
   registration.
+- GitLab project variable provider with type, capabilities, validation,
+  standard HTTP client boundary, mocked plan/upsert/delete/read-state/health
+  behavior, HTTP error classification, ownership metadata in variable
+  descriptions, seal-wrapped API token config, and backend registration.
 - self-contained OpenBao plus LocalStack e2e coverage for plugin registration,
   mounting, AWS destination configuration, queue drain, create, update, delete,
   ownership tags, and status transitions.
@@ -61,6 +67,7 @@ Implemented backend slices now include:
 - Fake provider for local and integration testing.
 - AWS Secrets Manager provider.
 - Kubernetes Secret provider.
+- GitLab project variable provider.
 - Durable outbox and enqueue-intent recovery.
 - Periodic retry.
 - Manual sync.
@@ -91,12 +98,12 @@ Implemented backend slices now include:
 - OpenBao/plugin telemetry integration, with a metrics endpoint only as a
   fallback if runtime telemetry cannot expose plugin OTel instruments.
 - Provider-specific local integration using localstack, envtest, or kind.
+- Opt-in real GitLab project variable e2e test.
 - Structured runbook examples.
 
 ### Later
 
 - GitHub Actions provider.
-- GitLab CI/CD provider.
 - Azure Key Vault provider.
 - GCP Secret Manager provider.
 - UI integration.
@@ -360,8 +367,8 @@ authorized association, durable intent, and allowed provider capability.
 - Should local secret versions be seal-wrapped by default, or only destination
   credentials?
 - What is the best default mount name: `sync-kv`, `secrets-sync`, or `kv-sync`?
-- Should GitHub Actions, GitHub variables, or GitLab CI/CD variables be the
-  next provider after Kubernetes?
+- Should GitHub Actions, GitHub variables, Azure Key Vault, or GCP Secret
+  Manager follow GitLab project variables?
 - Should destination provider plugins become separate binaries later, or remain
   packages in the same plugin binary?
 - How should telemetry from an external plugin integrate with OpenBao telemetry

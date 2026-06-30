@@ -7,6 +7,7 @@ import (
 
 	"github.com/adfinis/openbao-secret-sync/internal/providers"
 	"github.com/adfinis/openbao-secret-sync/internal/providers/awssecretsmanager"
+	"github.com/adfinis/openbao-secret-sync/internal/providers/gitlab"
 	"github.com/adfinis/openbao-secret-sync/internal/providers/kubernetessecrets"
 	"github.com/openbao/openbao/sdk/v2/framework"
 	"github.com/openbao/openbao/sdk/v2/logical"
@@ -19,6 +20,14 @@ var destinationConfigFieldKeys = []string{
 	awssecretsmanager.ConfigKeyAuthMode,
 	awssecretsmanager.ConfigKeyRoleARN,
 	awssecretsmanager.ConfigKeySessionName,
+	gitlab.ConfigKeyBaseURL,
+	gitlab.ConfigKeyProjectID,
+	gitlab.ConfigKeyEnvironmentScope,
+	gitlab.ConfigKeyProtected,
+	gitlab.ConfigKeyMasked,
+	gitlab.ConfigKeyHidden,
+	gitlab.ConfigKeyVariableRaw,
+	gitlab.ConfigKeyVariableType,
 	kubernetessecrets.ConfigKeyNamespace,
 	kubernetessecrets.ConfigKeyKubeconfigPath,
 	kubernetessecrets.ConfigKeyKubeContext,
@@ -29,6 +38,7 @@ var destinationSensitiveConfigFieldKeys = []string{
 	awssecretsmanager.ConfigKeyAccessKeyID,
 	awssecretsmanager.ConfigKeySecretAccessKey,
 	awssecretsmanager.ConfigKeySessionToken,
+	gitlab.ConfigKeyToken,
 }
 
 func pathDestinations(b *secretSyncBackend) []*framework.Path {
@@ -161,6 +171,45 @@ func destinationRequestFields() map[string]*framework.FieldSchema {
 	fields[awssecretsmanager.ConfigKeySessionToken] = &framework.FieldSchema{
 		Type:        framework.TypeString,
 		Description: "Static AWS session token. Static auth is intentionally unsupported until a later slice.",
+		DisplayAttrs: &framework.DisplayAttributes{
+			Sensitive: true,
+		},
+	}
+	fields[gitlab.ConfigKeyBaseURL] = &framework.FieldSchema{
+		Type:        framework.TypeString,
+		Description: "GitLab instance base URL for gitlab destinations. Defaults to https://gitlab.com.",
+	}
+	fields[gitlab.ConfigKeyProjectID] = &framework.FieldSchema{
+		Type:        framework.TypeString,
+		Description: "GitLab project ID or path for gitlab project variable destinations.",
+	}
+	fields[gitlab.ConfigKeyEnvironmentScope] = &framework.FieldSchema{
+		Type:        framework.TypeString,
+		Description: "GitLab variable environment scope. Defaults to *.",
+	}
+	fields[gitlab.ConfigKeyProtected] = &framework.FieldSchema{
+		Type:        framework.TypeString,
+		Description: "GitLab protected variable flag: true or false.",
+	}
+	fields[gitlab.ConfigKeyMasked] = &framework.FieldSchema{
+		Type:        framework.TypeString,
+		Description: "GitLab masked variable flag: true or false.",
+	}
+	fields[gitlab.ConfigKeyHidden] = &framework.FieldSchema{
+		Type:        framework.TypeString,
+		Description: "GitLab hidden variable flag: true or false. Hidden variables are sent as masked_and_hidden.",
+	}
+	fields[gitlab.ConfigKeyVariableRaw] = &framework.FieldSchema{
+		Type:        framework.TypeString,
+		Description: "GitLab raw variable flag controlling variable reference expansion: true or false.",
+	}
+	fields[gitlab.ConfigKeyVariableType] = &framework.FieldSchema{
+		Type:        framework.TypeString,
+		Description: "GitLab variable type: env_var or file.",
+	}
+	fields[gitlab.ConfigKeyToken] = &framework.FieldSchema{
+		Type:        framework.TypeString,
+		Description: "GitLab API token for project variable management.",
 		DisplayAttrs: &framework.DisplayAttributes{
 			Sensitive: true,
 		},

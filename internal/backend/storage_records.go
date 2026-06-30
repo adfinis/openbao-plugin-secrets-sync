@@ -34,6 +34,7 @@ const (
 	statusStoragePrefix        = "status/"
 	providerTypeFake           = "fake"
 	defaultAssociationFormat   = "json"
+	rawAssociationFormat       = "raw"
 	defaultNameTemplate        = "{{ path }}"
 	defaultPerKeyNameTemplate  = "{{ path }}/{{ key }}"
 	defaultDeleteMode          = deleteModeRetain

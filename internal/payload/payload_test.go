@@ -27,3 +27,25 @@ func TestBuildJSONIsDeterministic(t *testing.T) {
 		t.Fatalf("payload bytes = %s", got)
 	}
 }
+
+func TestBuildRawUsesExactValueBytes(t *testing.T) {
+	payload, err := BuildRaw("line one\nline two")
+	if err != nil {
+		t.Fatalf("build raw: %v", err)
+	}
+	if payload.Format != FormatRaw {
+		t.Fatalf("format = %s, want %s", payload.Format, FormatRaw)
+	}
+	if got := string(payload.Bytes); got != "line one\nline two" {
+		t.Fatalf("payload bytes = %q", got)
+	}
+	if payload.SHA256 == "" {
+		t.Fatal("payload hash must be set")
+	}
+}
+
+func TestBuildRawRejectsStructuredValues(t *testing.T) {
+	if _, err := BuildRaw(map[string]interface{}{"password": "secret"}); err == nil {
+		t.Fatal("build raw structured value must fail")
+	}
+}
