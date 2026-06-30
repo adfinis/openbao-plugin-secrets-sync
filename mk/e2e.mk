@@ -117,7 +117,7 @@ test-e2e-kind: ## Run self-contained OpenBao plus kind e2e tests for Kubernetes 
 	E2E_KIND_NAMESPACE="$(E2E_KIND_NAMESPACE)" \
 	E2E_KIND_CONTEXT="$(E2E_KIND_CONTEXT)" \
 	E2E_PLUGIN_PATH="$(E2E_PLUGIN_BIN)" \
-	"$(GO)" test -tags=e2e ./test/e2e/kind -run TestOpenBaoPluginSyncsToKubernetesSecrets -count=1 -v
+	"$(GO)" test -tags=e2e ./test/e2e/kind -count=1 -v
 
 .PHONY: e2e-aws-up
 e2e-aws-up: e2e-build-plugin ## Start the manual real-AWS e2e OpenBao stack.

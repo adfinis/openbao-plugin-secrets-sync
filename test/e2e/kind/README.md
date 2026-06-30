@@ -7,8 +7,22 @@ The workflow builds the Linux plugin binary, bakes it into an OpenBao dev-mode
 image, creates a disposable kind cluster, grants the OpenBao service account
 namespace-scoped Secret permissions, registers and mounts the plugin, then
 verifies destination validation, health, create, update, reconcile/read-state,
-delete semantics, ownership labels, and payload metadata against real
-Kubernetes API calls.
+delete semantics, ownership labels, payload metadata, RBAC denial handling,
+ownership loss, and immutable Secret behavior against real Kubernetes API
+calls.
+
+The OpenBao service account is intentionally granted only namespace-scoped
+Secret access:
+
+```yaml
+apiGroups: [""]
+resources: ["secrets"]
+verbs: ["get", "list", "create", "update", "delete"]
+```
+
+For production, bind equivalent permissions only in namespaces that are
+explicitly approved as sync destinations. The provider health and sync failure
+tests depend on cross-namespace access being denied by default.
 
 ## Run
 

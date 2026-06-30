@@ -16,6 +16,7 @@ import (
 
 	"github.com/adfinis/openbao-secret-sync/internal/providers/kubernetessecrets"
 	"github.com/openbao/openbao/api/v2"
+	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
@@ -38,11 +39,7 @@ func TestOpenBaoPluginSyncsToKubernetesSecrets(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 	defer cancel()
 
-	baoClient := newOpenBaoClient(t)
-	waitForOpenBao(t, ctx, baoClient)
-	registerPlugin(t, baoClient)
-	mountPlugin(t, baoClient)
-
+	baoClient := setupMountedOpenBao(t, ctx)
 	namespace := env("E2E_KIND_NAMESPACE", defaultNamespace)
 	kubeClient := newKubernetesClient(t)
 	remoteName := fmt.Sprintf("openbao-secret-sync-e2e-%d", time.Now().UnixNano())
@@ -92,6 +89,113 @@ func TestOpenBaoPluginSyncsToKubernetesSecrets(t *testing.T) {
 	drainQueue(t, baoClient, 1)
 	assertKubernetesSecretMissing(t, ctx, kubeClient, namespace, remoteName)
 	assertStatus(t, baoClient, "REMOTE_MISSING")
+}
+
+func TestOpenBaoPluginReportsKubernetesPolicyFailure(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	defer cancel()
+
+	baoClient := setupMountedOpenBao(t, ctx)
+	kubeClient := newKubernetesClient(t)
+	namespace := fmt.Sprintf("openbao-secret-sync-denied-%d", time.Now().UnixNano()%1_000_000)
+	createNamespace(t, ctx, kubeClient, namespace)
+
+	writeKubernetesDestination(t, baoClient, namespace)
+	assertDestinationValid(t, baoClient)
+	assertDestinationUnhealthy(t, baoClient, "authz")
+	acknowledgeRestoreGuard(t, baoClient)
+	write(t, baoClient, mountPath+"/metadata/app/db", map[string]interface{}{
+		"custom_metadata": map[string]interface{}{
+			"syncable": "true",
+		},
+	})
+	writeSource(t, baoClient, "initial")
+
+	remoteName := fmt.Sprintf("openbao-secret-sync-authz-%d", time.Now().UnixNano())
+	association := write(t, baoClient, mountPath+"/associations/app/db", associationRequest(remoteName))
+	if ids := stringSlice(t, association.Data["sync_operation_ids"]); len(ids) != 1 {
+		t.Fatalf("sync_operation_ids = %v, want one operation", ids)
+	}
+	drainQueue(t, baoClient, 1)
+	assertStatusDetails(t, baoClient, "DESTINATION_POLICY_ERROR", "authz")
+}
+
+func TestOpenBaoPluginReportsKubernetesOwnershipLoss(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	defer cancel()
+
+	baoClient := setupMountedOpenBao(t, ctx)
+	namespace := env("E2E_KIND_NAMESPACE", defaultNamespace)
+	kubeClient := newKubernetesClient(t)
+	remoteName := fmt.Sprintf("openbao-secret-sync-owner-%d", time.Now().UnixNano())
+	t.Cleanup(func() {
+		deleteKubernetesSecret(ctx, kubeClient, namespace, remoteName)
+	})
+
+	writeKubernetesDestination(t, baoClient, namespace)
+	acknowledgeRestoreGuard(t, baoClient)
+	write(t, baoClient, mountPath+"/metadata/app/db", map[string]interface{}{
+		"custom_metadata": map[string]interface{}{
+			"syncable": "true",
+		},
+	})
+	writeSource(t, baoClient, "initial")
+	write(t, baoClient, mountPath+"/associations/app/db", associationRequest(remoteName))
+	drainQueue(t, baoClient, 1)
+	assertKubernetesSecret(t, ctx, kubeClient, namespace, remoteName, "initial", "1")
+
+	secret := getKubernetesSecret(t, ctx, kubeClient, namespace, remoteName)
+	secret.Labels["openbao.adfinis.com/managed"] = "false"
+	updateKubernetesSecret(t, ctx, kubeClient, namespace, secret)
+
+	writeSource(t, baoClient, "updated")
+	drainQueue(t, baoClient, 1)
+	assertStatusDetails(t, baoClient, "REMOTE_OWNERSHIP_LOST", "ownership")
+	assertKubernetesSecretPayload(t, ctx, kubeClient, namespace, remoteName, "initial")
+}
+
+func TestOpenBaoPluginReportsKubernetesImmutableSecret(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	defer cancel()
+
+	baoClient := setupMountedOpenBao(t, ctx)
+	namespace := env("E2E_KIND_NAMESPACE", defaultNamespace)
+	kubeClient := newKubernetesClient(t)
+	remoteName := fmt.Sprintf("openbao-secret-sync-immutable-%d", time.Now().UnixNano())
+	t.Cleanup(func() {
+		deleteKubernetesSecret(ctx, kubeClient, namespace, remoteName)
+	})
+
+	writeKubernetesDestination(t, baoClient, namespace)
+	acknowledgeRestoreGuard(t, baoClient)
+	write(t, baoClient, mountPath+"/metadata/app/db", map[string]interface{}{
+		"custom_metadata": map[string]interface{}{
+			"syncable": "true",
+		},
+	})
+	writeSource(t, baoClient, "initial")
+	write(t, baoClient, mountPath+"/associations/app/db", associationRequest(remoteName))
+	drainQueue(t, baoClient, 1)
+	assertKubernetesSecret(t, ctx, kubeClient, namespace, remoteName, "initial", "1")
+
+	secret := getKubernetesSecret(t, ctx, kubeClient, namespace, remoteName)
+	immutable := true
+	secret.Immutable = &immutable
+	updateKubernetesSecret(t, ctx, kubeClient, namespace, secret)
+
+	writeSource(t, baoClient, "updated")
+	drainQueue(t, baoClient, 1)
+	assertStatusDetails(t, baoClient, "VALIDATION_ERROR", "validation")
+	assertKubernetesSecretPayload(t, ctx, kubeClient, namespace, remoteName, "initial")
+}
+
+func setupMountedOpenBao(t *testing.T, ctx context.Context) *api.Client {
+	t.Helper()
+	baoClient := newOpenBaoClient(t)
+	waitForOpenBao(t, ctx, baoClient)
+	registerPlugin(t, baoClient)
+	mountPlugin(t, baoClient)
+	return baoClient
 }
 
 func writeKubernetesDestination(t *testing.T, client *api.Client, namespace string) {
@@ -235,6 +339,23 @@ func assertDestinationHealthy(t *testing.T, client *api.Client) {
 	}
 }
 
+func assertDestinationUnhealthy(t *testing.T, client *api.Client, expectedErrorClass string) {
+	t.Helper()
+	secret, err := client.Logical().Read(mountPath + "/destinations/k8s/prod/health")
+	if err != nil {
+		t.Fatalf("read destination health: %v", err)
+	}
+	if secret == nil {
+		t.Fatal("destination health response is nil")
+	}
+	if got := secret.Data["healthy"]; got != false {
+		t.Fatalf("destination healthy = %v, want false", got)
+	}
+	if got := secret.Data["error_class"]; got != expectedErrorClass {
+		t.Fatalf("destination error_class = %v, want %s", got, expectedErrorClass)
+	}
+}
+
 func write(t *testing.T, client *api.Client, path string, data map[string]interface{}) *api.Secret {
 	t.Helper()
 	secret, err := client.Logical().Write(path, data)
@@ -318,6 +439,35 @@ func assertKubernetesSecret(
 	})
 }
 
+func assertKubernetesSecretPayload(
+	t *testing.T,
+	ctx context.Context,
+	client kubernetes.Interface,
+	namespace string,
+	name string,
+	expectedPassword string,
+) {
+	t.Helper()
+	waitFor(t, ctx, func() error {
+		secret, err := client.CoreV1().Secrets(namespace).Get(ctx, name, metav1.GetOptions{})
+		if err != nil {
+			return err
+		}
+		payload, ok := secret.Data[dataKeyPayload]
+		if !ok {
+			return errors.New("secret data.payload is missing")
+		}
+		var data map[string]string
+		if err := json.Unmarshal(payload, &data); err != nil {
+			return err
+		}
+		if data["password"] != expectedPassword {
+			return fmt.Errorf("password = %q, want %q", data["password"], expectedPassword)
+		}
+		return nil
+	})
+}
+
 func assertKubernetesSecretMissing(
 	t *testing.T,
 	ctx context.Context,
@@ -338,7 +488,72 @@ func assertKubernetesSecretMissing(
 	})
 }
 
+func getKubernetesSecret(
+	t *testing.T,
+	ctx context.Context,
+	client kubernetes.Interface,
+	namespace string,
+	name string,
+) *corev1.Secret {
+	t.Helper()
+	secret, err := client.CoreV1().Secrets(namespace).Get(ctx, name, metav1.GetOptions{})
+	if err != nil {
+		t.Fatalf("get Kubernetes secret %s/%s: %v", namespace, name, err)
+	}
+	return secret
+}
+
+func updateKubernetesSecret(
+	t *testing.T,
+	ctx context.Context,
+	client kubernetes.Interface,
+	namespace string,
+	secret *corev1.Secret,
+) {
+	t.Helper()
+	if _, err := client.CoreV1().Secrets(namespace).Update(ctx, secret, metav1.UpdateOptions{}); err != nil {
+		t.Fatalf("update Kubernetes secret %s/%s: %v", namespace, secret.Name, err)
+	}
+}
+
+func createNamespace(
+	t *testing.T,
+	ctx context.Context,
+	client kubernetes.Interface,
+	namespace string,
+) {
+	t.Helper()
+	_, err := client.CoreV1().Namespaces().Create(ctx, &corev1.Namespace{
+		ObjectMeta: metav1.ObjectMeta{Name: namespace},
+	}, metav1.CreateOptions{})
+	if err != nil && !apierrors.IsAlreadyExists(err) {
+		t.Fatalf("create namespace %s: %v", namespace, err)
+	}
+	t.Cleanup(func() {
+		_ = client.CoreV1().Namespaces().Delete(ctx, namespace, metav1.DeleteOptions{})
+	})
+}
+
 func assertStatus(t *testing.T, client *api.Client, expectedState string) {
+	t.Helper()
+	secret := readStatus(t, client)
+	if got := secret.Data["state"]; got != expectedState {
+		t.Fatalf("status state = %v, want %s", got, expectedState)
+	}
+}
+
+func assertStatusDetails(t *testing.T, client *api.Client, expectedState string, expectedErrorClass string) {
+	t.Helper()
+	secret := readStatus(t, client)
+	if got := secret.Data["state"]; got != expectedState {
+		t.Fatalf("status state = %v, want %s", got, expectedState)
+	}
+	if got := secret.Data["last_error_class"]; got != expectedErrorClass {
+		t.Fatalf("status last_error_class = %v, want %s", got, expectedErrorClass)
+	}
+}
+
+func readStatus(t *testing.T, client *api.Client) *api.Secret {
 	t.Helper()
 	secret, err := client.Logical().Read(mountPath + "/status/app/db")
 	if err != nil {
@@ -347,9 +562,7 @@ func assertStatus(t *testing.T, client *api.Client, expectedState string) {
 	if secret == nil {
 		t.Fatal("status response is nil")
 	}
-	if got := secret.Data["state"]; got != expectedState {
-		t.Fatalf("status state = %v, want %s", got, expectedState)
-	}
+	return secret
 }
 
 func assertReconcilePlan(t *testing.T, client *api.Client, expectedState string) {
