@@ -8,7 +8,11 @@ import (
 	"github.com/openbao/openbao/sdk/v2/logical"
 )
 
-const defaultDrainMaxOperations = 100
+const (
+	defaultDrainMaxOperations = 100
+	restoreGuardActiveError   = "restore guard is active; acknowledge " +
+		"config/restore-guard/acknowledge before remote mutation"
+)
 
 type queueSummary struct {
 	Pending          int
@@ -121,6 +125,9 @@ func (b *secretSyncBackend) pathQueueDrain(
 	}
 	if cfg.Disabled {
 		return logical.ErrorResponse("secret sync is disabled"), nil
+	}
+	if cfg.RestoreGuard {
+		return logical.ErrorResponse(restoreGuardActiveError), nil
 	}
 	maxOperations := data.Get("max_operations").(int)
 	if maxOperations < 0 {

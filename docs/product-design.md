@@ -301,6 +301,7 @@ path exists but no enabled or historical sync object currently exists for it.
 ```text
 GET  config
 POST config
+POST config/restore-guard/acknowledge
 ```
 
 Configuration should include:

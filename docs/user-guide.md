@@ -48,6 +48,14 @@ bao secrets enable \
   plugin
 ```
 
+Remote mutation is guarded by default. After a new mount, or after reviewing a
+restore/clone event, explicitly acknowledge the guard before queue workers or
+manual drains can write destination state:
+
+```sh
+bao write -force secret-sync/config/restore-guard/acknowledge
+```
+
 ## Configure AWS Secrets Manager
 
 Default AWS SDK credential chain:
@@ -202,6 +210,10 @@ Common states in the current implementation include:
   object status yet;
 - `DISABLED`: association or destination is disabled;
 - `REMOTE_MISSING`: an owned delete completed or remote object is absent.
+- `REMOTE_OWNERSHIP_LOST`, `DESTINATION_AUTH_ERROR`,
+  `DESTINATION_POLICY_ERROR`, `DESTINATION_RATE_LIMITED`,
+  `DESTINATION_UNAVAILABLE`, `VALIDATION_ERROR`, `QUEUE_BLOCKED`, and
+  `DRIFTED`: provider or safety failures that require operator inspection.
 
 For the common single-object case, status includes top-level summary fields
 such as `association_id`, `destination_ref`, `resolved_name`,

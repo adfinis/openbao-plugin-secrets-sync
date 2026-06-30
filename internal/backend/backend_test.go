@@ -42,6 +42,9 @@ func TestConfigDefaults(t *testing.T) {
 	if got := resp.Data["restore_guard"]; got != true {
 		t.Fatalf("restore_guard default = %v, want true", got)
 	}
+	if got := resp.Data["restore_guard_acknowledged_time"]; got != "" {
+		t.Fatalf("restore_guard_acknowledged_time = %v, want empty", got)
+	}
 }
 
 func TestConfigWriteMergesDefaultsAndValidatesQueueCapacity(t *testing.T) {
@@ -69,6 +72,44 @@ func TestConfigWriteMergesDefaultsAndValidatesQueueCapacity(t *testing.T) {
 	})
 	if negativeResp == nil || !negativeResp.IsError() {
 		t.Fatalf("negative queue_capacity response = %#v, want error", negativeResp)
+	}
+}
+
+func TestConfigRestoreGuardAcknowledge(t *testing.T) {
+	b := Backend(&logical.BackendConfig{})
+	storage := &logical.InmemStorage{}
+
+	ackResp := handleRequest(t, b, storage, logical.UpdateOperation, "config/restore-guard/acknowledge", nil)
+	assertNoErrorResponse(t, ackResp)
+	if got := ackResp.Data["restore_guard"]; got != false {
+		t.Fatalf("restore_guard = %v, want false", got)
+	}
+	if got := ackResp.Data["restore_guard_acknowledged_time"]; got == "" {
+		t.Fatal("restore_guard_acknowledged_time must be set")
+	}
+
+	readResp := handleRequest(t, b, storage, logical.ReadOperation, configPath, nil)
+	assertNoErrorResponse(t, readResp)
+	if got := readResp.Data["restore_guard"]; got != false {
+		t.Fatalf("read restore_guard = %v, want false", got)
+	}
+	if got := readResp.Data["restore_guard_acknowledged_time"]; got != ackResp.Data["restore_guard_acknowledged_time"] {
+		t.Fatalf("read acknowledged time = %v, want %v", got, ackResp.Data["restore_guard_acknowledged_time"])
+	}
+
+	rearmResp := handleRequest(t, b, storage, logical.UpdateOperation, configPath, map[string]interface{}{
+		"restore_guard": true,
+	})
+	if rearmResp != nil && rearmResp.IsError() {
+		t.Fatalf("unexpected restore guard rearm error: %v", rearmResp.Error())
+	}
+	readResp = handleRequest(t, b, storage, logical.ReadOperation, configPath, nil)
+	assertNoErrorResponse(t, readResp)
+	if got := readResp.Data["restore_guard"]; got != true {
+		t.Fatalf("rearmed restore_guard = %v, want true", got)
+	}
+	if got := readResp.Data["restore_guard_acknowledged_time"]; got != "" {
+		t.Fatalf("rearmed acknowledged time = %v, want empty", got)
 	}
 }
 
@@ -534,9 +575,7 @@ func TestDataDeleteDeleteModeQueuesRemoteDelete(t *testing.T) {
 	writeAppDBSecret(t, b, storage, "initial")
 	createFakeDestination(t, b, storage, "default")
 	createFakeAssociationWithDeleteMode(t, b, storage, deleteModeDelete)
-	if err := b.periodic(context.Background(), &logical.Request{Storage: storage}); err != nil {
-		t.Fatalf("periodic upsert: %v", err)
-	}
+	runPeriodicAllowed(t, b, storage, "periodic upsert")
 
 	deleteResp := handleRequest(t, b, storage, logical.DeleteOperation, "data/app/db", nil)
 	assertNoErrorResponse(t, deleteResp)
@@ -550,9 +589,7 @@ func TestDataDeleteDeleteModeQueuesRemoteDelete(t *testing.T) {
 		t.Fatalf("delete operation type = %s, want %s", got, outbox.OperationTypeDelete)
 	}
 
-	if err := b.periodic(context.Background(), &logical.Request{Storage: storage}); err != nil {
-		t.Fatalf("periodic delete: %v", err)
-	}
+	runPeriodicAllowed(t, b, storage, "periodic delete")
 	deleteOperation = assertOutboxOperation(t, storage, deleteOperationID, 1, outboxStateSucceeded)
 	if got := deleteOperation.Type; got != outbox.OperationTypeDelete {
 		t.Fatalf("succeeded delete operation type = %s, want %s", got, outbox.OperationTypeDelete)
@@ -843,9 +880,7 @@ func TestAssociationDisableEnableAndManualSync(t *testing.T) {
 	assertAssociationEnabled(t, enableResp, true)
 	enableOperationID := requireSingleOperationID(t, operationIDsFromResponse(t, enableResp), "enable")
 	assertOutboxOperation(t, storage, enableOperationID, 2, outboxStatePending)
-	if err := b.periodic(context.Background(), &logical.Request{Storage: storage}); err != nil {
-		t.Fatalf("periodic: %v", err)
-	}
+	runPeriodicAllowed(t, b, storage, "periodic")
 
 	syncResp := handleRequest(
 		t,
@@ -978,9 +1013,7 @@ func TestPeriodicProcessesFakeOutbox(t *testing.T) {
 		t.Fatalf("destination_ref = %v, want fake/default", got)
 	}
 
-	if err := b.periodic(context.Background(), &logical.Request{Storage: storage}); err != nil {
-		t.Fatalf("periodic: %v", err)
-	}
+	runPeriodicAllowed(t, b, storage, "periodic")
 
 	queueResp := handleRequest(t, b, storage, logical.ReadOperation, "queue", nil)
 	assertNoErrorResponse(t, queueResp)
@@ -1013,6 +1046,25 @@ func TestPeriodicProcessesFakeOutbox(t *testing.T) {
 	}
 }
 
+func TestPeriodicHonorsRestoreGuard(t *testing.T) {
+	b := Backend(&logical.BackendConfig{})
+	storage := &logical.InmemStorage{}
+
+	writeAppDBSecret(t, b, storage, "initial")
+	createFakeDestination(t, b, storage, "default")
+	associationResp := createDefaultFakeAssociation(t, b, storage)
+	operationID := operationIDsFromResponse(t, associationResp)[0]
+
+	if err := b.periodic(context.Background(), &logical.Request{Storage: storage}); err != nil {
+		t.Fatalf("periodic with restore guard: %v", err)
+	}
+	assertOutboxOperation(t, storage, operationID, 1, outboxStatePending)
+	assertQueueCount(t, b, storage, "pending", 1)
+
+	runPeriodicAllowed(t, b, storage, "periodic after restore guard acknowledgement")
+	assertOutboxOperation(t, storage, operationID, 1, outboxStateSucceeded)
+}
+
 func TestPeriodicRejectsPayloadOverProviderLimit(t *testing.T) {
 	b := Backend(&logical.BackendConfig{})
 	storage := &logical.InmemStorage{}
@@ -1027,9 +1079,7 @@ func TestPeriodicRejectsPayloadOverProviderLimit(t *testing.T) {
 	associationResp := createDefaultFakeAssociation(t, b, storage)
 	operationID := operationIDsFromResponse(t, associationResp)[0]
 
-	if err := b.periodic(context.Background(), &logical.Request{Storage: storage}); err != nil {
-		t.Fatalf("periodic: %v", err)
-	}
+	runPeriodicAllowed(t, b, storage, "periodic")
 
 	operation, err := getOutbox(context.Background(), storage, operationID)
 	if err != nil {
@@ -1048,6 +1098,66 @@ func TestPeriodicRejectsPayloadOverProviderLimit(t *testing.T) {
 	if got := object["last_error_class"]; got != string(providers.ErrorClassCapacity) {
 		t.Fatalf("last_error_class = %v, want %s", got, providers.ErrorClassCapacity)
 	}
+	if got := object["state"]; got != string(domain.SyncStateQueueBlocked) {
+		t.Fatalf("state = %v, want %s", got, domain.SyncStateQueueBlocked)
+	}
+	if strings.Contains(object["last_error"].(string), "secret-canary") {
+		t.Fatalf("last_error contains secret canary: %s", object["last_error"])
+	}
+	if got := object["payload_sha256"].(string); !strings.HasPrefix(got, "sha256:") {
+		t.Fatalf("payload_sha256 = %q, want sha256 prefix", got)
+	}
+}
+
+func TestPeriodicRejectsPayloadOverAWSProviderLimit(t *testing.T) {
+	b := Backend(&logical.BackendConfig{})
+	storage := &logical.InmemStorage{}
+
+	resp := handleRequest(t, b, storage, logical.UpdateOperation, "data/app/db", map[string]interface{}{
+		"data": map[string]interface{}{
+			"password": strings.Repeat("x", 70*1024) + "secret-canary",
+		},
+	})
+	assertNoErrorResponse(t, resp)
+	resp = handleRequest(t, b, storage, logical.UpdateOperation, "destinations/aws-sm/prod", map[string]interface{}{
+		"description":                             "aws production",
+		awssecretsmanager.ConfigKeyRegion:         "us-east-1",
+		awssecretsmanager.ConfigKeyEndpointURL:    "http://localhost:4566",
+		awssecretsmanager.ConfigKeyEndpointPolicy: awssecretsmanager.EndpointPolicyLocal,
+		awssecretsmanager.ConfigKeyAuthMode:       awssecretsmanager.AuthModeDefault,
+	})
+	if resp != nil && resp.IsError() {
+		t.Fatalf("unexpected destination write error: %v", resp.Error())
+	}
+	markAppDBSyncable(t, b, storage)
+	associationResp := handleRequest(t, b, storage, logical.UpdateOperation, "associations/app/db", map[string]interface{}{
+		"destination_type": awssecretsmanager.ProviderType,
+		"destination_name": "prod",
+		"resolved_name":    "openbao-secret-sync/app/db",
+		"granularity":      syncObjectIDSecretPath,
+		"format":           defaultAssociationFormat,
+	})
+	operationID := operationIDsFromResponse(t, associationResp)[0]
+
+	runPeriodicAllowed(t, b, storage, "periodic")
+
+	operation := assertOutboxOperation(t, storage, operationID, 1, outboxStateFailedTerminal)
+	if got := operation.Attempts; got != 1 {
+		t.Fatalf("attempts = %d, want 1", got)
+	}
+	statusResp := handleRequest(t, b, storage, logical.ReadOperation, "status/app/db", nil)
+	assertNoErrorResponse(t, statusResp)
+	objects := statusResp.Data["objects"].([]map[string]interface{})
+	if len(objects) != 1 {
+		t.Fatalf("status objects length = %d, want 1", len(objects))
+	}
+	object := objects[0]
+	if got := object["last_error_class"]; got != string(providers.ErrorClassCapacity) {
+		t.Fatalf("last_error_class = %v, want %s", got, providers.ErrorClassCapacity)
+	}
+	if got := object["state"]; got != string(domain.SyncStateQueueBlocked) {
+		t.Fatalf("state = %v, want %s", got, domain.SyncStateQueueBlocked)
+	}
 	if strings.Contains(object["last_error"].(string), "secret-canary") {
 		t.Fatalf("last_error contains secret canary: %s", object["last_error"])
 	}
@@ -1065,9 +1175,7 @@ func TestPeriodicRetriesTransientProviderErrors(t *testing.T) {
 	associationResp := createFakeAssociationWithResolvedName(t, b, storage, "prod/unavailable/app/db")
 	operationID := operationIDsFromResponse(t, associationResp)[0]
 
-	if err := b.periodic(context.Background(), &logical.Request{Storage: storage}); err != nil {
-		t.Fatalf("periodic: %v", err)
-	}
+	runPeriodicAllowed(t, b, storage, "periodic")
 	operation := assertOutboxOperation(t, storage, operationID, 1, outboxStateRetryWait)
 	if got := operation.Attempts; got != 1 {
 		t.Fatalf("attempts = %d, want 1", got)
@@ -1075,6 +1183,7 @@ func TestPeriodicRetriesTransientProviderErrors(t *testing.T) {
 	assertFutureNotBefore(t, operation.NotBefore)
 	assertQueueCount(t, b, storage, "retry_wait", 1)
 	assertStatusObjectErrorClass(t, b, storage, providers.ErrorClassUnavailable)
+	assertStatusObjectState(t, b, storage, domain.SyncStateDestinationUnavailable)
 
 	for range 2 {
 		operation = runDueRetry(t, b, storage, *operation)
@@ -1082,6 +1191,86 @@ func TestPeriodicRetriesTransientProviderErrors(t *testing.T) {
 	operation = assertOutboxOperation(t, storage, operationID, 1, outboxStateFailedTerminal)
 	if got := operation.Attempts; got != maxAutomaticRetryAttempts {
 		t.Fatalf("attempts = %d, want %d", got, maxAutomaticRetryAttempts)
+	}
+}
+
+func TestPeriodicRetriesRateLimitProviderErrors(t *testing.T) {
+	b := Backend(&logical.BackendConfig{})
+	storage := &logical.InmemStorage{}
+
+	writeAppDBSecret(t, b, storage, "initial")
+	createFakeDestination(t, b, storage, "default")
+	associationResp := createFakeAssociationWithResolvedName(t, b, storage, "prod/rate-limit/app/db")
+	operationID := operationIDsFromResponse(t, associationResp)[0]
+
+	runPeriodicAllowed(t, b, storage, "periodic")
+	operation := assertOutboxOperation(t, storage, operationID, 1, outboxStateRetryWait)
+	if got := operation.Attempts; got != 1 {
+		t.Fatalf("attempts = %d, want 1", got)
+	}
+	assertFutureNotBefore(t, operation.NotBefore)
+	assertQueueCount(t, b, storage, "retry_wait", 1)
+	assertStatusObjectErrorClass(t, b, storage, providers.ErrorClassRateLimit)
+	assertStatusObjectState(t, b, storage, domain.SyncStateDestinationRateLimited)
+}
+
+func TestPeriodicMapsProviderMutationErrorClasses(t *testing.T) {
+	testCases := []struct {
+		name         string
+		resolvedName string
+		errorClass   providers.ErrorClass
+		state        domain.SyncState
+	}{
+		{
+			name:         "authn",
+			resolvedName: "prod/authn/app/db",
+			errorClass:   providers.ErrorClassAuthn,
+			state:        domain.SyncStateDestinationAuthError,
+		},
+		{
+			name:         "authz",
+			resolvedName: "prod/authz/app/db",
+			errorClass:   providers.ErrorClassAuthz,
+			state:        domain.SyncStateDestinationPolicyError,
+		},
+		{
+			name:         "ownership",
+			resolvedName: "prod/ownership/app/db",
+			errorClass:   providers.ErrorClassOwnership,
+			state:        domain.SyncStateRemoteOwnershipLost,
+		},
+		{
+			name:         "collision",
+			resolvedName: "prod/collision/app/db",
+			errorClass:   providers.ErrorClassCollision,
+			state:        domain.SyncStateDrifted,
+		},
+		{
+			name:         "validation",
+			resolvedName: "prod/validation/app/db",
+			errorClass:   providers.ErrorClassValidation,
+			state:        domain.SyncStateValidationError,
+		},
+	}
+
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			b := Backend(&logical.BackendConfig{})
+			storage := &logical.InmemStorage{}
+
+			writeAppDBSecret(t, b, storage, "initial")
+			createFakeDestination(t, b, storage, "default")
+			associationResp := createFakeAssociationWithResolvedName(t, b, storage, testCase.resolvedName)
+			operationID := operationIDsFromResponse(t, associationResp)[0]
+
+			runPeriodicAllowed(t, b, storage, "periodic")
+			operation := assertOutboxOperation(t, storage, operationID, 1, outboxStateFailedTerminal)
+			if got := operation.Attempts; got != 1 {
+				t.Fatalf("attempts = %d, want 1", got)
+			}
+			assertStatusObjectErrorClass(t, b, storage, testCase.errorClass)
+			assertStatusObjectState(t, b, storage, testCase.state)
+		})
 	}
 }
 
@@ -1129,6 +1318,7 @@ func TestQueueDrainProcessesDueOperations(t *testing.T) {
 	createFakeDestination(t, b, storage, "default")
 	associationResp := createDefaultFakeAssociation(t, b, storage)
 	operationID := operationIDsFromResponse(t, associationResp)[0]
+	acknowledgeRestoreGuard(t, b, storage)
 
 	drainResp := handleRequest(t, b, storage, logical.UpdateOperation, "queue/drain", map[string]interface{}{
 		"max_operations": 1,
@@ -1145,6 +1335,33 @@ func TestQueueDrainProcessesDueOperations(t *testing.T) {
 		t.Fatalf("pending = %v, want 0", got)
 	}
 	assertOutboxOperation(t, storage, operationID, 1, outboxStateSucceeded)
+}
+
+func TestQueueDrainHonorsRestoreGuard(t *testing.T) {
+	b := Backend(&logical.BackendConfig{})
+	storage := &logical.InmemStorage{}
+
+	writeAppDBSecret(t, b, storage, "initial")
+	createFakeDestination(t, b, storage, "default")
+	associationResp := createDefaultFakeAssociation(t, b, storage)
+	operationID := operationIDsFromResponse(t, associationResp)[0]
+
+	drainResp := handleRequest(t, b, storage, logical.UpdateOperation, "queue/drain", map[string]interface{}{
+		"max_operations": 1,
+	})
+	if drainResp == nil || !drainResp.IsError() {
+		t.Fatalf("drain restore guard response = %#v, want error", drainResp)
+	}
+	assertOutboxOperation(t, storage, operationID, 1, outboxStatePending)
+
+	acknowledgeRestoreGuard(t, b, storage)
+	drainResp = handleRequest(t, b, storage, logical.UpdateOperation, "queue/drain", map[string]interface{}{
+		"max_operations": 1,
+	})
+	assertNoErrorResponse(t, drainResp)
+	if got := drainResp.Data["processed"]; got != 1 {
+		t.Fatalf("processed after acknowledge = %v, want 1", got)
+	}
 }
 
 func TestQueueSummaryOldestAge(t *testing.T) {
@@ -1196,9 +1413,7 @@ func TestQueueOperationRejectsRetryAfterSuccess(t *testing.T) {
 	createFakeDestination(t, b, storage, "default")
 	associationResp := createDefaultFakeAssociation(t, b, storage)
 	operationID := operationIDsFromResponse(t, associationResp)[0]
-	if err := b.periodic(context.Background(), &logical.Request{Storage: storage}); err != nil {
-		t.Fatalf("periodic: %v", err)
-	}
+	runPeriodicAllowed(t, b, storage, "periodic")
 
 	retryResp := handleRequest(t, b, storage, logical.UpdateOperation, "queue/"+operationID+"/retry", nil)
 	if retryResp == nil || !retryResp.IsError() {
@@ -1217,9 +1432,7 @@ func TestPeriodicRecoversIncompleteEnqueueIntent(t *testing.T) {
 	writeAppDBSecret(t, b, storage, "initial")
 	createFakeDestination(t, b, storage, "default")
 	createDefaultFakeAssociation(t, b, storage)
-	if err := b.periodic(context.Background(), &logical.Request{Storage: storage}); err != nil {
-		t.Fatalf("periodic: %v", err)
-	}
+	runPeriodicAllowed(t, b, storage, "periodic")
 
 	secondResp := writeAppDBSecret(t, b, storage, "rotated")
 	metadata := secondResp.Data["metadata"].(map[string]interface{})
@@ -1244,9 +1457,7 @@ func TestPeriodicRecoversIncompleteEnqueueIntent(t *testing.T) {
 		t.Fatalf("write incomplete enqueue intent: %v", err)
 	}
 
-	if err := b.periodic(context.Background(), &logical.Request{Storage: storage}); err != nil {
-		t.Fatalf("periodic recovery: %v", err)
-	}
+	runPeriodicAllowed(t, b, storage, "periodic recovery")
 	recovered, err := getOutbox(context.Background(), storage, operationID)
 	if err != nil {
 		t.Fatalf("read recovered outbox operation: %v", err)
@@ -1270,9 +1481,7 @@ func TestRecoveryRestoresDeleteIntentAfterSourceDelete(t *testing.T) {
 	writeAppDBSecret(t, b, storage, "initial")
 	createFakeDestination(t, b, storage, "default")
 	createFakeAssociationWithDeleteMode(t, b, storage, deleteModeDelete)
-	if err := b.periodic(context.Background(), &logical.Request{Storage: storage}); err != nil {
-		t.Fatalf("periodic upsert: %v", err)
-	}
+	runPeriodicAllowed(t, b, storage, "periodic upsert")
 	deleteResp := handleRequest(t, b, storage, logical.DeleteOperation, "data/app/db", nil)
 	assertNoErrorResponse(t, deleteResp)
 	deleteOperationID := operationIDsFromMetadata(t, deleteResp.Data["metadata"].(map[string]interface{}))[0]
@@ -1354,9 +1563,7 @@ func TestPeriodicHonorsDisabledConfig(t *testing.T) {
 		"disabled": true,
 	})
 
-	if err := b.periodic(context.Background(), &logical.Request{Storage: storage}); err != nil {
-		t.Fatalf("periodic: %v", err)
-	}
+	runPeriodicAllowed(t, b, storage, "periodic")
 
 	queueResp := handleRequest(t, b, storage, logical.ReadOperation, "queue", nil)
 	assertNoErrorResponse(t, queueResp)
@@ -1375,9 +1582,7 @@ func TestQueueCapacityCountsQueuedOperationsOnly(t *testing.T) {
 	writeAppDBSecret(t, b, storage, "initial")
 	createFakeDestination(t, b, storage, "default")
 	createDefaultFakeAssociation(t, b, storage)
-	if err := b.periodic(context.Background(), &logical.Request{Storage: storage}); err != nil {
-		t.Fatalf("periodic: %v", err)
-	}
+	runPeriodicAllowed(t, b, storage, "periodic")
 
 	secondResp := writeAppDBSecret(t, b, storage, "allowed")
 	metadata := secondResp.Data["metadata"].(map[string]interface{})
@@ -1406,6 +1611,26 @@ func handleRequest(
 		t.Fatalf("%s %s: %v", operation, path, err)
 	}
 	return resp
+}
+
+func acknowledgeRestoreGuard(t *testing.T, b logical.Backend, storage logical.Storage) {
+	t.Helper()
+	resp := handleRequest(t, b, storage, logical.UpdateOperation, "config/restore-guard/acknowledge", nil)
+	assertNoErrorResponse(t, resp)
+	if got := resp.Data["restore_guard"]; got != false {
+		t.Fatalf("restore_guard = %v, want false", got)
+	}
+	if got := resp.Data["restore_guard_acknowledged_time"]; got == "" {
+		t.Fatal("restore_guard_acknowledged_time must be set")
+	}
+}
+
+func runPeriodicAllowed(t *testing.T, b *secretSyncBackend, storage logical.Storage, label string) {
+	t.Helper()
+	acknowledgeRestoreGuard(t, b, storage)
+	if err := b.periodic(context.Background(), &logical.Request{Storage: storage}); err != nil {
+		t.Fatalf("%s: %v", label, err)
+	}
 }
 
 func assertNoErrorResponse(t *testing.T, resp *logical.Response) {
@@ -1518,6 +1743,21 @@ func assertStatusObjectErrorClass(
 	}
 }
 
+func assertStatusObjectState(
+	t *testing.T,
+	b logical.Backend,
+	storage logical.Storage,
+	want domain.SyncState,
+) {
+	t.Helper()
+	statusResp := handleRequest(t, b, storage, logical.ReadOperation, "status/app/db", nil)
+	assertNoErrorResponse(t, statusResp)
+	objects := statusResp.Data["objects"].([]map[string]interface{})
+	if got := objects[0]["state"]; got != string(want) {
+		t.Fatalf("state = %v, want %s", got, want)
+	}
+}
+
 func assertOutboxOperation(
 	t *testing.T,
 	storage logical.Storage,
@@ -1564,9 +1804,7 @@ func runDueRetry(
 	if err := putOutbox(context.Background(), storage, operation); err != nil {
 		t.Fatalf("write due retry operation: %v", err)
 	}
-	if err := b.periodic(context.Background(), &logical.Request{Storage: storage}); err != nil {
-		t.Fatalf("periodic retry: %v", err)
-	}
+	runPeriodicAllowed(t, b, storage, "periodic retry")
 	updated, err := getOutbox(context.Background(), storage, operation.ID)
 	if err != nil {
 		t.Fatalf("read retry operation: %v", err)

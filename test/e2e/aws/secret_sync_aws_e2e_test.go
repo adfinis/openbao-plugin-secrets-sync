@@ -57,6 +57,7 @@ func TestOpenBaoPluginSyncsToAWSSecretsManager(t *testing.T) {
 	})
 
 	writeAWSDestination(t, baoClient)
+	acknowledgeRestoreGuard(t, baoClient)
 	write(t, baoClient, mountPath+"/metadata/app/db", map[string]interface{}{
 		"custom_metadata": map[string]interface{}{
 			"syncable": "true",
@@ -228,6 +229,11 @@ func writeSource(t *testing.T, client *api.Client, password string) {
 			"password": password,
 		},
 	})
+}
+
+func acknowledgeRestoreGuard(t *testing.T, client *api.Client) {
+	t.Helper()
+	write(t, client, mountPath+"/config/restore-guard/acknowledge", map[string]interface{}{})
 }
 
 func write(t *testing.T, client *api.Client, path string, data map[string]interface{}) *api.Secret {

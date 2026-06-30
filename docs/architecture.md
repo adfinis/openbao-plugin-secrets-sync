@@ -249,11 +249,12 @@ separate persisted claim record. Automatic retry is reserved for provider
 failed work back to `pending` and resets the attempt counter.
 
 The `queue/drain` path runs the same due-operation dispatcher as background
-work with a request-bounded operation limit. It first recovers incomplete
-enqueue intents, honors the global disabled flag, and returns a queue summary
-without exposing source payload data. The path exists for deterministic tests,
-operator-controlled catch-up, and break-glass workflows; normal progress should
-come from the periodic function.
+work with a request-bounded operation limit. It first checks global mutation
+safety gates, including `disabled` and `restore_guard`, then recovers
+incomplete enqueue intents and returns a queue summary without exposing source
+payload data. The path exists for deterministic tests, operator-controlled
+catch-up, and break-glass workflows; normal progress should come from the
+periodic function.
 
 Source delete uses the same durable outbox model. Deleting the latest local
 version cancels queued upsert work for that version. Associations with

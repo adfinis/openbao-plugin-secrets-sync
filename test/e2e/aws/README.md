@@ -111,6 +111,8 @@ bao write secret-sync/destinations/aws-sm/prod \
 
 bao write -force secret-sync/destinations/aws-sm/prod/validate
 bao read secret-sync/destinations/aws-sm/prod/health
+
+bao write -force secret-sync/config/restore-guard/acknowledge
 ```
 
 Create a syncable source secret:

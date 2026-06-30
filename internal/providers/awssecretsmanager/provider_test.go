@@ -324,6 +324,9 @@ func TestUpsertRejectsUnownedSecret(t *testing.T) {
 	}
 	_, err := (Provider{client: client}).Upsert(context.Background(), defaultUpsertRequest())
 	assertProviderErrorClass(t, err, providers.ErrorClassOwnership)
+	if client.putSecretValueInput != nil {
+		t.Fatal("PutSecretValue must not be called for unowned secret")
+	}
 }
 
 func TestUpsertRejectsNewerRemoteSourceVersion(t *testing.T) {
@@ -334,6 +337,69 @@ func TestUpsertRejectsNewerRemoteSourceVersion(t *testing.T) {
 	assertProviderErrorClass(t, err, providers.ErrorClassDrift)
 	if client.putSecretValueInput != nil {
 		t.Fatal("PutSecretValue must not be called for newer remote source version")
+	}
+}
+
+func TestUpsertClassifiesAWSMutationFailures(t *testing.T) {
+	tests := []struct {
+		name          string
+		client        *mockSecretsManagerClient
+		expectedClass providers.ErrorClass
+		expectCreate  bool
+		expectPut     bool
+		expectTag     bool
+	}{
+		{
+			name: "describe auth failure",
+			client: &mockSecretsManagerClient{
+				describeError: apiError("UnrecognizedClientException"),
+			},
+			expectedClass: providers.ErrorClassAuthn,
+		},
+		{
+			name: "create throttled",
+			client: &mockSecretsManagerClient{
+				describeError:     apiError("ResourceNotFoundException"),
+				createSecretError: apiError("ThrottlingException"),
+			},
+			expectedClass: providers.ErrorClassRateLimit,
+			expectCreate:  true,
+		},
+		{
+			name: "put throttled",
+			client: &mockSecretsManagerClient{
+				describeOutput:      ownedDescribeOutput(testPayloadSHAOld),
+				putSecretValueError: apiError("TooManyRequestsException"),
+			},
+			expectedClass: providers.ErrorClassRateLimit,
+			expectPut:     true,
+		},
+		{
+			name: "tag authorization failure",
+			client: &mockSecretsManagerClient{
+				describeOutput:       ownedDescribeOutput(testPayloadSHAOld),
+				putSecretValueOutput: &secretsmanager.PutSecretValueOutput{VersionId: aws.String("version-2")},
+				tagResourceError:     apiError("AccessDeniedException"),
+			},
+			expectedClass: providers.ErrorClassAuthz,
+			expectPut:     true,
+			expectTag:     true,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := (Provider{client: tt.client}).Upsert(context.Background(), defaultUpsertRequest())
+			assertProviderErrorClass(t, err, tt.expectedClass)
+			if got := tt.client.createSecretInput != nil; got != tt.expectCreate {
+				t.Fatalf("CreateSecret called = %v, want %v", got, tt.expectCreate)
+			}
+			if got := tt.client.putSecretValueInput != nil; got != tt.expectPut {
+				t.Fatalf("PutSecretValue called = %v, want %v", got, tt.expectPut)
+			}
+			if got := tt.client.tagResourceInput != nil; got != tt.expectTag {
+				t.Fatalf("TagResource called = %v, want %v", got, tt.expectTag)
+			}
+		})
 	}
 }
 
@@ -360,6 +426,17 @@ func TestDeleteUsesOwnedRecoveryWindow(t *testing.T) {
 	}
 }
 
+func TestDeleteRejectsUnownedSecret(t *testing.T) {
+	client := &mockSecretsManagerClient{
+		describeOutput: &secretsmanager.DescribeSecretOutput{Name: aws.String(testResolvedName)},
+	}
+	_, err := (Provider{client: client}).Delete(context.Background(), defaultDeleteRequest())
+	assertProviderErrorClass(t, err, providers.ErrorClassOwnership)
+	if client.deleteSecretInput != nil {
+		t.Fatal("DeleteSecret must not be called for unowned secret")
+	}
+}
+
 func TestDeleteRejectsNewerRemoteSourceVersion(t *testing.T) {
 	client := &mockSecretsManagerClient{
 		describeOutput: ownedDescribeOutputAtVersion(testPayloadSHAOld, 2),
@@ -368,6 +445,41 @@ func TestDeleteRejectsNewerRemoteSourceVersion(t *testing.T) {
 	assertProviderErrorClass(t, err, providers.ErrorClassDrift)
 	if client.deleteSecretInput != nil {
 		t.Fatal("DeleteSecret must not be called for newer remote source version")
+	}
+}
+
+func TestDeleteClassifiesAWSMutationFailures(t *testing.T) {
+	tests := []struct {
+		name          string
+		client        *mockSecretsManagerClient
+		expectedClass providers.ErrorClass
+		expectDelete  bool
+	}{
+		{
+			name: "describe authorization failure",
+			client: &mockSecretsManagerClient{
+				describeError: apiError("AccessDeniedException"),
+			},
+			expectedClass: providers.ErrorClassAuthz,
+		},
+		{
+			name: "delete throttled",
+			client: &mockSecretsManagerClient{
+				describeOutput:    ownedDescribeOutput(testPayloadSHAOld),
+				deleteSecretError: apiError("ThrottlingException"),
+			},
+			expectedClass: providers.ErrorClassRateLimit,
+			expectDelete:  true,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := (Provider{client: tt.client}).Delete(context.Background(), defaultDeleteRequest())
+			assertProviderErrorClass(t, err, tt.expectedClass)
+			if got := tt.client.deleteSecretInput != nil; got != tt.expectDelete {
+				t.Fatalf("DeleteSecret called = %v, want %v", got, tt.expectDelete)
+			}
+		})
 	}
 }
 

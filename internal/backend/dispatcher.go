@@ -434,13 +434,36 @@ func markOperationFailed(
 		ObjectID:        record.ObjectID,
 		DestinationRef:  record.DestinationRef,
 		ResolvedName:    failure.resolvedName,
-		State:           string(domain.SyncStateInternalError),
+		State:           string(syncStateForFailureClass(failure.class)),
 		PayloadSHA256:   failure.payloadSHA256,
 		LastOperationID: record.ID,
 		LastErrorClass:  string(failure.class),
 		LastError:       fmt.Sprintf("dispatch failed: %s", failure.message),
 		UpdatedTime:     now.Format(timeFormatRFC3339),
 	})
+}
+
+func syncStateForFailureClass(errorClass providers.ErrorClass) domain.SyncState {
+	switch errorClass {
+	case providers.ErrorClassAuthn:
+		return domain.SyncStateDestinationAuthError
+	case providers.ErrorClassAuthz:
+		return domain.SyncStateDestinationPolicyError
+	case providers.ErrorClassRateLimit:
+		return domain.SyncStateDestinationRateLimited
+	case providers.ErrorClassUnavailable:
+		return domain.SyncStateDestinationUnavailable
+	case providers.ErrorClassOwnership:
+		return domain.SyncStateRemoteOwnershipLost
+	case providers.ErrorClassDrift, providers.ErrorClassCollision:
+		return domain.SyncStateDrifted
+	case providers.ErrorClassValidation:
+		return domain.SyncStateValidationError
+	case providers.ErrorClassCapacity:
+		return domain.SyncStateQueueBlocked
+	default:
+		return domain.SyncStateInternalError
+	}
 }
 
 func shouldRetryAutomatically(errorClass providers.ErrorClass, attempts int) bool {

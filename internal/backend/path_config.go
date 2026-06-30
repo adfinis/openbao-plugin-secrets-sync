@@ -42,6 +42,20 @@ func pathConfig(_ *secretSyncBackend) *framework.Path {
 	}
 }
 
+func pathConfigRestoreGuardAcknowledge(_ *secretSyncBackend) *framework.Path {
+	return &framework.Path{
+		Pattern: "config/restore-guard/acknowledge",
+		Operations: map[logical.Operation]framework.OperationHandler{
+			logical.UpdateOperation: &framework.PathOperation{
+				Callback: pathConfigRestoreGuardAcknowledgeWrite,
+				Summary:  "Acknowledge restore guard and resume remote mutation.",
+			},
+		},
+		HelpSynopsis:    "Acknowledge restore guard.",
+		HelpDescription: "Clears the restore guard after an operator has reviewed restore or clone safety.",
+	}
+}
+
 func pathConfigRead(ctx context.Context, req *logical.Request, _ *framework.FieldData) (*logical.Response, error) {
 	cfg, err := readGlobalConfig(ctx, req.Storage)
 	if err != nil {
@@ -50,6 +64,7 @@ func pathConfigRead(ctx context.Context, req *logical.Request, _ *framework.Fiel
 	return &logical.Response{Data: newResponseData(
 		responseField("disabled", cfg.Disabled),
 		responseField("restore_guard", cfg.RestoreGuard),
+		responseField("restore_guard_acknowledged_time", cfg.RestoreGuardAcknowledgedTime),
 		responseField("queue_capacity", cfg.QueueCapacity),
 	)}, nil
 }
@@ -64,6 +79,11 @@ func pathConfigWrite(ctx context.Context, req *logical.Request, data *framework.
 	}
 	if value, ok := data.GetOk("restore_guard"); ok {
 		cfg.RestoreGuard = value.(bool)
+		if cfg.RestoreGuard {
+			cfg.RestoreGuardAcknowledgedTime = ""
+		} else {
+			cfg.RestoreGuardAcknowledgedTime = nowUTC().Format(timeFormatRFC3339)
+		}
 	}
 	if value, ok := data.GetOk("queue_capacity"); ok {
 		queueCapacity := value.(int)
@@ -76,14 +96,42 @@ func pathConfigWrite(ctx context.Context, req *logical.Request, data *framework.
 		cfg.QueueCapacity = defaultQueueCapacity
 	}
 	cfg.UpdatedTime = nowUTC().Format(timeFormatRFC3339)
-	entry, err := logical.StorageEntryJSON(configPath, cfg)
-	if err != nil {
-		return nil, err
-	}
-	if err := req.Storage.Put(ctx, entry); err != nil {
+	if err := putGlobalConfig(ctx, req.Storage, cfg); err != nil {
 		return nil, err
 	}
 	return nil, nil
+}
+
+func pathConfigRestoreGuardAcknowledgeWrite(
+	ctx context.Context,
+	req *logical.Request,
+	_ *framework.FieldData,
+) (*logical.Response, error) {
+	cfg, err := readGlobalConfig(ctx, req.Storage)
+	if err != nil {
+		return nil, err
+	}
+	now := nowUTC().Format(timeFormatRFC3339)
+	cfg.RestoreGuard = false
+	cfg.RestoreGuardAcknowledgedTime = now
+	cfg.UpdatedTime = now
+	if err := putGlobalConfig(ctx, req.Storage, cfg); err != nil {
+		return nil, err
+	}
+	return &logical.Response{Data: newResponseData(
+		responseField("disabled", cfg.Disabled),
+		responseField("restore_guard", cfg.RestoreGuard),
+		responseField("restore_guard_acknowledged_time", cfg.RestoreGuardAcknowledgedTime),
+		responseField("queue_capacity", cfg.QueueCapacity),
+	)}, nil
+}
+
+func putGlobalConfig(ctx context.Context, storage logical.Storage, cfg globalConfig) error {
+	entry, err := logical.StorageEntryJSON(configPath, cfg)
+	if err != nil {
+		return err
+	}
+	return storage.Put(ctx, entry)
 }
 
 func readGlobalConfig(ctx context.Context, storage logical.Storage) (globalConfig, error) {
@@ -115,10 +163,11 @@ func defaultGlobalConfig() globalConfig {
 }
 
 type globalConfig struct {
-	Disabled      bool   `json:"disabled"`
-	RestoreGuard  bool   `json:"restore_guard"`
-	QueueCapacity int    `json:"queue_capacity"`
-	UpdatedTime   string `json:"updated_time"`
+	Disabled                     bool   `json:"disabled"`
+	RestoreGuard                 bool   `json:"restore_guard"`
+	RestoreGuardAcknowledgedTime string `json:"restore_guard_acknowledged_time"`
+	QueueCapacity                int    `json:"queue_capacity"`
+	UpdatedTime                  string `json:"updated_time"`
 }
 
 const timeFormatRFC3339 = "2006-01-02T15:04:05Z07:00"

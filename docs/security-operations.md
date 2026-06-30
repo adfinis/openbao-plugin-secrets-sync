@@ -198,7 +198,8 @@ overwrite newer remote state.
 The plugin needs a safe mode:
 
 - `restore_guard=true` after detected or operator-declared restore;
-- background remote mutations disabled while the guard is active;
+- background and manual-drain remote mutations disabled while the guard is
+  active;
 - `reconcile plan` before pushing restored data to destinations;
 - explicit operator acknowledgement to resume sync;
 - restore epoch included in future ownership metadata where possible.

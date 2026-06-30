@@ -43,7 +43,7 @@ func Backend(_ *logical.BackendConfig) *secretSyncBackend {
 			},
 		},
 		Paths: framework.PathAppend(
-			[]*framework.Path{pathConfig(&b)},
+			[]*framework.Path{pathConfig(&b), pathConfigRestoreGuardAcknowledge(&b)},
 			pathDestinations(&b),
 			pathAssociations(&b),
 			pathMetadata(&b),
@@ -83,7 +83,7 @@ func (b *secretSyncBackend) periodic(ctx context.Context, req *logical.Request) 
 	if err != nil {
 		return err
 	}
-	if cfg.Disabled {
+	if cfg.Disabled || cfg.RestoreGuard {
 		return nil
 	}
 	now := nowUTC()
