@@ -194,6 +194,25 @@ bao write -force secret-sync/queue/<operation-id>/retry
 bao write -force secret-sync/queue/<operation-id>/cancel
 ```
 
+## Reconcile Remote State
+
+Plan reconcile without changing local status or remote objects:
+
+```sh
+bao read secret-sync/reconcile/app/db/plan
+```
+
+Apply reconcile to update local status from provider read-state metadata:
+
+```sh
+bao write -force secret-sync/reconcile/app/db
+```
+
+Reconcile is safe to run while restore guard is active because it does not
+mutate destination secrets. It reports remote existence, ownership metadata,
+payload hash metadata, source version metadata, and stable failure states where
+the provider supports those fields.
+
 ## Check Sync Status
 
 Read per-source status:
@@ -209,7 +228,7 @@ Common states in the current implementation include:
 - `NO_ASSOCIATION`: the source path exists but has no sync association or
   object status yet;
 - `DISABLED`: association or destination is disabled;
-- `REMOTE_MISSING`: an owned delete completed or remote object is absent.
+- `REMOTE_MISSING`: an owned delete completed or remote object is absent;
 - `REMOTE_OWNERSHIP_LOST`, `DESTINATION_AUTH_ERROR`,
   `DESTINATION_POLICY_ERROR`, `DESTINATION_RATE_LIMITED`,
   `DESTINATION_UNAVAILABLE`, `VALIDATION_ERROR`, `QUEUE_BLOCKED`, and

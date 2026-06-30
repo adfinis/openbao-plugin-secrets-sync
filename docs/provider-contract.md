@@ -200,10 +200,28 @@ Remote state reads receive the same destination config as mutating calls:
 
 ```go
 type ReadStateRequest struct {
-    Destination  DestinationConfig
-    ResolvedName string
+    Destination   DestinationConfig
+    ResolvedName  string
+    PayloadSHA256 string
+    SourcePath    string
+    SourceVersion int
+    AssociationID string
+    ObjectID      string
+}
+
+type RemoteState struct {
+    Exists          bool
+    OwnershipKnown  bool
+    Owned           bool
+    PayloadSHA256   string
+    SourceVersion   int
+    RemoteVersion   string
 }
 ```
+
+`OwnershipKnown=false` means the provider could not prove ownership either
+way. The core must not treat that as `SYNCED` unless another comparable field,
+such as the provider payload hash metadata, matches the desired state.
 
 ## Ownership Metadata
 

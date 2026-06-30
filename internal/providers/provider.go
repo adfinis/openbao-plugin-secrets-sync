@@ -118,13 +118,23 @@ type DeleteRequest struct {
 
 // ReadStateRequest describes a remote state lookup.
 type ReadStateRequest struct {
-	Destination  DestinationConfig
-	ResolvedName string
+	Destination   DestinationConfig
+	ResolvedName  string
+	PayloadSHA256 string
+	SourcePath    string
+	SourceVersion int
+	AssociationID string
+	ObjectID      string
 }
 
 // RemoteState is the provider's view of one remote object.
 type RemoteState struct {
-	Exists bool
+	Exists         bool
+	OwnershipKnown bool
+	Owned          bool
+	PayloadSHA256  string
+	SourceVersion  int
+	RemoteVersion  string
 }
 
 // SyncResult describes the result of one remote mutation.

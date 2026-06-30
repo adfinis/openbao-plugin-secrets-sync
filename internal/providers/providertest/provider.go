@@ -69,8 +69,13 @@ type DeleteCase struct {
 
 // ReadStateCase validates remote state lookup.
 type ReadStateCase struct {
-	Request providers.ReadStateRequest
-	Exists  bool
+	Request        providers.ReadStateRequest
+	Exists         bool
+	OwnershipKnown bool
+	Owned          bool
+	PayloadSHA256  string
+	SourceVersion  int
+	RemoteVersion  string
 }
 
 // UpsertErrorCase validates upsert error classification.
@@ -230,6 +235,21 @@ func runReadStateCheck(t *testing.T, provider providers.Provider, readStateCase 
 		}
 		if state.Exists != readStateCase.Exists {
 			t.Fatalf("remote state exists = %v, want %v", state.Exists, readStateCase.Exists)
+		}
+		if state.OwnershipKnown != readStateCase.OwnershipKnown {
+			t.Fatalf("remote state ownership known = %v, want %v", state.OwnershipKnown, readStateCase.OwnershipKnown)
+		}
+		if state.Owned != readStateCase.Owned {
+			t.Fatalf("remote state owned = %v, want %v", state.Owned, readStateCase.Owned)
+		}
+		if state.PayloadSHA256 != readStateCase.PayloadSHA256 {
+			t.Fatalf("remote state payload sha = %q, want %q", state.PayloadSHA256, readStateCase.PayloadSHA256)
+		}
+		if state.SourceVersion != readStateCase.SourceVersion {
+			t.Fatalf("remote state source version = %d, want %d", state.SourceVersion, readStateCase.SourceVersion)
+		}
+		if state.RemoteVersion != readStateCase.RemoteVersion {
+			t.Fatalf("remote state version = %q, want %q", state.RemoteVersion, readStateCase.RemoteVersion)
 		}
 	})
 }

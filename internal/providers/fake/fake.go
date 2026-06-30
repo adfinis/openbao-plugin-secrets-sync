@@ -80,8 +80,46 @@ func (Provider) Delete(_ context.Context, req providers.DeleteRequest) (*provide
 	return &providers.SyncResult{RemoteVersion: "deleted"}, nil
 }
 
-func (Provider) ReadState(context.Context, providers.ReadStateRequest) (*providers.RemoteState, error) {
-	return &providers.RemoteState{Exists: false}, nil
+func (Provider) ReadState(_ context.Context, req providers.ReadStateRequest) (*providers.RemoteState, error) {
+	switch {
+	case strings.Contains(req.ResolvedName, "missing"):
+		return &providers.RemoteState{Exists: false}, nil
+	case strings.Contains(req.ResolvedName, "ownership"):
+		return &providers.RemoteState{
+			Exists:         true,
+			OwnershipKnown: true,
+			Owned:          false,
+		}, nil
+	case strings.Contains(req.ResolvedName, "drift-newer"):
+		return &providers.RemoteState{
+			Exists:         true,
+			OwnershipKnown: true,
+			Owned:          true,
+			PayloadSHA256:  "sha256:remote",
+			SourceVersion:  req.SourceVersion + 1,
+			RemoteVersion:  "fake",
+		}, nil
+	case strings.Contains(req.ResolvedName, "drift"):
+		return &providers.RemoteState{
+			Exists:         true,
+			OwnershipKnown: true,
+			Owned:          true,
+			PayloadSHA256:  "sha256:remote",
+			SourceVersion:  req.SourceVersion,
+			RemoteVersion:  "fake",
+		}, nil
+	}
+	if err := fakeMutationError(req.ResolvedName); err != nil {
+		return nil, err
+	}
+	return &providers.RemoteState{
+		Exists:         true,
+		OwnershipKnown: true,
+		Owned:          true,
+		PayloadSHA256:  req.PayloadSHA256,
+		SourceVersion:  req.SourceVersion,
+		RemoteVersion:  "fake",
+	}, nil
 }
 
 func (Provider) Health(_ context.Context, cfg providers.DestinationConfig) (*providers.HealthResult, error) {

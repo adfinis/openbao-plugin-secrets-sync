@@ -342,7 +342,10 @@ Reconciliation is bounded and resumable:
 - configurable concurrency;
 - operator-triggered dry-run plan.
 
-Reconciliation should detect missing outbox entries and stale or missing remote
+The first implementation provides manual per-path reconcile. The plan path only
+reads provider state; the apply path writes local status but still does not
+mutate destination objects. Reconciliation should detect missing outbox entries
+and stale or missing remote
 objects. It should enqueue operations rather than mutating many remote objects
 inside the scan.
 

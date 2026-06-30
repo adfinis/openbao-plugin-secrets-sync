@@ -77,8 +77,20 @@ func TestProviderConformance(t *testing.T) {
 			RemoteVersion: "deleted",
 		},
 		ReadStateCase: &providertest.ReadStateCase{
-			Request: providers.ReadStateRequest{ResolvedName: "prod/app/db"},
-			Exists:  false,
+			Request: providers.ReadStateRequest{
+				ResolvedName:  "prod/app/db",
+				PayloadSHA256: "sha256:test",
+				SourcePath:    "app/db",
+				SourceVersion: 1,
+				AssociationID: "assoc-1",
+				ObjectID:      "secret-path",
+			},
+			Exists:         true,
+			OwnershipKnown: true,
+			Owned:          true,
+			PayloadSHA256:  "sha256:test",
+			SourceVersion:  1,
+			RemoteVersion:  "fake",
 		},
 		UpsertErrors: []providertest.UpsertErrorCase{
 			{

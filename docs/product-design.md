@@ -165,6 +165,14 @@ The reconciler detects:
 Reconciliation scans are bounded, resumable, and enqueue work instead of doing
 unbounded remote mutation inline.
 
+The first implementation slice exposes manual per-path reconcile:
+
+- `GET reconcile/<path>/plan` reads provider state and returns intended status
+  without writing local status or mutating remote objects;
+- `POST reconcile/<path>` reads provider state and writes local status only;
+- reconcile is allowed while restore guard is active because it performs no
+  destination mutation.
+
 ## API Shape
 
 The source-secret API should feel familiar to KV-v2 users without claiming
@@ -260,6 +268,8 @@ Association lifecycle controls are per association, not per source path:
 ```text
 GET  status/<path>
 GET  status/destinations/<type>/<name>
+GET  reconcile/<path>/plan
+POST reconcile/<path>
 GET  queue
 GET  queue/<operation-id>
 POST queue/<operation-id>/retry

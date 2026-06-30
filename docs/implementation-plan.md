@@ -20,6 +20,7 @@ Implemented backend slices now include:
 - durable outbox, enqueue-intent recovery, queue summary, operation read,
   cancel, manual retry, and bounded manual drain;
 - provider delete dispatch for durable delete operations;
+- manual per-path reconcile plan/apply using provider read-state;
 - automatic retry for `rate_limit` and `unavailable` provider errors with a
   bounded retry budget;
 - status records with payload hashes and no secret payload disclosure;
@@ -182,6 +183,10 @@ Completed foundation:
   and payload hash.
 - Collision, ownership loss, throttling, authorization, and service failure
   paths map to stable provider results or error classes.
+- Provider read-state reports remote existence, ownership metadata, payload
+  hash, source version, and remote version where supported.
+- Manual per-path reconcile plan/apply maps provider read-state into local
+  status without mutating remote objects.
 - Stale update and delete attempts are rejected when AWS metadata shows a newer
   managed source version.
 - The backend registers `aws-sm` and passes destination config through

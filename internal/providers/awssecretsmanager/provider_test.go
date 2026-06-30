@@ -4,6 +4,7 @@ import (
 	"context"
 	"strconv"
 	"testing"
+	"time"
 
 	"github.com/adfinis/openbao-secret-sync/internal/providers"
 	"github.com/adfinis/openbao-secret-sync/internal/providers/providertest"
@@ -69,8 +70,13 @@ func TestProviderConformance(t *testing.T) {
 			RemoteVersion: "arn:aws:secretsmanager:test",
 		},
 		ReadStateCase: &providertest.ReadStateCase{
-			Request: providers.ReadStateRequest{ResolvedName: testResolvedName},
-			Exists:  true,
+			Request:        defaultReadStateRequest(),
+			Exists:         true,
+			OwnershipKnown: true,
+			Owned:          true,
+			PayloadSHA256:  testPayloadSHAOld,
+			SourceVersion:  1,
+			RemoteVersion:  "current-version",
 		},
 	})
 }
@@ -261,6 +267,93 @@ func TestPlanActions(t *testing.T) {
 			}
 			if result.ErrorClass != tt.errorClass {
 				t.Fatalf("error class = %s, want %s", result.ErrorClass, tt.errorClass)
+			}
+		})
+	}
+}
+
+func TestReadStateReportsRemoteMetadata(t *testing.T) {
+	tests := []struct {
+		name           string
+		describeOutput *secretsmanager.DescribeSecretOutput
+		describeError  error
+		exists         bool
+		ownershipKnown bool
+		owned          bool
+		payloadSHA256  string
+		sourceVersion  int
+		remoteVersion  string
+		errorClass     providers.ErrorClass
+	}{
+		{
+			name:           "owned existing secret",
+			describeOutput: ownedDescribeOutputAtVersion(testPayloadSHAOld, 2),
+			exists:         true,
+			ownershipKnown: true,
+			owned:          true,
+			payloadSHA256:  testPayloadSHAOld,
+			sourceVersion:  2,
+			remoteVersion:  "current-version",
+		},
+		{
+			name:          "missing secret",
+			describeError: apiError("ResourceNotFoundException"),
+			exists:        false,
+		},
+		{
+			name: "unowned existing secret",
+			describeOutput: &secretsmanager.DescribeSecretOutput{
+				Name: aws.String(testResolvedName),
+			},
+			exists:         true,
+			ownershipKnown: true,
+			owned:          false,
+		},
+		{
+			name: "deleted secret",
+			describeOutput: &secretsmanager.DescribeSecretOutput{
+				Name:        aws.String(testResolvedName),
+				DeletedDate: aws.Time(time.Unix(1700000000, 0)),
+			},
+			exists: false,
+		},
+		{
+			name:          "auth failure",
+			describeError: apiError("UnrecognizedClientException"),
+			errorClass:    providers.ErrorClassAuthn,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			client := &mockSecretsManagerClient{
+				describeOutput: tt.describeOutput,
+				describeError:  tt.describeError,
+			}
+			state, err := (Provider{client: client}).ReadState(context.Background(), defaultReadStateRequest())
+			if tt.errorClass != "" {
+				assertProviderErrorClass(t, err, tt.errorClass)
+				return
+			}
+			if err != nil {
+				t.Fatalf("read state: %v", err)
+			}
+			if state.Exists != tt.exists {
+				t.Fatalf("exists = %v, want %v", state.Exists, tt.exists)
+			}
+			if state.OwnershipKnown != tt.ownershipKnown {
+				t.Fatalf("ownership known = %v, want %v", state.OwnershipKnown, tt.ownershipKnown)
+			}
+			if state.Owned != tt.owned {
+				t.Fatalf("owned = %v, want %v", state.Owned, tt.owned)
+			}
+			if state.PayloadSHA256 != tt.payloadSHA256 {
+				t.Fatalf("payload sha = %q, want %q", state.PayloadSHA256, tt.payloadSHA256)
+			}
+			if state.SourceVersion != tt.sourceVersion {
+				t.Fatalf("source version = %d, want %d", state.SourceVersion, tt.sourceVersion)
+			}
+			if state.RemoteVersion != tt.remoteVersion {
+				t.Fatalf("remote version = %q, want %q", state.RemoteVersion, tt.remoteVersion)
 			}
 		})
 	}
@@ -597,6 +690,18 @@ func defaultDeleteRequest() providers.DeleteRequest {
 	return providers.DeleteRequest{
 		Destination:   defaultDestinationConfig(),
 		ResolvedName:  testResolvedName,
+		SourcePath:    testSourcePath,
+		SourceVersion: 1,
+		AssociationID: testAssociationID,
+		ObjectID:      testObjectID,
+	}
+}
+
+func defaultReadStateRequest() providers.ReadStateRequest {
+	return providers.ReadStateRequest{
+		Destination:   defaultDestinationConfig(),
+		ResolvedName:  testResolvedName,
+		PayloadSHA256: testPayloadSHANew,
 		SourcePath:    testSourcePath,
 		SourceVersion: 1,
 		AssociationID: testAssociationID,

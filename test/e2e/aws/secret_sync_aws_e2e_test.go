@@ -82,6 +82,8 @@ func TestOpenBaoPluginSyncsToAWSSecretsManager(t *testing.T) {
 		"openbao-sync-object": "secret-path",
 	})
 	assertStatus(t, baoClient, "SYNCED")
+	assertReconcilePlan(t, baoClient, "SYNCED")
+	assertReconcileApply(t, baoClient, "SYNCED")
 
 	writeSource(t, baoClient, "updated")
 	drainQueue(t, baoClient, 1)
@@ -356,6 +358,31 @@ func assertStatus(t *testing.T, client *api.Client, expectedState string) {
 	}
 	if got := secret.Data["state"]; got != expectedState {
 		t.Fatalf("status state = %v, want %s", got, expectedState)
+	}
+}
+
+func assertReconcilePlan(t *testing.T, client *api.Client, expectedState string) {
+	t.Helper()
+	secret, err := client.Logical().Read(mountPath + "/reconcile/app/db/plan")
+	if err != nil {
+		t.Fatalf("read reconcile plan: %v", err)
+	}
+	assertReconcileState(t, secret, expectedState)
+}
+
+func assertReconcileApply(t *testing.T, client *api.Client, expectedState string) {
+	t.Helper()
+	secret := write(t, client, mountPath+"/reconcile/app/db", map[string]interface{}{})
+	assertReconcileState(t, secret, expectedState)
+}
+
+func assertReconcileState(t *testing.T, secret *api.Secret, expectedState string) {
+	t.Helper()
+	if secret == nil {
+		t.Fatal("reconcile response is nil")
+	}
+	if got := secret.Data["state"]; got != expectedState {
+		t.Fatalf("reconcile state = %v, want %s", got, expectedState)
 	}
 }
 

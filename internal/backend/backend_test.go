@@ -828,6 +828,134 @@ func TestAssociationPlan(t *testing.T) {
 	}
 }
 
+func TestReconcilePlanDoesNotPersistStatus(t *testing.T) {
+	b := Backend(&logical.BackendConfig{})
+	storage := &logical.InmemStorage{}
+
+	writeAppDBSecret(t, b, storage, "secret-canary")
+	createFakeDestination(t, b, storage, "default")
+	associationResp := createDefaultFakeAssociation(t, b, storage)
+	associationID := associationIDFromResponse(t, associationResp)
+
+	planResp := handleRequest(t, b, storage, logical.ReadOperation, "reconcile/app/db/plan", nil)
+	assertNoErrorResponse(t, planResp)
+	if got := planResp.Data["applied"]; got != false {
+		t.Fatalf("applied = %v, want false", got)
+	}
+	if got := planResp.Data["state"]; got != string(domain.SyncStateSynced) {
+		t.Fatalf("reconcile plan state = %v, want %s", got, domain.SyncStateSynced)
+	}
+	objects := planResp.Data["objects"].([]map[string]interface{})
+	if len(objects) != 1 {
+		t.Fatalf("reconcile plan objects = %d, want 1", len(objects))
+	}
+	if got := objects[0]["state"]; got != string(domain.SyncStateSynced) {
+		t.Fatalf("reconcile object state = %v, want %s", got, domain.SyncStateSynced)
+	}
+	if strings.Contains(fmt.Sprint(planResp.Data), "secret-canary") {
+		t.Fatalf("reconcile plan response contains secret value: %#v", planResp.Data)
+	}
+	status, err := getStatus(context.Background(), storage, "app/db", associationID, syncObjectIDSecretPath)
+	if err != nil {
+		t.Fatalf("read status: %v", err)
+	}
+	if status != nil {
+		t.Fatalf("status = %#v, want nil after reconcile plan", status)
+	}
+}
+
+func TestReconcileApplyMapsReadStateToStatus(t *testing.T) {
+	testCases := []struct {
+		name         string
+		resolvedName string
+		state        domain.SyncState
+		errorClass   providers.ErrorClass
+	}{
+		{
+			name:         "synced",
+			resolvedName: "prod/app/db",
+			state:        domain.SyncStateSynced,
+		},
+		{
+			name:         "missing",
+			resolvedName: "prod/missing/app/db",
+			state:        domain.SyncStateRemoteMissing,
+		},
+		{
+			name:         "ownership",
+			resolvedName: "prod/ownership/app/db",
+			state:        domain.SyncStateRemoteOwnershipLost,
+			errorClass:   providers.ErrorClassOwnership,
+		},
+		{
+			name:         "drift",
+			resolvedName: "prod/drift/app/db",
+			state:        domain.SyncStateDrifted,
+			errorClass:   providers.ErrorClassDrift,
+		},
+		{
+			name:         "authn",
+			resolvedName: "prod/authn/app/db",
+			state:        domain.SyncStateDestinationAuthError,
+			errorClass:   providers.ErrorClassAuthn,
+		},
+		{
+			name:         "rate-limit",
+			resolvedName: "prod/rate-limit/app/db",
+			state:        domain.SyncStateDestinationRateLimited,
+			errorClass:   providers.ErrorClassRateLimit,
+		},
+	}
+
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			b := Backend(&logical.BackendConfig{})
+			storage := &logical.InmemStorage{}
+
+			writeAppDBSecret(t, b, storage, "secret-canary")
+			createFakeDestination(t, b, storage, "default")
+			associationResp := createFakeAssociationWithResolvedName(t, b, storage, testCase.resolvedName)
+			associationID := associationIDFromResponse(t, associationResp)
+
+			resp := handleRequest(t, b, storage, logical.UpdateOperation, "reconcile/app/db", nil)
+			assertNoErrorResponse(t, resp)
+			if got := resp.Data["applied"]; got != true {
+				t.Fatalf("applied = %v, want true", got)
+			}
+			objects := resp.Data["objects"].([]map[string]interface{})
+			if len(objects) != 1 {
+				t.Fatalf("reconcile objects = %d, want 1", len(objects))
+			}
+			if got := objects[0]["state"]; got != string(testCase.state) {
+				t.Fatalf("reconcile object state = %v, want %s", got, testCase.state)
+			}
+			if got := objects[0]["error_class"]; got != string(testCase.errorClass) {
+				t.Fatalf("reconcile error class = %v, want %s", got, testCase.errorClass)
+			}
+			if strings.Contains(fmt.Sprint(resp.Data), "secret-canary") {
+				t.Fatalf("reconcile response contains secret value: %#v", resp.Data)
+			}
+
+			status, err := getStatus(context.Background(), storage, "app/db", associationID, syncObjectIDSecretPath)
+			if err != nil {
+				t.Fatalf("read status: %v", err)
+			}
+			if status == nil {
+				t.Fatal("status must be written")
+			}
+			if got := status.State; got != string(testCase.state) {
+				t.Fatalf("status state = %v, want %s", got, testCase.state)
+			}
+			if got := status.LastErrorClass; got != string(testCase.errorClass) {
+				t.Fatalf("status last error class = %v, want %s", got, testCase.errorClass)
+			}
+			if strings.Contains(fmt.Sprint(status), "secret-canary") {
+				t.Fatalf("status contains secret value: %#v", status)
+			}
+		})
+	}
+}
+
 func TestAssociationDisableEnableAndManualSync(t *testing.T) {
 	b := Backend(&logical.BackendConfig{})
 	storage := &logical.InmemStorage{}

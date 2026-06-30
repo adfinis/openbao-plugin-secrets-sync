@@ -268,7 +268,18 @@ func (p Provider) ReadState(ctx context.Context, req providers.ReadStateRequest)
 	if err != nil {
 		return nil, providerError(classifyAWSError(err))
 	}
-	return &providers.RemoteState{Exists: describe.DeletedDate == nil}, nil
+	if describe.DeletedDate != nil {
+		return &providers.RemoteState{Exists: false}, nil
+	}
+	sourceVersion, _ := strconv.Atoi(tagValue(describe.Tags, tagSourceVersion))
+	return &providers.RemoteState{
+		Exists:         true,
+		OwnershipKnown: hasOwnershipIdentityFromReadState(req),
+		Owned:          ownedByRequest(describe.Tags, ownershipIdentityFromReadState(req)),
+		PayloadSHA256:  tagValue(describe.Tags, tagPayloadSHA256),
+		SourceVersion:  sourceVersion,
+		RemoteVersion:  currentVersionID(describe),
+	}, nil
 }
 
 func (p Provider) Health(ctx context.Context, cfg providers.DestinationConfig) (*providers.HealthResult, error) {
@@ -569,6 +580,18 @@ func ownershipIdentityFromDelete(req providers.DeleteRequest) ownershipIdentity 
 		SourcePath:    req.SourcePath,
 		ObjectID:      req.ObjectID,
 	}
+}
+
+func ownershipIdentityFromReadState(req providers.ReadStateRequest) ownershipIdentity {
+	return ownershipIdentity{
+		AssociationID: req.AssociationID,
+		SourcePath:    req.SourcePath,
+		ObjectID:      req.ObjectID,
+	}
+}
+
+func hasOwnershipIdentityFromReadState(req providers.ReadStateRequest) bool {
+	return req.AssociationID != "" && req.SourcePath != "" && req.ObjectID != ""
 }
 
 func ownershipTagsFromUpsert(req providers.UpsertRequest) []smtypes.Tag {
