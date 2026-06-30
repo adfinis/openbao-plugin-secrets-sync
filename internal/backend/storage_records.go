@@ -14,6 +14,10 @@ const (
 	metadataStoragePrefix      = "metadata/"
 	versionStoragePrefix       = "data/"
 	enqueueIntentStoragePrefix = "enqueue_intent/"
+	destinationStoragePrefix   = "destinations/"
+	associationStoragePrefix   = "associations/"
+	associationByDestPrefix    = "associations_by_destination/"
+	associationNamePrefix      = "association_names/"
 	outboxStoragePrefix        = "outbox/"
 	outboxByPathStoragePrefix  = "outbox_by_path/"
 	defaultQueueCapacity       = 1000
@@ -22,10 +26,11 @@ const (
 	outboxStateRetryWait       = "retry_wait"
 	outboxStateFailedTerminal  = "failed_terminal"
 	outboxStateSucceeded       = "succeeded"
-	fakeAssociationID          = "local-pending"
-	fakeDestinationRef         = "fake/default"
 	syncObjectIDSecretPath     = "secret-path"
 	statusStoragePrefix        = "status/"
+	providerTypeFake           = "fake"
+	defaultAssociationFormat   = "json"
+	defaultNameTemplate        = "{{ path }}"
 )
 
 type secretPayload map[string]interface{} //nolint:forbidigo // OpenBao SDK TypeMap uses map[string]interface{}.
@@ -51,6 +56,30 @@ type metadataRecord struct {
 	CASRequired    bool                       `json:"cas_required"`
 	Versions       map[string]versionMetadata `json:"versions"`
 	UpdatedTime    string                     `json:"updated_time"`
+}
+
+type destinationRecord struct {
+	Type        string `json:"type"`
+	Name        string `json:"name"`
+	Description string `json:"description"`
+	Disabled    bool   `json:"disabled"`
+	CreatedTime string `json:"created_time"`
+	UpdatedTime string `json:"updated_time"`
+}
+
+type associationRecord struct {
+	ID              string `json:"id"`
+	Path            string `json:"path"`
+	DestinationType string `json:"destination_type"`
+	DestinationName string `json:"destination_name"`
+	DestinationRef  string `json:"destination_ref"`
+	NameTemplate    string `json:"name_template"`
+	ResolvedName    string `json:"resolved_name"`
+	Granularity     string `json:"granularity"`
+	Format          string `json:"format"`
+	Enabled         bool   `json:"enabled"`
+	CreatedTime     string `json:"created_time"`
+	UpdatedTime     string `json:"updated_time"`
 }
 
 type enqueueIntentRecord struct {
@@ -121,6 +150,22 @@ func enqueueIntentStorageKey(path string, version int) string {
 	return enqueueIntentStoragePrefix + path + "/" + strconv.Itoa(version)
 }
 
+func destinationStorageKey(destinationType string, name string) string {
+	return destinationStoragePrefix + destinationRef(destinationType, name)
+}
+
+func associationStorageKey(path string, id string) string {
+	return associationStoragePrefix + path + "/" + id
+}
+
+func associationByDestinationStorageKey(destinationType string, name string, id string) string {
+	return associationByDestPrefix + destinationRef(destinationType, name) + "/" + id
+}
+
+func associationNameStorageKey(destinationRef string, resolvedName string, id string) string {
+	return associationNamePrefix + destinationRef + "/" + nameReservationID(resolvedName) + "/" + id
+}
+
 func outboxStorageKey(id string) string {
 	return outboxStoragePrefix + id
 }
@@ -131,6 +176,27 @@ func outboxByPathStorageKey(path string, id string) string {
 
 func statusStorageKey(path string, associationID string, objectID string) string {
 	return statusStoragePrefix + path + "/" + associationID + "/" + objectID
+}
+
+func destinationRef(destinationType string, name string) string {
+	return destinationType + "/" + name
+}
+
+func newAssociationID(
+	path string,
+	destinationType string,
+	destinationName string,
+	resolvedName string,
+	granularity string,
+) string {
+	raw := fmt.Sprintf("%s:%s:%s:%s:%s", path, destinationType, destinationName, resolvedName, granularity)
+	sum := sha256.Sum256([]byte(raw))
+	return "assoc-" + hex.EncodeToString(sum[:8])
+}
+
+func nameReservationID(resolvedName string) string {
+	sum := sha256.Sum256([]byte(resolvedName))
+	return hex.EncodeToString(sum[:12])
 }
 
 func newOperationID(

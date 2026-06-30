@@ -66,6 +66,37 @@ func TestConfigWriteMergesDefaultsAndValidatesQueueCapacity(t *testing.T) {
 	}
 }
 
+func TestDestinationLifecycle(t *testing.T) {
+	b := Backend(&logical.BackendConfig{})
+	storage := &logical.InmemStorage{}
+
+	createFakeDestination(t, b, storage, "primary")
+	readResp := handleRequest(t, b, storage, logical.ReadOperation, "destinations/fake/primary", nil)
+	assertNoErrorResponse(t, readResp)
+	if got := readResp.Data["name"]; got != "primary" {
+		t.Fatalf("destination name = %v, want primary", got)
+	}
+	if _, ok := readResp.Data["sensitive_config"]; !ok {
+		t.Fatal("destination read must include redacted sensitive_config")
+	}
+
+	listResp := handleRequest(t, b, storage, logical.ListOperation, "destinations/fake", nil)
+	assertNoErrorResponse(t, listResp)
+	keys := listResp.Data["keys"].([]string)
+	if len(keys) != 1 || keys[0] != "primary" {
+		t.Fatalf("destination keys = %v, want [primary]", keys)
+	}
+
+	deleteResp := handleRequest(t, b, storage, logical.DeleteOperation, "destinations/fake/primary", nil)
+	if deleteResp != nil && deleteResp.IsError() {
+		t.Fatalf("unexpected destination delete error: %v", deleteResp.Error())
+	}
+	readDeletedResp := handleRequest(t, b, storage, logical.ReadOperation, "destinations/fake/primary", nil)
+	if readDeletedResp != nil {
+		t.Fatalf("deleted destination response = %#v, want nil", readDeletedResp)
+	}
+}
+
 func TestDataWriteReadAndQueueStatus(t *testing.T) {
 	b := Backend(&logical.BackendConfig{})
 	storage := &logical.InmemStorage{}
@@ -81,10 +112,10 @@ func TestDataWriteReadAndQueueStatus(t *testing.T) {
 	if got := writeMetadata["version"]; got != 1 {
 		t.Fatalf("write version = %v, want 1", got)
 	}
-	if got := writeMetadata["sync_state"]; got != string(domain.SyncStatePending) {
-		t.Fatalf("sync state = %v, want %s", got, domain.SyncStatePending)
+	if got := writeMetadata["sync_state"]; got != string(domain.SyncStateUnknown) {
+		t.Fatalf("sync state = %v, want %s", got, domain.SyncStateUnknown)
 	}
-	assertCompleteEnqueueIntent(t, storage, "app/db", 1, writeMetadata)
+	assertOperationIDs(t, writeMetadata, 0)
 
 	readResp := handleRequest(t, b, storage, logical.ReadOperation, "data/app/db", nil)
 	assertNoErrorResponse(t, readResp)
@@ -99,17 +130,46 @@ func TestDataWriteReadAndQueueStatus(t *testing.T) {
 
 	queueResp := handleRequest(t, b, storage, logical.ReadOperation, "queue", nil)
 	assertNoErrorResponse(t, queueResp)
-	if got := queueResp.Data["pending"]; got != 1 {
-		t.Fatalf("pending queue count = %v, want 1", got)
+	if got := queueResp.Data["pending"]; got != 0 {
+		t.Fatalf("pending queue count = %v, want 0", got)
 	}
 
 	statusResp := handleRequest(t, b, storage, logical.ReadOperation, "status/app/db", nil)
 	assertNoErrorResponse(t, statusResp)
-	if got := statusResp.Data["state"]; got != string(domain.SyncStatePending) {
-		t.Fatalf("status state = %v, want %s", got, domain.SyncStatePending)
+	if got := statusResp.Data["state"]; got != string(domain.SyncStateUnknown) {
+		t.Fatalf("status state = %v, want %s", got, domain.SyncStateUnknown)
 	}
 	if got := statusResp.Data["version"]; got != 1 {
 		t.Fatalf("status version = %v, want 1", got)
+	}
+}
+
+func TestAssociationCreateQueuesCurrentVersion(t *testing.T) {
+	b := Backend(&logical.BackendConfig{})
+	storage := &logical.InmemStorage{}
+
+	writeAppDBSecret(t, b, storage, "initial")
+	createFakeDestination(t, b, storage, "default")
+	associationResp := createDefaultFakeAssociation(t, b, storage)
+	operationIDs := operationIDsFromResponse(t, associationResp)
+	if len(operationIDs) != 1 {
+		t.Fatalf("association operation IDs = %v, want one operation", operationIDs)
+	}
+
+	queueResp := handleRequest(t, b, storage, logical.ReadOperation, "queue", nil)
+	assertNoErrorResponse(t, queueResp)
+	if got := queueResp.Data["pending"]; got != 1 {
+		t.Fatalf("pending queue count = %v, want 1", got)
+	}
+
+	readResp := handleRequest(t, b, storage, logical.ReadOperation, "associations/app/db", nil)
+	assertNoErrorResponse(t, readResp)
+	associations := readResp.Data["associations"].([]map[string]interface{})
+	if len(associations) != 1 {
+		t.Fatalf("associations length = %d, want 1", len(associations))
+	}
+	if got := associations[0]["resolved_name"]; got != "prod/app/db" {
+		t.Fatalf("resolved name = %v, want prod/app/db", got)
 	}
 }
 
@@ -162,14 +222,11 @@ func TestQueueCapacityRejectsWriteBeforeVersionCommit(t *testing.T) {
 		"queue_capacity": 1,
 		"restore_guard":  true,
 	})
-	firstResp := handleRequest(t, b, storage, logical.UpdateOperation, "data/app/db", map[string]interface{}{
-		"data": map[string]interface{}{
-			"password": "initial",
-		},
-	})
-	assertNoErrorResponse(t, firstResp)
+	writeAppDBSecret(t, b, storage, "initial")
+	createFakeDestination(t, b, storage, "default")
+	createDefaultFakeAssociation(t, b, storage)
 
-	secondResp := handleRequest(t, b, storage, logical.UpdateOperation, "data/app/api", map[string]interface{}{
+	secondResp := handleRequest(t, b, storage, logical.UpdateOperation, "data/app/db", map[string]interface{}{
 		"data": map[string]interface{}{
 			"password": "blocked",
 		},
@@ -178,9 +235,11 @@ func TestQueueCapacityRejectsWriteBeforeVersionCommit(t *testing.T) {
 		t.Fatal("write must fail when queue is full")
 	}
 
-	readResp := handleRequest(t, b, storage, logical.ReadOperation, "data/app/api", nil)
-	if readResp != nil {
-		t.Fatalf("blocked write committed data: %#v", readResp.Data)
+	readResp := handleRequest(t, b, storage, logical.ReadOperation, "data/app/db", nil)
+	assertNoErrorResponse(t, readResp)
+	readMetadata := readResp.Data["metadata"].(map[string]interface{})
+	if got := readMetadata["version"]; got != 1 {
+		t.Fatalf("blocked write committed version = %v, want 1", got)
 	}
 }
 
@@ -188,9 +247,10 @@ func TestPeriodicProcessesFakeOutbox(t *testing.T) {
 	b := Backend(&logical.BackendConfig{})
 	storage := &logical.InmemStorage{}
 
-	writeResp := writeTestSecret(t, b, storage, "data/app/db", "initial")
-	writeMetadata := writeResp.Data["metadata"].(map[string]interface{})
-	operationID := writeMetadata["sync_operation_id"].(string)
+	writeAppDBSecret(t, b, storage, "initial")
+	createFakeDestination(t, b, storage, "default")
+	associationResp := createDefaultFakeAssociation(t, b, storage)
+	operationID := operationIDsFromResponse(t, associationResp)[0]
 
 	if err := b.periodic(context.Background(), &logical.Request{Storage: storage}); err != nil {
 		t.Fatalf("periodic: %v", err)
@@ -222,7 +282,9 @@ func TestPeriodicHonorsDisabledConfig(t *testing.T) {
 	b := Backend(&logical.BackendConfig{})
 	storage := &logical.InmemStorage{}
 
-	writeTestSecret(t, b, storage, "data/app/db", "initial")
+	writeAppDBSecret(t, b, storage, "initial")
+	createFakeDestination(t, b, storage, "default")
+	createDefaultFakeAssociation(t, b, storage)
 	handleRequest(t, b, storage, logical.UpdateOperation, configPath, map[string]interface{}{
 		"disabled": true,
 	})
@@ -245,16 +307,19 @@ func TestQueueCapacityCountsQueuedOperationsOnly(t *testing.T) {
 	handleRequest(t, b, storage, logical.UpdateOperation, configPath, map[string]interface{}{
 		"queue_capacity": 1,
 	})
-	writeTestSecret(t, b, storage, "data/app/db", "initial")
+	writeAppDBSecret(t, b, storage, "initial")
+	createFakeDestination(t, b, storage, "default")
+	createDefaultFakeAssociation(t, b, storage)
 	if err := b.periodic(context.Background(), &logical.Request{Storage: storage}); err != nil {
 		t.Fatalf("periodic: %v", err)
 	}
 
-	secondResp := writeTestSecret(t, b, storage, "data/app/api", "allowed")
+	secondResp := writeAppDBSecret(t, b, storage, "allowed")
 	metadata := secondResp.Data["metadata"].(map[string]interface{})
-	if got := metadata["version"]; got != 1 {
-		t.Fatalf("second write version = %v, want 1", got)
+	if got := metadata["version"]; got != 2 {
+		t.Fatalf("second write version = %v, want 2", got)
 	}
+	assertCompleteEnqueueIntent(t, storage, "app/db", 2, metadata)
 }
 
 func handleRequest(
@@ -296,10 +361,7 @@ func assertCompleteEnqueueIntent(
 	metadata map[string]interface{},
 ) {
 	t.Helper()
-	operationID, ok := metadata["sync_operation_id"].(string)
-	if !ok || operationID == "" {
-		t.Fatalf("sync_operation_id = %v, want non-empty string", metadata["sync_operation_id"])
-	}
+	operationIDs := operationIDsFromMetadata(t, metadata)
 	intent, err := getEnqueueIntent(context.Background(), storage, path, version)
 	if err != nil {
 		t.Fatalf("read enqueue intent: %v", err)
@@ -307,10 +369,10 @@ func assertCompleteEnqueueIntent(
 	if intent == nil || !intent.Complete {
 		t.Fatalf("enqueue intent = %#v, want complete intent", intent)
 	}
-	if got := intent.OperationIDs; len(got) != 1 || got[0] != operationID {
-		t.Fatalf("enqueue intent operation IDs = %v, want [%s]", got, operationID)
+	if got := intent.OperationIDs; len(got) != len(operationIDs) || got[0] != operationIDs[0] {
+		t.Fatalf("enqueue intent operation IDs = %v, want %v", got, operationIDs)
 	}
-	operation, err := getOutbox(context.Background(), storage, operationID)
+	operation, err := getOutbox(context.Background(), storage, operationIDs[0])
 	if err != nil {
 		t.Fatalf("read outbox operation: %v", err)
 	}
@@ -322,21 +384,68 @@ func assertCompleteEnqueueIntent(
 	}
 }
 
-func writeTestSecret(
+func assertOperationIDs(t *testing.T, metadata map[string]interface{}, expected int) {
+	t.Helper()
+	operationIDs := operationIDsFromMetadata(t, metadata)
+	if len(operationIDs) != expected {
+		t.Fatalf("operation IDs = %v, want %d entries", operationIDs, expected)
+	}
+}
+
+func operationIDsFromMetadata(t *testing.T, metadata map[string]interface{}) []string {
+	t.Helper()
+	rawIDs, ok := metadata["sync_operation_ids"].([]string)
+	if !ok {
+		t.Fatalf("sync_operation_ids = %T, want []string", metadata["sync_operation_ids"])
+	}
+	return rawIDs
+}
+
+func operationIDsFromResponse(t *testing.T, resp *logical.Response) []string {
+	t.Helper()
+	assertNoErrorResponse(t, resp)
+	rawIDs, ok := resp.Data["sync_operation_ids"].([]string)
+	if !ok {
+		t.Fatalf("sync_operation_ids = %T, want []string", resp.Data["sync_operation_ids"])
+	}
+	return rawIDs
+}
+
+func writeAppDBSecret(
 	t *testing.T,
 	b logical.Backend,
 	storage logical.Storage,
-	path string,
 	password string,
 ) *logical.Response {
 	t.Helper()
-	resp := handleRequest(t, b, storage, logical.UpdateOperation, path, map[string]interface{}{
+	resp := handleRequest(t, b, storage, logical.UpdateOperation, "data/app/db", map[string]interface{}{
 		"data": map[string]interface{}{
 			"password": password,
 		},
 	})
 	assertNoErrorResponse(t, resp)
 	return resp
+}
+
+func createFakeDestination(t *testing.T, b logical.Backend, storage logical.Storage, name string) {
+	t.Helper()
+	resp := handleRequest(t, b, storage, logical.UpdateOperation, "destinations/fake/"+name, map[string]interface{}{
+		"description": "test destination",
+	})
+	if resp != nil && resp.IsError() {
+		t.Fatalf("unexpected destination write error: %v", resp.Error())
+	}
+}
+
+func createDefaultFakeAssociation(t *testing.T, b logical.Backend, storage logical.Storage) *logical.Response {
+	t.Helper()
+	return handleRequest(t, b, storage, logical.UpdateOperation, "associations/app/db", map[string]interface{}{
+		"destination_type": providerTypeFake,
+		"destination_name": "default",
+		"resolved_name":    "prod/app/db",
+		"granularity":      syncObjectIDSecretPath,
+		"format":           defaultAssociationFormat,
+	})
 }
 
 func assertSyncedStatusObject(t *testing.T, raw interface{}, operationID string) { //nolint:forbidigo

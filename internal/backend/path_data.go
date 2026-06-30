@@ -65,17 +65,13 @@ func pathDataWrite(ctx context.Context, req *logical.Request, data *framework.Fi
 	if err != nil {
 		return logical.ErrorResponse(err.Error()), nil
 	}
-	if err := ensureQueueCapacity(ctx, req.Storage); err != nil {
-		return logical.ErrorResponse(err.Error()), nil
-	}
 
 	metadata, err := getMetadata(ctx, req.Storage, path)
 	if err != nil {
 		return nil, err
 	}
 	if metadata == nil {
-		initial := newMetadataRecord()
-		metadata = &initial
+		metadata = newMetadataRecordPtr()
 	}
 
 	cas, casSet, err := casFromOptions(data)
@@ -86,11 +82,18 @@ func pathDataWrite(ctx context.Context, req *logical.Request, data *framework.Fi
 		return logical.ErrorResponse(err.Error()), nil
 	}
 
+	associations, err := enabledAssociationsForPath(ctx, req.Storage, path)
+	if err != nil {
+		return nil, err
+	}
+	if err := ensureQueueCapacityFor(ctx, req.Storage, len(associations)); err != nil {
+		return logical.ErrorResponse(err.Error()), nil
+	}
+
 	nextVersion := metadata.CurrentVersion + 1
 	now := nowUTC().Format(timeFormatRFC3339)
-	operation := newPendingOutboxRecord(path, nextVersion, now)
-	intent := newEnqueueIntentRecord(path, nextVersion, []string{operation.ID}, now)
-	if err := putEnqueueIntent(ctx, req.Storage, intent); err != nil {
+	operations, operationIDs := newAssociationOutboxRecords(associations, nextVersion, now)
+	if err := putPendingEnqueueIntent(ctx, req.Storage, path, nextVersion, operationIDs, now); err != nil {
 		return nil, err
 	}
 
@@ -102,14 +105,10 @@ func pathDataWrite(ctx context.Context, req *logical.Request, data *framework.Fi
 	if err := putVersion(ctx, req.Storage, path, record); err != nil {
 		return nil, err
 	}
-
-	if err := putOutbox(ctx, req.Storage, operation); err != nil {
+	if err := putOutboxRecords(ctx, req.Storage, operations); err != nil {
 		return nil, err
 	}
-	intent.Complete = true
-	intent.CompletedTime = now
-	intent.UpdatedTime = now
-	if err := putEnqueueIntent(ctx, req.Storage, intent); err != nil {
+	if err := completeEnqueueIntent(ctx, req.Storage, path, nextVersion, operationIDs, now); err != nil {
 		return nil, err
 	}
 
@@ -129,8 +128,8 @@ func pathDataWrite(ctx context.Context, req *logical.Request, data *framework.Fi
 		responseField("metadata", newResponseData(
 			responseField("version", nextVersion),
 			responseField("created_time", now),
-			responseField("sync_operation_id", operation.ID),
-			responseField("sync_state", string(domain.SyncStatePending)),
+			responseField("sync_operation_ids", operationIDs),
+			responseField("sync_state", string(syncStateForOperationIDs(operationIDs))),
 		)),
 	)}, nil
 }
@@ -244,7 +243,15 @@ func checkCAS(metadata metadataRecord, cas int, casSet bool) error {
 	}
 }
 
-func ensureQueueCapacity(ctx context.Context, storage logical.Storage) error {
+func newMetadataRecordPtr() *metadataRecord {
+	record := newMetadataRecord()
+	return &record
+}
+
+func ensureQueueCapacityFor(ctx context.Context, storage logical.Storage, additionalOperations int) error {
+	if additionalOperations == 0 {
+		return nil
+	}
 	cfg, err := readGlobalConfig(ctx, storage)
 	if err != nil {
 		return err
@@ -253,10 +260,73 @@ func ensureQueueCapacity(ctx context.Context, storage logical.Storage) error {
 	if err != nil {
 		return err
 	}
-	if len(ids) >= cfg.QueueCapacity {
+	if len(ids)+additionalOperations > cfg.QueueCapacity {
 		return fmt.Errorf("sync queue is full: capacity %d", cfg.QueueCapacity)
 	}
 	return nil
+}
+
+func newAssociationOutboxRecords(
+	associations []associationRecord,
+	version int,
+	now string,
+) ([]outboxRecord, []string) {
+	operations := make([]outboxRecord, 0, len(associations))
+	operationIDs := make([]string, 0, len(associations))
+	for _, association := range associations {
+		operation := newAssociationOutboxRecord(association, version, now)
+		operations = append(operations, operation)
+		operationIDs = append(operationIDs, operation.ID)
+	}
+	return operations, operationIDs
+}
+
+func putPendingEnqueueIntent(
+	ctx context.Context,
+	storage logical.Storage,
+	path string,
+	version int,
+	operationIDs []string,
+	now string,
+) error {
+	if len(operationIDs) == 0 {
+		return nil
+	}
+	return putEnqueueIntent(ctx, storage, newEnqueueIntentRecord(path, version, operationIDs, now))
+}
+
+func putOutboxRecords(ctx context.Context, storage logical.Storage, operations []outboxRecord) error {
+	for _, operation := range operations {
+		if err := putOutbox(ctx, storage, operation); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func completeEnqueueIntent(
+	ctx context.Context,
+	storage logical.Storage,
+	path string,
+	version int,
+	operationIDs []string,
+	now string,
+) error {
+	if len(operationIDs) == 0 {
+		return nil
+	}
+	intent := newEnqueueIntentRecord(path, version, operationIDs, now)
+	intent.Complete = true
+	intent.CompletedTime = now
+	intent.UpdatedTime = now
+	return putEnqueueIntent(ctx, storage, intent)
+}
+
+func syncStateForOperationIDs(operationIDs []string) domain.SyncState {
+	if len(operationIDs) > 0 {
+		return domain.SyncStatePending
+	}
+	return domain.SyncStateUnknown
 }
 
 func newEnqueueIntentRecord(path string, version int, operationIDs []string, now string) enqueueIntentRecord {
@@ -269,20 +339,52 @@ func newEnqueueIntentRecord(path string, version int, operationIDs []string, now
 	}
 }
 
-func newPendingOutboxRecord(path string, version int, now string) outboxRecord {
-	id := newOperationID(path, version, fakeAssociationID, syncObjectIDSecretPath, outbox.OperationTypeUpsert)
+func newAssociationOutboxRecord(association associationRecord, version int, now string) outboxRecord {
+	id := newOperationID(
+		association.Path,
+		version,
+		association.ID,
+		syncObjectIDSecretPath,
+		outbox.OperationTypeUpsert,
+	)
 	return outboxRecord{
 		ID:             id,
 		Type:           outbox.OperationTypeUpsert,
-		Path:           path,
+		Path:           association.Path,
 		Version:        version,
-		AssociationID:  fakeAssociationID,
+		AssociationID:  association.ID,
 		ObjectID:       syncObjectIDSecretPath,
-		DestinationRef: fakeDestinationRef,
+		DestinationRef: association.DestinationRef,
 		State:          outboxStatePending,
 		NotBefore:      now,
 		CreatedTime:    now,
 		UpdatedTime:    now,
-		IdempotencyKey: path + ":" + strconv.Itoa(version) + ":" + fakeDestinationRef + ":upsert",
+		IdempotencyKey: association.Path + ":" + strconv.Itoa(version) + ":" + association.ID + ":secret-path:upsert",
 	}
+}
+
+func enabledAssociationsForPath(
+	ctx context.Context,
+	storage logical.Storage,
+	path string,
+) ([]associationRecord, error) {
+	records, err := listAssociationsForPath(ctx, storage, path)
+	if err != nil {
+		return nil, err
+	}
+	enabled := make([]associationRecord, 0, len(records))
+	for _, record := range records {
+		if !record.Enabled {
+			continue
+		}
+		destination, err := getDestination(ctx, storage, record.DestinationType, record.DestinationName)
+		if err != nil {
+			return nil, err
+		}
+		if destination == nil || destination.Disabled {
+			continue
+		}
+		enabled = append(enabled, record)
+	}
+	return enabled, nil
 }

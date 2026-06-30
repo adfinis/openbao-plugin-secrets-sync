@@ -2,6 +2,7 @@ package backend
 
 import (
 	"context"
+	"strings"
 
 	"github.com/openbao/openbao/sdk/v2/logical"
 )
@@ -83,6 +84,138 @@ func getEnqueueIntent(
 	return &record, nil
 }
 
+func putDestination(ctx context.Context, storage logical.Storage, record destinationRecord) error {
+	entry, err := logical.StorageEntryJSON(destinationStorageKey(record.Type, record.Name), record)
+	if err != nil {
+		return err
+	}
+	return storage.Put(ctx, entry)
+}
+
+func getDestination(
+	ctx context.Context,
+	storage logical.Storage,
+	destinationType string,
+	name string,
+) (*destinationRecord, error) {
+	entry, err := storage.Get(ctx, destinationStorageKey(destinationType, name))
+	if err != nil {
+		return nil, err
+	}
+	if entry == nil {
+		return nil, nil
+	}
+	var record destinationRecord
+	if err := entry.DecodeJSON(&record); err != nil {
+		return nil, err
+	}
+	return &record, nil
+}
+
+func deleteDestination(ctx context.Context, storage logical.Storage, destinationType string, name string) error {
+	return storage.Delete(ctx, destinationStorageKey(destinationType, name))
+}
+
+func listDestinationNames(ctx context.Context, storage logical.Storage, destinationType string) ([]string, error) {
+	return storage.List(ctx, destinationStoragePrefix+destinationType+"/")
+}
+
+func putAssociation(ctx context.Context, storage logical.Storage, record associationRecord) error {
+	entry, err := logical.StorageEntryJSON(associationStorageKey(record.Path, record.ID), record)
+	if err != nil {
+		return err
+	}
+	if err := storage.Put(ctx, entry); err != nil {
+		return err
+	}
+	byDestinationEntry, err := logical.StorageEntryJSON(
+		associationByDestinationStorageKey(record.DestinationType, record.DestinationName, record.ID),
+		record.Path,
+	)
+	if err != nil {
+		return err
+	}
+	if err := storage.Put(ctx, byDestinationEntry); err != nil {
+		return err
+	}
+	reservationEntry, err := logical.StorageEntryJSON(
+		associationNameStorageKey(record.DestinationRef, record.ResolvedName, record.ID),
+		record.Path,
+	)
+	if err != nil {
+		return err
+	}
+	return storage.Put(ctx, reservationEntry)
+}
+
+func getAssociation(ctx context.Context, storage logical.Storage, path string, id string) (*associationRecord, error) {
+	entry, err := storage.Get(ctx, associationStorageKey(path, id))
+	if err != nil {
+		return nil, err
+	}
+	if entry == nil {
+		return nil, nil
+	}
+	var record associationRecord
+	if err := entry.DecodeJSON(&record); err != nil {
+		return nil, err
+	}
+	return &record, nil
+}
+
+func deleteAssociation(ctx context.Context, storage logical.Storage, record associationRecord) error {
+	if err := storage.Delete(ctx, associationStorageKey(record.Path, record.ID)); err != nil {
+		return err
+	}
+	if err := storage.Delete(
+		ctx,
+		associationByDestinationStorageKey(record.DestinationType, record.DestinationName, record.ID),
+	); err != nil {
+		return err
+	}
+	return storage.Delete(ctx, associationNameStorageKey(record.DestinationRef, record.ResolvedName, record.ID))
+}
+
+func listAssociationIDsForPath(ctx context.Context, storage logical.Storage, path string) ([]string, error) {
+	return storage.List(ctx, associationStoragePrefix+path+"/")
+}
+
+func listAssociationsForPath(ctx context.Context, storage logical.Storage, path string) ([]associationRecord, error) {
+	ids, err := listAssociationIDsForPath(ctx, storage, path)
+	if err != nil {
+		return nil, err
+	}
+	records := make([]associationRecord, 0, len(ids))
+	for _, id := range ids {
+		record, err := getAssociation(ctx, storage, path, id)
+		if err != nil {
+			return nil, err
+		}
+		if record != nil {
+			records = append(records, *record)
+		}
+	}
+	return records, nil
+}
+
+func listAssociationIDsForDestination(
+	ctx context.Context,
+	storage logical.Storage,
+	destinationType string,
+	name string,
+) ([]string, error) {
+	return storage.List(ctx, associationByDestPrefix+destinationRef(destinationType, name)+"/")
+}
+
+func listAssociationNameReservationIDs(
+	ctx context.Context,
+	storage logical.Storage,
+	destinationReference string,
+	resolvedName string,
+) ([]string, error) {
+	return storage.List(ctx, associationNamePrefix+destinationReference+"/"+nameReservationID(resolvedName)+"/")
+}
+
 func putOutbox(ctx context.Context, storage logical.Storage, record outboxRecord) error {
 	entry, err := logical.StorageEntryJSON(outboxStorageKey(record.ID), record)
 	if err != nil {
@@ -96,6 +229,13 @@ func putOutbox(ctx context.Context, storage logical.Storage, record outboxRecord
 		return err
 	}
 	return storage.Put(ctx, indexEntry)
+}
+
+func deleteOutbox(ctx context.Context, storage logical.Storage, record outboxRecord) error {
+	if err := storage.Delete(ctx, outboxStorageKey(record.ID)); err != nil {
+		return err
+	}
+	return storage.Delete(ctx, outboxByPathStorageKey(record.Path, record.ID))
 }
 
 func getOutbox(ctx context.Context, storage logical.Storage, id string) (*outboxRecord, error) {
@@ -127,6 +267,30 @@ func listQueuedOutboxIDs(ctx context.Context, storage logical.Storage) ([]string
 
 func listOutboxIDsForPath(ctx context.Context, storage logical.Storage, path string) ([]string, error) {
 	return storage.List(ctx, outboxByPathStoragePrefix+path+"/")
+}
+
+func deleteQueuedOutboxForAssociation(
+	ctx context.Context,
+	storage logical.Storage,
+	association associationRecord,
+) error {
+	ids, err := listQueuedOutboxIDsForPath(ctx, storage, association.Path)
+	if err != nil {
+		return err
+	}
+	for _, id := range ids {
+		record, err := getOutbox(ctx, storage, id)
+		if err != nil {
+			return err
+		}
+		if record == nil || record.AssociationID != association.ID {
+			continue
+		}
+		if err := deleteOutbox(ctx, storage, *record); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func listQueuedOutboxIDsForPath(ctx context.Context, storage logical.Storage, path string) ([]string, error) {
@@ -188,4 +352,28 @@ func getStatus(
 		return nil, err
 	}
 	return &record, nil
+}
+
+func listStatusRecordsForPath(ctx context.Context, storage logical.Storage, path string) ([]statusRecord, error) {
+	associationIDs, err := storage.List(ctx, statusStoragePrefix+path+"/")
+	if err != nil {
+		return nil, err
+	}
+	records := []statusRecord{}
+	for _, associationID := range associationIDs {
+		objectIDs, err := storage.List(ctx, statusStoragePrefix+path+"/"+associationID)
+		if err != nil {
+			return nil, err
+		}
+		for _, objectID := range objectIDs {
+			record, err := getStatus(ctx, storage, path, strings.TrimSuffix(associationID, "/"), objectID)
+			if err != nil {
+				return nil, err
+			}
+			if record != nil {
+				records = append(records, *record)
+			}
+		}
+	}
+	return records, nil
 }

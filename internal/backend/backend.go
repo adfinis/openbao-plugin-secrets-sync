@@ -37,12 +37,12 @@ func Backend(_ *logical.BackendConfig) *secretSyncBackend {
 				localSecretDataPrefix,
 			},
 		},
-		Paths: []*framework.Path{
-			pathConfig(&b),
-			pathData(&b),
-			pathStatus(&b),
-			pathQueue(&b),
-		},
+		Paths: framework.PathAppend(
+			[]*framework.Path{pathConfig(&b)},
+			pathDestinations(&b),
+			pathAssociations(&b),
+			[]*framework.Path{pathData(&b), pathStatus(&b), pathQueue(&b)},
+		),
 		Invalidate: func(_ context.Context, _ string) {
 			b.invalidate()
 		},

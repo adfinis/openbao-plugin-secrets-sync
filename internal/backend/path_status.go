@@ -50,7 +50,7 @@ func pathStatusRead(ctx context.Context, req *logical.Request, data *framework.F
 	if err != nil {
 		return nil, err
 	}
-	status, err := getStatus(ctx, req.Storage, path, fakeAssociationID, syncObjectIDSecretPath)
+	statusRecords, err := listStatusRecordsForPath(ctx, req.Storage, path)
 	if err != nil {
 		return nil, err
 	}
@@ -58,12 +58,18 @@ func pathStatusRead(ctx context.Context, req *logical.Request, data *framework.F
 	state := domain.SyncStateUnknown
 	if len(operationIDs) > 0 {
 		state = domain.SyncStatePending
-	} else if status != nil {
-		state = domain.SyncState(status.State)
+	} else if len(statusRecords) > 0 {
+		state = domain.SyncStateSynced
+		for _, record := range statusRecords {
+			if record.State != string(domain.SyncStateSynced) {
+				state = domain.SyncState(record.State)
+				break
+			}
+		}
 	}
 	objects := []map[string]interface{}{} //nolint:forbidigo // OpenBao response boundary.
-	if status != nil {
-		objects = append(objects, statusResponseObject(*status))
+	for _, record := range statusRecords {
+		objects = append(objects, statusResponseObject(record))
 	}
 	return &logical.Response{Data: newResponseData(
 		responseField("path", path),

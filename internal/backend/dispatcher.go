@@ -29,7 +29,7 @@ func processDueFakeOutbox(ctx context.Context, storage logical.Storage, now time
 		if !isOutboxDue(*record, now) {
 			continue
 		}
-		if !isPhase0FakeOperation(*record) {
+		if !isFakeUpsertOperation(*record) {
 			continue
 		}
 		if err := processFakeUpsert(ctx, storage, *record, now); err != nil {
@@ -50,11 +50,9 @@ func isOutboxDue(record outboxRecord, now time.Time) bool {
 	return !notBefore.After(now)
 }
 
-func isPhase0FakeOperation(record outboxRecord) bool {
+func isFakeUpsertOperation(record outboxRecord) bool {
 	return record.Type == outbox.OperationTypeUpsert &&
-		record.AssociationID == fakeAssociationID &&
-		record.ObjectID == syncObjectIDSecretPath &&
-		record.DestinationRef == fakeDestinationRef
+		record.ObjectID == syncObjectIDSecretPath
 }
 
 func processFakeUpsert(
@@ -70,13 +68,33 @@ func processFakeUpsert(
 	if version == nil {
 		return markFakeOperationFailed(ctx, storage, record, "missing source version", now)
 	}
+	association, err := getAssociation(ctx, storage, record.Path, record.AssociationID)
+	if err != nil {
+		return err
+	}
+	if association == nil {
+		return markFakeOperationFailed(ctx, storage, record, "missing association", now)
+	}
+	destination, err := getDestination(ctx, storage, association.DestinationType, association.DestinationName)
+	if err != nil {
+		return err
+	}
+	if destination == nil {
+		return markFakeOperationFailed(ctx, storage, record, "missing destination", now)
+	}
+	if destination.Type != providerTypeFake {
+		return markFakeOperationFailed(ctx, storage, record, "unsupported destination provider", now)
+	}
+	if destination.Disabled || !association.Enabled {
+		return markFakeOperationFailed(ctx, storage, record, "association or destination disabled", now)
+	}
 	payload, err := json.Marshal(version.Data)
 	if err != nil {
 		return markFakeOperationFailed(ctx, storage, record, "source payload encoding failed", now)
 	}
 
 	result, err := fake.Provider{}.Upsert(ctx, providers.UpsertRequest{
-		ResolvedName: record.Path,
+		ResolvedName: association.ResolvedName,
 		Payload:      payload,
 	})
 	if err != nil {
@@ -95,7 +113,7 @@ func processFakeUpsert(
 		AssociationID:   record.AssociationID,
 		ObjectID:        record.ObjectID,
 		DestinationRef:  record.DestinationRef,
-		ResolvedName:    record.Path,
+		ResolvedName:    association.ResolvedName,
 		State:           string(domain.SyncStateSynced),
 		RemoteVersion:   result.RemoteVersion,
 		LastOperationID: record.ID,
