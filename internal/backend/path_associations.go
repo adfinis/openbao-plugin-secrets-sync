@@ -317,60 +317,89 @@ func (b *secretSyncBackend) pathAssociationWrite(
 	unlock := b.lockSourcePathAndAssociationName(path, record.DestinationRef, record.reservationName())
 	defer unlock()
 
-	if err := validateAssociationNameReservation(
-		ctx,
-		req.Storage,
-		record.DestinationRef,
-		record.reservationName(),
-		record.ID,
-	); err != nil {
-		return logical.ErrorResponse(err.Error()), nil
+	plan, response, err := b.associationWritePlan(ctx, req.Storage, path, record)
+	if response != nil || err != nil {
+		return response, err
 	}
-	metadata, err := getMetadata(ctx, req.Storage, path)
-	if err != nil {
-		return nil, err
-	}
-	if metadata == nil || metadata.CurrentVersion == 0 {
-		return logical.ErrorResponse("source path does not exist"), nil
-	}
-	if err := validateAssociationActivation(record, *metadata); err != nil {
-		return logical.ErrorResponse(err.Error()), nil
-	}
-	if err := validateAssociationDestination(ctx, req.Storage, record); err != nil {
-		return logical.ErrorResponse(err.Error()), nil
-	}
-	existing, err := getAssociation(ctx, req.Storage, path, record.ID)
-	if err != nil {
-		return nil, err
+
+	return &logical.Response{Data: associationLifecycleResponse(
+		plan.record,
+		responseField("association", associationResponse(plan.record)),
+		responseField("sync_operation_ids", plan.operationIDs),
+	)}, nil
+}
+
+type associationWritePlan struct {
+	record       associationRecord
+	operationIDs []string
+}
+
+func (b *secretSyncBackend) associationWritePlan(
+	ctx context.Context,
+	storage logical.Storage,
+	path string,
+	record associationRecord,
+) (associationWritePlan, *logical.Response, error) {
+	metadata, existing, response, err := associationWritePreflight(ctx, storage, path, record)
+	if response != nil || err != nil {
+		return associationWritePlan{}, response, err
 	}
 	if existing != nil {
 		record.CreatedTime = existing.CreatedTime
 	}
-
 	shouldEnqueue := record.Enabled && existing == nil
-	if err := putAssociation(ctx, req.Storage, record); err != nil {
-		return nil, err
+	if err := putAssociation(ctx, storage, record); err != nil {
+		return associationWritePlan{}, nil, err
 	}
-
 	operationIDs := []string{}
 	if shouldEnqueue {
 		operationIDs, err = b.enqueueAssociationCurrentVersion(
 			ctx,
-			req.Storage,
+			storage,
 			record,
 			*metadata,
 			nowUTC().Format(timeFormatRFC3339),
 		)
 		if err != nil {
-			return logical.ErrorResponse(err.Error()), nil
+			return associationWritePlan{}, logical.ErrorResponse(err.Error()), nil
 		}
 	}
+	return associationWritePlan{record: record, operationIDs: operationIDs}, nil, nil
+}
 
-	return &logical.Response{Data: associationLifecycleResponse(
-		record,
-		responseField("association", associationResponse(record)),
-		responseField("sync_operation_ids", operationIDs),
-	)}, nil
+func associationWritePreflight(
+	ctx context.Context,
+	storage logical.Storage,
+	path string,
+	record associationRecord,
+) (*metadataRecord, *associationRecord, *logical.Response, error) {
+	if err := validateAssociationNameReservation(
+		ctx,
+		storage,
+		record.DestinationRef,
+		record.reservationName(),
+		record.ID,
+	); err != nil {
+		return nil, nil, logical.ErrorResponse(err.Error()), nil
+	}
+	metadata, err := getMetadata(ctx, storage, path)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	if metadata == nil || metadata.CurrentVersion == 0 {
+		return nil, nil, logical.ErrorResponse("source path does not exist"), nil
+	}
+	if err := validateAssociationActivation(record, *metadata); err != nil {
+		return nil, nil, logical.ErrorResponse(err.Error()), nil
+	}
+	if err := validateAssociationDestination(ctx, storage, record); err != nil {
+		return nil, nil, logical.ErrorResponse(err.Error()), nil
+	}
+	existing, err := getAssociation(ctx, storage, path, record.ID)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	return metadata, existing, nil, nil
 }
 
 func (b *secretSyncBackend) pathAssociationPlan(
@@ -1141,7 +1170,11 @@ func (b *secretSyncBackend) associationRecordFromFieldData(
 	baseMatchesGranularity := base != nil && base.Granularity == granularity
 	format := stringFromField(data, "format", associationFormatDefault(base, baseMatchesGranularity))
 	deleteMode := stringFromField(data, "delete_mode", associationDeleteModeDefault(base))
-	nameTemplate := stringFromField(data, "name_template", associationNameTemplateDefault(base, granularity, baseMatchesGranularity))
+	nameTemplate := stringFromField(
+		data,
+		"name_template",
+		associationNameTemplateDefault(base, granularity, baseMatchesGranularity),
+	)
 	resolvedName := stringFromField(data, "resolved_name", associationResolvedNameDefault(base, baseMatchesGranularity))
 	resolvedName, reservationName, err := resolveAssociationNames(
 		path,

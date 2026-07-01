@@ -73,9 +73,44 @@ func (b *secretSyncBackend) pathDataWrite(
 	unlock := b.lockSourcePath(path)
 	defer unlock()
 
-	metadata, err := getMetadata(ctx, req.Storage, path)
+	plan, response, err := dataWritePlanFromRequest(ctx, req.Storage, path, payload, data)
+	if response != nil || err != nil {
+		return response, err
+	}
+	response, err = b.commitDataWritePlan(ctx, req.Storage, path, payload, plan)
+	if response != nil || err != nil {
+		return response, err
+	}
+
+	return &logical.Response{Data: newResponseData(
+		responseField("metadata", newResponseData(
+			responseField("version", plan.nextVersion),
+			responseField("created_time", plan.now),
+			responseField("sync_operation_ids", plan.operationIDs),
+			responseField("sync_state", string(syncStateForOperationIDs(plan.operationIDs))),
+		)),
+	)}, nil
+}
+
+type dataWritePlan struct {
+	metadata     *metadataRecord
+	nextVersion  int
+	nowTime      time.Time
+	now          string
+	operations   []outboxRecord
+	operationIDs []string
+}
+
+func dataWritePlanFromRequest(
+	ctx context.Context,
+	storage logical.Storage,
+	path string,
+	payload secretPayload,
+	data *framework.FieldData,
+) (dataWritePlan, *logical.Response, error) {
+	metadata, err := getMetadata(ctx, storage, path)
 	if err != nil {
-		return nil, err
+		return dataWritePlan{}, nil, err
 	}
 	if metadata == nil {
 		metadata = newMetadataRecordPtr()
@@ -83,15 +118,15 @@ func (b *secretSyncBackend) pathDataWrite(
 
 	cas, casSet, err := casFromOptions(data)
 	if err != nil {
-		return logical.ErrorResponse(err.Error()), nil
+		return dataWritePlan{}, logical.ErrorResponse(err.Error()), nil
 	}
 	if err := checkCAS(*metadata, cas, casSet); err != nil {
-		return logical.ErrorResponse(err.Error()), nil
+		return dataWritePlan{}, logical.ErrorResponse(err.Error()), nil
 	}
 
-	associations, err := enabledAssociationsForPath(ctx, req.Storage, path)
+	associations, err := enabledAssociationsForPath(ctx, storage, path)
 	if err != nil {
-		return nil, err
+		return dataWritePlan{}, nil, err
 	}
 
 	nextVersion := metadata.CurrentVersion + 1
@@ -99,56 +134,61 @@ func (b *secretSyncBackend) pathDataWrite(
 	now := nowTime.Format(timeFormatRFC3339)
 	operations, operationIDs, err := newAssociationOutboxRecords(associations, nextVersion, payload, now)
 	if err != nil {
-		return logical.ErrorResponse(err.Error()), nil
+		return dataWritePlan{}, logical.ErrorResponse(err.Error()), nil
 	}
-	if len(operations) > 0 {
+	return dataWritePlan{
+		metadata:     metadata,
+		nextVersion:  nextVersion,
+		nowTime:      nowTime,
+		now:          now,
+		operations:   operations,
+		operationIDs: operationIDs,
+	}, nil, nil
+}
+
+func (b *secretSyncBackend) commitDataWritePlan(
+	ctx context.Context,
+	storage logical.Storage,
+	path string,
+	payload secretPayload,
+	plan dataWritePlan,
+) (*logical.Response, error) {
+	if len(plan.operations) > 0 {
 		b.enqueueMu.Lock()
 		defer b.enqueueMu.Unlock()
 	}
-	staleUpsertIDs, err := staleQueuedUpsertIDsForOperations(ctx, req.Storage, operations, nowTime)
+	staleUpsertIDs, err := staleQueuedUpsertIDsForOperations(ctx, storage, plan.operations, plan.nowTime)
 	if err != nil {
 		return nil, err
 	}
-	additionalOperations, err := additionalQueuedOperationCount(ctx, req.Storage, operations)
+	additionalOperations, err := additionalQueuedOperationCount(ctx, storage, plan.operations)
 	if err != nil {
 		return nil, err
 	}
 	if err := ensureQueueCapacityAfterReplacement(
 		ctx,
-		req.Storage,
+		storage,
 		additionalOperations,
 		len(staleUpsertIDs),
 	); err != nil {
 		return logical.ErrorResponse(err.Error()), nil
 	}
-	if err := putPendingEnqueueIntent(ctx, req.Storage, path, nextVersion, operations, now); err != nil {
+	if err := putPendingEnqueueIntent(ctx, storage, path, plan.nextVersion, plan.operations, plan.now); err != nil {
 		return nil, err
 	}
-
-	if err := putSourceVersionRecord(ctx, req.Storage, path, nextVersion, payload, now); err != nil {
+	if err := putSourceVersionRecord(ctx, storage, path, plan.nextVersion, payload, plan.now); err != nil {
 		return nil, err
 	}
-	if err := cancelQueuedOutboxIDs(ctx, req.Storage, staleUpsertIDs, now); err != nil {
+	if err := cancelQueuedOutboxIDs(ctx, storage, staleUpsertIDs, plan.now); err != nil {
 		return nil, err
 	}
-	if err := putOutboxRecords(ctx, req.Storage, operations); err != nil {
+	if err := putOutboxRecords(ctx, storage, plan.operations); err != nil {
 		return nil, err
 	}
-	if err := completeEnqueueIntent(ctx, req.Storage, path, nextVersion, operations, now); err != nil {
+	if err := completeEnqueueIntent(ctx, storage, path, plan.nextVersion, plan.operations, plan.now); err != nil {
 		return nil, err
 	}
-	if err := commitSourceMetadata(ctx, req.Storage, path, metadata, nextVersion, now); err != nil {
-		return nil, err
-	}
-
-	return &logical.Response{Data: newResponseData(
-		responseField("metadata", newResponseData(
-			responseField("version", nextVersion),
-			responseField("created_time", now),
-			responseField("sync_operation_ids", operationIDs),
-			responseField("sync_state", string(syncStateForOperationIDs(operationIDs))),
-		)),
-	)}, nil
+	return nil, commitSourceMetadata(ctx, storage, path, plan.metadata, plan.nextVersion, plan.now)
 }
 
 func putSourceVersionRecord(

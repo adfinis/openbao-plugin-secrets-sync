@@ -1034,7 +1034,7 @@ func TestCurrentVersionMutationQueuesRemoteDelete(t *testing.T) {
 
 			writeAppDBSecret(t, b, storage, "initial")
 			createFakeDestination(t, b, storage, "default")
-			associationResp := createFakeAssociationWithDeleteMode(t, b, storage, deleteModeDelete)
+			associationResp := createFakeDeleteModeAssociation(t, b, storage)
 			associationID := associationIDFromResponse(t, associationResp)
 			upsertOperationID := operationIDsFromResponse(t, associationResp)[0]
 			deleteOperationID := newOperationID(
@@ -1071,7 +1071,7 @@ func TestUndeleteCurrentVersionQueuesUpsertAfterRemoteDelete(t *testing.T) {
 
 	writeAppDBSecret(t, b, storage, "initial")
 	createFakeDestination(t, b, storage, "default")
-	associationResp := createFakeAssociationWithDeleteMode(t, b, storage, deleteModeDelete)
+	associationResp := createFakeDeleteModeAssociation(t, b, storage)
 	associationID := associationIDFromResponse(t, associationResp)
 	upsertOperationID := operationIDsFromResponse(t, associationResp)[0]
 	runPeriodicAllowed(t, b, storage, "periodic upsert")
@@ -1135,7 +1135,7 @@ func TestDataDeleteDeleteModeQueuesRemoteDelete(t *testing.T) {
 
 	writeAppDBSecret(t, b, storage, "initial")
 	createFakeDestination(t, b, storage, "default")
-	createFakeAssociationWithDeleteMode(t, b, storage, deleteModeDelete)
+	createFakeDeleteModeAssociation(t, b, storage)
 	runPeriodicAllowed(t, b, storage, "periodic upsert")
 
 	deleteResp := handleRequest(t, b, storage, logical.DeleteOperation, "data/app/db", nil)
@@ -2799,7 +2799,13 @@ func TestPeriodicLeavesClaimedOperationOnDispatchContextCancellation(t *testing.
 	if got := operation.ClaimAttempt; got != 1 {
 		t.Fatalf("claim attempt = %d, want 1", got)
 	}
-	status, err := getStatus(context.Background(), storage, "app/db", associationIDFromResponse(t, associationResp), syncObjectIDSecretPath)
+	status, err := getStatus(
+		context.Background(),
+		storage,
+		"app/db",
+		associationIDFromResponse(t, associationResp),
+		syncObjectIDSecretPath,
+	)
 	if err != nil {
 		t.Fatalf("read status: %v", err)
 	}
@@ -3231,7 +3237,7 @@ func TestRecoveryRestoresDeleteIntentAfterSourceDelete(t *testing.T) {
 
 	writeAppDBSecret(t, b, storage, "initial")
 	createFakeDestination(t, b, storage, "default")
-	createFakeAssociationWithDeleteMode(t, b, storage, deleteModeDelete)
+	createFakeDeleteModeAssociation(t, b, storage)
 	runPeriodicAllowed(t, b, storage, "periodic upsert")
 	deleteResp := handleRequest(t, b, storage, logical.DeleteOperation, "data/app/db", nil)
 	assertNoErrorResponse(t, deleteResp)
@@ -3822,11 +3828,10 @@ func createFakeSecretKeyAssociation(
 	return resp
 }
 
-func createFakeAssociationWithDeleteMode(
+func createFakeDeleteModeAssociation(
 	t *testing.T,
 	b logical.Backend,
 	storage logical.Storage,
-	deleteMode string,
 ) *logical.Response {
 	t.Helper()
 	markAppDBSyncable(t, b, storage)
@@ -3836,7 +3841,7 @@ func createFakeAssociationWithDeleteMode(
 		"resolved_name":    "prod/app/db",
 		"granularity":      syncObjectIDSecretPath,
 		"format":           defaultAssociationFormat,
-		"delete_mode":      deleteMode,
+		"delete_mode":      deleteModeDelete,
 	})
 	assertNoErrorResponse(t, resp)
 	return resp
