@@ -306,9 +306,9 @@ func (b *secretSyncBackend) pathAssociationWrite(
 	if err != nil {
 		return logical.ErrorResponse(err.Error()), nil
 	}
-	baseRecord, err := associationUpdateBase(ctx, req, path, data)
-	if err != nil {
-		return nil, err
+	baseRecord, response, err := associationUpdateBase(ctx, req, path, data)
+	if response != nil || err != nil {
+		return response, err
 	}
 	record, err := b.associationRecordFromFieldData(ctx, req.Storage, path, data, baseRecord)
 	if err != nil {
@@ -411,7 +411,11 @@ func (b *secretSyncBackend) pathAssociationPlan(
 	if response != nil || err != nil {
 		return response, err
 	}
-	record, err := b.associationRecordFromFieldData(ctx, req.Storage, path, data, nil)
+	baseRecord, response, err := associationUpdateBase(ctx, req, path, data)
+	if response != nil || err != nil {
+		return response, err
+	}
+	record, err := b.associationRecordFromFieldData(ctx, req.Storage, path, data, baseRecord)
 	if err != nil {
 		return logical.ErrorResponse(err.Error()), nil
 	}
@@ -1220,18 +1224,18 @@ func associationUpdateBase(
 	req *logical.Request,
 	path string,
 	data *framework.FieldData,
-) (*associationRecord, error) {
+) (*associationRecord, *logical.Response, error) {
 	if req.Operation != logical.UpdateOperation {
-		return nil, nil
+		return nil, nil, nil
 	}
 	destinationType := strings.TrimSpace(data.Get("destination_type").(string))
 	destinationName := strings.TrimSpace(data.Get("destination_name").(string))
 	if destinationType == "" || destinationName == "" {
-		return nil, nil
+		return nil, nil, nil
 	}
 	records, err := listAssociationsForPath(ctx, req.Storage, path)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	var match *associationRecord
 	for i := range records {
@@ -1239,11 +1243,15 @@ func associationUpdateBase(
 			continue
 		}
 		if match != nil {
-			return nil, nil
+			return nil, logical.ErrorResponse(
+				"association update is ambiguous for destination %s/%s; delete or address one association explicitly",
+				destinationType,
+				destinationName,
+			), nil
 		}
 		match = &records[i]
 	}
-	return match, nil
+	return match, nil, nil
 }
 
 func associationGranularityDefault(base *associationRecord) string {

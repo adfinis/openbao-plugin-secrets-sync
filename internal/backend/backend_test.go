@@ -1396,6 +1396,7 @@ func TestAssociationUpdateMergesOmittedFieldsFromExistingRecord(t *testing.T) {
 		"password": "initial",
 	})
 	createFakeDestination(t, b, storage, "default")
+	markAppDBSyncable(t, b, storage)
 	initialResp := handleRequest(t, b, storage, logical.UpdateOperation, "associations/app/db", map[string]interface{}{
 		"destination_type": providerTypeFake,
 		"destination_name": "default",
@@ -1440,6 +1441,88 @@ func TestAssociationUpdateMergesOmittedFieldsFromExistingRecord(t *testing.T) {
 	}
 	if got := record.DeleteMode; got != deleteModeDelete {
 		t.Fatalf("delete_mode = %s, want %s", got, deleteModeDelete)
+	}
+}
+
+func TestAssociationPlanMergesOmittedFieldsFromExistingRecord(t *testing.T) {
+	b := Backend(&logical.BackendConfig{})
+	storage := &logical.InmemStorage{}
+
+	writeAppDBSecretData(t, b, storage, map[string]interface{}{
+		"password": "initial",
+	})
+	createFakeDestination(t, b, storage, "default")
+	markAppDBSyncable(t, b, storage)
+	initialResp := handleRequest(t, b, storage, logical.UpdateOperation, "associations/app/db", map[string]interface{}{
+		"destination_type": providerTypeFake,
+		"destination_name": "default",
+		"name_template":    "prod/{{ path }}/{{ key }}",
+		"granularity":      syncGranularitySecretKey,
+		"format":           defaultAssociationFormat,
+	})
+	assertNoErrorResponse(t, initialResp)
+
+	planResp := handleRequest(t, b, storage, logical.UpdateOperation, "associations/app/db/plan", map[string]interface{}{
+		"destination_type": providerTypeFake,
+		"destination_name": "default",
+		"delete_mode":      deleteModeDelete,
+	})
+	assertNoErrorResponse(t, planResp)
+	if got := planResp.Data["association_id"]; got != associationIDFromResponse(t, initialResp) {
+		t.Fatalf("plan association ID = %v, want existing association", got)
+	}
+	if got := planResp.Data["granularity"]; got != syncGranularitySecretKey {
+		t.Fatalf("plan granularity = %v, want %s", got, syncGranularitySecretKey)
+	}
+	objects := objectsByIDFromRaw(t, planResp.Data["objects"])
+	if _, ok := objects["password"]; !ok {
+		t.Fatalf("plan objects = %#v, want password object", objects)
+	}
+}
+
+func TestAssociationUpdateRejectsAmbiguousDestinationBase(t *testing.T) {
+	b := Backend(&logical.BackendConfig{})
+	storage := &logical.InmemStorage{}
+
+	writeAppDBSecretData(t, b, storage, map[string]interface{}{
+		"password": "initial",
+	})
+	createFakeDestination(t, b, storage, "default")
+	markAppDBSyncable(t, b, storage)
+	firstResp := handleRequest(t, b, storage, logical.UpdateOperation, "associations/app/db", map[string]interface{}{
+		"destination_type": providerTypeFake,
+		"destination_name": "default",
+		"resolved_name":    "prod/app/db",
+		"granularity":      syncGranularitySecretPath,
+		"format":           defaultAssociationFormat,
+	})
+	assertNoErrorResponse(t, firstResp)
+	secondResp := handleRequest(t, b, storage, logical.UpdateOperation, "associations/app/db", map[string]interface{}{
+		"destination_type": providerTypeFake,
+		"destination_name": "default",
+		"name_template":    "prod/{{ path }}/{{ key }}",
+		"granularity":      syncGranularitySecretKey,
+		"format":           defaultAssociationFormat,
+	})
+	assertNoErrorResponse(t, secondResp)
+
+	updateResp := handleRequest(t, b, storage, logical.UpdateOperation, "associations/app/db", map[string]interface{}{
+		"destination_type": providerTypeFake,
+		"destination_name": "default",
+		"delete_mode":      deleteModeDelete,
+	})
+	if updateResp == nil || !updateResp.IsError() {
+		t.Fatalf("ambiguous update response = %#v, want error", updateResp)
+	}
+	if !strings.Contains(updateResp.Error().Error(), "ambiguous") {
+		t.Fatalf("ambiguous update error = %q, want ambiguity", updateResp.Error().Error())
+	}
+	records, err := listAssociationsForPath(context.Background(), storage, "app/db")
+	if err != nil {
+		t.Fatalf("list associations: %v", err)
+	}
+	if len(records) != 2 {
+		t.Fatalf("association count = %d, want 2", len(records))
 	}
 }
 
