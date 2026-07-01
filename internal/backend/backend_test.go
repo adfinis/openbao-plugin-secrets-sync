@@ -218,16 +218,17 @@ func TestGitLabDestinationConfigLifecycle(t *testing.T) {
 	storage := &logical.InmemStorage{}
 
 	writeResp := handleRequest(t, b, storage, logical.UpdateOperation, "destinations/gitlab/prod", map[string]interface{}{
-		"description":                    "gitlab production",
-		gitlab.ConfigKeyBaseURL:          "https://gitlab.example.com",
-		gitlab.ConfigKeyProjectID:        "platform/app",
-		gitlab.ConfigKeyEnvironmentScope: "production",
-		gitlab.ConfigKeyProtected:        "true",
-		gitlab.ConfigKeyMasked:           "false",
-		gitlab.ConfigKeyHidden:           "false",
-		gitlab.ConfigKeyVariableRaw:      "true",
-		gitlab.ConfigKeyVariableType:     gitlab.VariableTypeEnvVar,
-		gitlab.ConfigKeyToken:            "glpat-secret",
+		"description":                     "gitlab production",
+		gitlab.ConfigKeyBaseURL:           "https://gitlab.example.com",
+		gitlab.ConfigKeyProjectID:         "platform/app",
+		gitlab.ConfigKeyEnvironmentScope:  "production",
+		gitlab.ConfigKeyProtected:         "true",
+		gitlab.ConfigKeyMasked:            "false",
+		gitlab.ConfigKeyHidden:            "false",
+		gitlab.ConfigKeyVariableRaw:       "true",
+		gitlab.ConfigKeyVariableType:      gitlab.VariableTypeEnvVar,
+		gitlab.ConfigKeyAllowInsecureHTTP: fmt.Sprint(true),
+		gitlab.ConfigKeyToken:             "glpat-secret",
 	})
 	if writeResp != nil && writeResp.IsError() {
 		t.Fatalf("unexpected destination write error: %v", writeResp.Error())
@@ -243,6 +244,7 @@ func TestGitLabDestinationConfigLifecycle(t *testing.T) {
 	if got := storedDestination.Config[gitlab.ConfigKeyProjectID]; got != "platform/app" {
 		t.Fatalf("gitlab project_id = %v, want platform/app", got)
 	}
+	assertStringMapValue(t, storedDestination.Config, gitlab.ConfigKeyAllowInsecureHTTP, fmt.Sprint(true))
 	storedSensitiveConfig, err := getDestinationSensitiveConfig(
 		context.Background(),
 		storage,
@@ -262,6 +264,7 @@ func TestGitLabDestinationConfigLifecycle(t *testing.T) {
 	if _, ok := config[gitlab.ConfigKeyToken]; ok {
 		t.Fatal("gitlab token must not be returned in config")
 	}
+	assertInterfaceMapValue(t, config, gitlab.ConfigKeyAllowInsecureHTTP, fmt.Sprint(true))
 	sensitiveConfig := readResp.Data["sensitive_config"].(map[string]interface{})
 	if got := sensitiveConfig["configured"]; got != true {
 		t.Fatalf("gitlab sensitive_config configured = %v, want true", got)
@@ -305,6 +308,20 @@ func assertStoredAWSDestinationConfig(t *testing.T, storage logical.Storage) {
 	}
 	if got := storedSensitiveConfig.Config[awssecretsmanager.ConfigKeyExternalID]; got != "tenant-1" {
 		t.Fatalf("stored external_id = %q, want tenant-1", got)
+	}
+}
+
+func assertStringMapValue(t *testing.T, values map[string]string, key string, expected string) {
+	t.Helper()
+	if got := values[key]; got != expected {
+		t.Fatalf("%s = %v, want %s", key, got, expected)
+	}
+}
+
+func assertInterfaceMapValue(t *testing.T, values map[string]interface{}, key string, expected string) {
+	t.Helper()
+	if got := values[key]; got != expected {
+		t.Fatalf("%s = %v, want %s", key, got, expected)
 	}
 }
 

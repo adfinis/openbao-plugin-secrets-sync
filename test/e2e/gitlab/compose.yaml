@@ -1,0 +1,49 @@
+services:
+  gitlab:
+    image: ${E2E_GITLAB_IMAGE:-gitlab/gitlab-ce:18.7.1-ce.0}
+    hostname: gitlab
+    shm_size: "256m"
+    environment:
+      GITLAB_OMNIBUS_CONFIG: |
+        external_url 'http://gitlab'
+        gitlab_rails['initial_root_password'] = '${E2E_GITLAB_ROOT_PASSWORD:-R8vQ2mT6pL9sX4zC7nY3}'
+        prometheus_monitoring['enable'] = false
+      E2E_GITLAB_PROJECT_PATH: ${E2E_GITLAB_PROJECT_PATH:-root/openbao-secret-sync-e2e}
+      E2E_GITLAB_ENVIRONMENT_SCOPE: ${E2E_GITLAB_ENVIRONMENT_SCOPE:-production}
+      E2E_GITLAB_TOKEN: ${E2E_GITLAB_TOKEN:-glpat-openbao-secret-sync-e2e-token-000000}
+    ports:
+      - "127.0.0.1:${E2E_GITLAB_PORT:-18080}:80"
+    volumes:
+      - ./bootstrap.rb:/openbao-e2e/bootstrap.rb:ro
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1/-/readiness >/dev/null 2>&1"]
+      interval: 10s
+      timeout: 10s
+      retries: 90
+      start_period: 120s
+
+  openbao:
+    image: ${E2E_OPENBAO_IMAGE:-ghcr.io/openbao/openbao:2.5.5@sha256:6150c4a6b62067db6141c8da7a6a6b5763f4f47c315343d0c848b40fecdfd452}
+    cap_add:
+      - IPC_LOCK
+    depends_on:
+      gitlab:
+        condition: service_healthy
+    environment:
+      BAO_ADDR: http://127.0.0.1:8200
+      BAO_TOKEN: root
+    command:
+      - server
+      - -dev
+      - -dev-root-token-id=root
+      - -dev-listen-address=0.0.0.0:8200
+      - -dev-plugin-dir=/openbao/plugins
+    ports:
+      - "127.0.0.1:${E2E_GITLAB_OPENBAO_PORT:-18203}:8200"
+    volumes:
+      - ../../../bin/e2e:/openbao/plugins:ro
+    healthcheck:
+      test: ["CMD", "bao", "status", "-address=http://127.0.0.1:8200"]
+      interval: 2s
+      timeout: 5s
+      retries: 30

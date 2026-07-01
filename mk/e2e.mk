@@ -30,6 +30,18 @@ E2E_KIND_DOCKERFILE ?= test/e2e/kind/Dockerfile
 E2E_KIND_MANIFEST_DIR ?= test/e2e/kind/manifests
 E2E_KIND_OPENBAO_PORT ?= 18202
 E2E_KIND_OPENBAO_ADDR ?= http://127.0.0.1:$(E2E_KIND_OPENBAO_PORT)
+E2E_GITLAB_COMPOSE_FILE ?= test/e2e/gitlab/compose.yaml
+E2E_GITLAB_IMAGE ?= gitlab/gitlab-ce:18.7.1-ce.0
+E2E_GITLAB_OPENBAO_PORT ?= 18203
+E2E_GITLAB_PORT ?= 18080
+E2E_GITLAB_OPENBAO_ADDR ?= http://127.0.0.1:$(E2E_GITLAB_OPENBAO_PORT)
+E2E_GITLAB_URL ?= http://127.0.0.1:$(E2E_GITLAB_PORT)
+E2E_GITLAB_BASE_URL_IN_BAO ?= http://gitlab
+E2E_GITLAB_PROJECT_PATH ?= root/openbao-secret-sync-e2e
+E2E_GITLAB_ENVIRONMENT_SCOPE ?= production
+E2E_GITLAB_TOKEN ?= glpat-openbao-secret-sync-e2e-token-000000
+E2E_GITLAB_ROOT_PASSWORD ?= R8vQ2mT6pL9sX4zC7nY3
+E2E_GITLAB_CONFIRM ?=
 
 .PHONY: e2e-build-plugin
 e2e-build-plugin: ## Build the Linux plugin binary used by the OpenBao e2e container.
@@ -118,6 +130,54 @@ test-e2e-kind: ## Run self-contained OpenBao plus kind e2e tests for Kubernetes 
 	E2E_KIND_CONTEXT="$(E2E_KIND_CONTEXT)" \
 	E2E_PLUGIN_PATH="$(E2E_PLUGIN_BIN)" \
 	"$(GO)" test -tags=e2e ./test/e2e/kind -count=1 -v
+
+.PHONY: e2e-gitlab-up
+e2e-gitlab-up: e2e-build-plugin ## Start the opt-in OpenBao plus GitLab e2e stack and bootstrap GitLab.
+	@if [ "$(E2E_GITLAB_CONFIRM)" != "1" ]; then echo "set E2E_GITLAB_CONFIRM=1 to start the GitLab e2e stack"; exit 2; fi
+	@set -eu; \
+	E2E_OPENBAO_IMAGE="$(E2E_OPENBAO_IMAGE)" \
+	E2E_GITLAB_IMAGE="$(E2E_GITLAB_IMAGE)" \
+	E2E_GITLAB_OPENBAO_PORT="$(E2E_GITLAB_OPENBAO_PORT)" \
+	E2E_GITLAB_PORT="$(E2E_GITLAB_PORT)" \
+	E2E_GITLAB_PROJECT_PATH="$(E2E_GITLAB_PROJECT_PATH)" \
+	E2E_GITLAB_ENVIRONMENT_SCOPE="$(E2E_GITLAB_ENVIRONMENT_SCOPE)" \
+	E2E_GITLAB_TOKEN="$(E2E_GITLAB_TOKEN)" \
+	E2E_GITLAB_ROOT_PASSWORD="$(E2E_GITLAB_ROOT_PASSWORD)" \
+	$(DOCKER_COMPOSE) -f "$(E2E_GITLAB_COMPOSE_FILE)" up -d --wait; \
+	for _ in $$(seq 1 30); do \
+		if E2E_GITLAB_PROJECT_PATH="$(E2E_GITLAB_PROJECT_PATH)" \
+			E2E_GITLAB_TOKEN="$(E2E_GITLAB_TOKEN)" \
+			E2E_GITLAB_ENVIRONMENT_SCOPE="$(E2E_GITLAB_ENVIRONMENT_SCOPE)" \
+			$(DOCKER_COMPOSE) -f "$(E2E_GITLAB_COMPOSE_FILE)" exec -T gitlab \
+				gitlab-rails runner /openbao-e2e/bootstrap.rb; then \
+			exit 0; \
+		fi; \
+		sleep 10; \
+	done; \
+	echo "GitLab e2e bootstrap failed"; \
+	exit 1
+
+.PHONY: e2e-gitlab-down
+e2e-gitlab-down: ## Stop the opt-in OpenBao plus GitLab e2e stack.
+	@E2E_GITLAB_OPENBAO_PORT="$(E2E_GITLAB_OPENBAO_PORT)" E2E_GITLAB_PORT="$(E2E_GITLAB_PORT)" \
+		E2E_OPENBAO_IMAGE="$(E2E_OPENBAO_IMAGE)" E2E_GITLAB_IMAGE="$(E2E_GITLAB_IMAGE)" \
+		$(DOCKER_COMPOSE) -f "$(E2E_GITLAB_COMPOSE_FILE)" down -v --remove-orphans
+
+.PHONY: test-e2e-gitlab
+test-e2e-gitlab: e2e-build-plugin ## Run the opt-in self-contained GitLab project variable e2e test.
+	@if [ "$(E2E_GITLAB_CONFIRM)" != "1" ]; then echo "set E2E_GITLAB_CONFIRM=1 to run the GitLab e2e test"; exit 2; fi
+	@set -eu; \
+	cleanup() { $(MAKE) e2e-gitlab-down; }; \
+	trap cleanup EXIT; \
+	$(MAKE) e2e-gitlab-up; \
+	E2E_GITLAB_OPENBAO_ADDR="$(E2E_GITLAB_OPENBAO_ADDR)" \
+	E2E_GITLAB_URL="$(E2E_GITLAB_URL)" \
+	E2E_GITLAB_BASE_URL_IN_BAO="$(E2E_GITLAB_BASE_URL_IN_BAO)" \
+	E2E_GITLAB_PROJECT_PATH="$(E2E_GITLAB_PROJECT_PATH)" \
+	E2E_GITLAB_ENVIRONMENT_SCOPE="$(E2E_GITLAB_ENVIRONMENT_SCOPE)" \
+	E2E_GITLAB_TOKEN="$(E2E_GITLAB_TOKEN)" \
+	E2E_PLUGIN_PATH="$(E2E_PLUGIN_BIN)" \
+	"$(GO)" test -tags=e2e ./test/e2e/gitlab -run TestOpenBaoPluginSyncsToGitLabProjectVariables -count=1 -v
 
 .PHONY: e2e-aws-up
 e2e-aws-up: e2e-build-plugin ## Start the manual real-AWS e2e OpenBao stack.

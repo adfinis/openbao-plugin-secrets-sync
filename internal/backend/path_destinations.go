@@ -28,6 +28,7 @@ var destinationConfigFieldKeys = []string{
 	gitlab.ConfigKeyHidden,
 	gitlab.ConfigKeyVariableRaw,
 	gitlab.ConfigKeyVariableType,
+	gitlab.ConfigKeyAllowInsecureHTTP,
 	kubernetessecrets.ConfigKeyNamespace,
 	kubernetessecrets.ConfigKeyKubeconfigPath,
 	kubernetessecrets.ConfigKeyKubeContext,
@@ -206,6 +207,11 @@ func destinationRequestFields() map[string]*framework.FieldSchema {
 	fields[gitlab.ConfigKeyVariableType] = &framework.FieldSchema{
 		Type:        framework.TypeString,
 		Description: "GitLab variable type: env_var or file.",
+	}
+	fields[gitlab.ConfigKeyAllowInsecureHTTP] = &framework.FieldSchema{
+		Type: framework.TypeString,
+		Description: "Allow non-local http GitLab base URLs for local Docker or private test networks. " +
+			"Defaults to false.",
 	}
 	fields[gitlab.ConfigKeyToken] = &framework.FieldSchema{
 		Type:        framework.TypeString,

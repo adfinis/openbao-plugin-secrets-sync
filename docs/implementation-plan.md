@@ -97,8 +97,10 @@ Implemented backend slices now include:
 - Drift detection.
 - OpenBao/plugin telemetry integration, with a metrics endpoint only as a
   fallback if runtime telemetry cannot expose plugin OTel instruments.
-- Provider-specific local integration using localstack, envtest, or kind.
-- Opt-in real GitLab project variable e2e test.
+- Provider-specific local integration using LocalStack, kind, or Dockerized
+  GitLab.
+- Opt-in real GitLab project variable e2e test with disposable project
+  fixture.
 - Structured runbook examples.
 
 ### Later

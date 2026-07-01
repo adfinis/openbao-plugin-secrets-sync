@@ -172,6 +172,10 @@ bao write secret-sync/destinations/gitlab/prod \
   token="$GITLAB_TOKEN"
 ```
 
+Non-local `http://` GitLab URLs are rejected by default. For a local Docker or
+private test network that intentionally uses HTTP, set
+`allow_insecure_http=true`; production destinations should use HTTPS.
+
 Sensitive fields are redacted and seal-wrapped:
 
 ```sh

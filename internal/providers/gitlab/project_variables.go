@@ -38,6 +38,8 @@ const (
 	ConfigKeyVariableRaw = "variable_raw"
 	// ConfigKeyVariableType configures the GitLab variable type.
 	ConfigKeyVariableType = "variable_type"
+	// ConfigKeyAllowInsecureHTTP allows non-local http GitLab URLs for local test networks.
+	ConfigKeyAllowInsecureHTTP = "allow_insecure_http"
 	// ConfigKeyToken configures the GitLab API token.
 	ConfigKeyToken = "token"
 
@@ -48,10 +50,12 @@ const (
 	defaultEnvironmentScope = "*"
 	defaultVariableType     = VariableTypeEnvVar
 
-	variableValueMaxBytes = 10000
-	variableKeyMaxBytes   = 255
+	variableValueMaxBytes       = 10000
+	variableKeyMaxBytes         = 255
+	variableDescriptionMaxBytes = 255
 
-	metadataManagedBy = "openbao-secret-sync"
+	metadataManagedBy        = "openbao-secret-sync"
+	metadataManagedByCompact = "1"
 )
 
 type projectVariableClient interface {
@@ -276,15 +280,16 @@ func defaultClientFactory(_ context.Context, _ providers.DestinationConfig) (pro
 }
 
 type gitlabDestinationOptions struct {
-	baseURL          string
-	projectID        string
-	environmentScope string
-	protected        bool
-	masked           bool
-	hidden           bool
-	variableRaw      bool
-	variableType     string
-	token            string
+	baseURL           string
+	projectID         string
+	environmentScope  string
+	protected         bool
+	masked            bool
+	hidden            bool
+	variableRaw       bool
+	variableType      string
+	allowInsecureHTTP bool
+	token             string
 }
 
 func gitlabDestinationOptionsFromConfig(cfg providers.DestinationConfig) (gitlabDestinationOptions, error) {
@@ -309,7 +314,10 @@ func gitlabDestinationOptionsFromConfig(cfg providers.DestinationConfig) (gitlab
 	if options.variableRaw, err = boolConfigValue(cfg, ConfigKeyVariableRaw, true); err != nil {
 		return gitlabDestinationOptions{}, err
 	}
-	if err := validateBaseURL(options.baseURL); err != nil {
+	if options.allowInsecureHTTP, err = boolConfigValue(cfg, ConfigKeyAllowInsecureHTTP, false); err != nil {
+		return gitlabDestinationOptions{}, err
+	}
+	if err := validateBaseURL(options.baseURL, options.allowInsecureHTTP); err != nil {
 		return gitlabDestinationOptions{}, err
 	}
 	if options.projectID == "" {
@@ -353,7 +361,7 @@ func boolConfigValue(cfg providers.DestinationConfig, key string, fallback bool)
 	return parsed, nil
 }
 
-func validateBaseURL(rawBaseURL string) error {
+func validateBaseURL(rawBaseURL string, allowInsecureHTTP bool) error {
 	parsed, err := url.Parse(rawBaseURL)
 	if err != nil {
 		return validationError("gitlab base_url must be a valid URL")
@@ -365,10 +373,10 @@ func validateBaseURL(rawBaseURL string) error {
 	case "https":
 		return nil
 	case "http":
-		if isLocalHost(parsed.Hostname()) {
+		if isLocalHost(parsed.Hostname()) || allowInsecureHTTP {
 			return nil
 		}
-		return validationError("gitlab http base_url is only allowed for local development hosts")
+		return validationError("gitlab http base_url requires allow_insecure_http=true unless it targets localhost")
 	default:
 		return validationError("gitlab base_url must use http or https")
 	}
@@ -442,11 +450,25 @@ type variableMetadata struct {
 	ManagedBy      string `json:"managed_by"`
 	AssociationID  string `json:"association_id"`
 	SourcePath     string `json:"source_path"`
+	SourcePathHash string `json:"-"`
 	ObjectID       string `json:"object_id"`
+	ObjectIDHash   string `json:"-"`
 	SourceVersion  int    `json:"source_version"`
 	PayloadSHA256  string `json:"payload_sha256"`
 	PayloadFormat  string `json:"payload_format"`
 	EnvironmentRef string `json:"environment_scope"`
+}
+
+type variableMetadataWire struct {
+	ManagedBy      string `json:"m"`
+	AssociationID  string `json:"a"`
+	SourcePath     string `json:"p,omitempty"`
+	SourcePathHash string `json:"ph,omitempty"`
+	ObjectID       string `json:"o,omitempty"`
+	ObjectIDHash   string `json:"oh,omitempty"`
+	SourceVersion  int    `json:"v"`
+	PayloadSHA256  string `json:"h"`
+	PayloadFormat  string `json:"f"`
 }
 
 func variableInputFromUpsert(options gitlabDestinationOptions, req providers.UpsertRequest) gitlabVariableInput {
@@ -474,6 +496,31 @@ func variableInputFromUpsert(options gitlabDestinationOptions, req providers.Ups
 }
 
 func metadataDescription(metadata variableMetadata) string {
+	wire := variableMetadataWire{
+		ManagedBy:     metadataManagedByCompact,
+		AssociationID: metadata.AssociationID,
+		SourcePath:    metadata.SourcePath,
+		ObjectID:      metadata.ObjectID,
+		SourceVersion: metadata.SourceVersion,
+		PayloadSHA256: metadata.PayloadSHA256,
+		PayloadFormat: metadata.PayloadFormat,
+	}
+	payload := mustMarshalMetadata(wire)
+	if len(payload) <= variableDescriptionMaxBytes {
+		return payload
+	}
+	wire.ObjectID = ""
+	wire.ObjectIDHash = metadataIdentityHash(metadata.ObjectID)
+	payload = mustMarshalMetadata(wire)
+	if len(payload) <= variableDescriptionMaxBytes {
+		return payload
+	}
+	wire.SourcePath = ""
+	wire.SourcePathHash = metadataIdentityHash(metadata.SourcePath)
+	return mustMarshalMetadata(wire)
+}
+
+func mustMarshalMetadata(metadata variableMetadataWire) string {
 	payload, err := json.Marshal(metadata)
 	if err != nil {
 		return ""
@@ -484,6 +531,21 @@ func metadataDescription(metadata variableMetadata) string {
 func ownershipMetadata(variable *gitlabVariable) (variableMetadata, bool) {
 	if variable == nil {
 		return variableMetadata{}, false
+	}
+	var wire variableMetadataWire
+	if err := json.Unmarshal([]byte(variable.Description), &wire); err == nil && wire.ManagedBy != "" {
+		metadata := variableMetadata{
+			ManagedBy:      metadataManagedBy,
+			AssociationID:  wire.AssociationID,
+			SourcePath:     wire.SourcePath,
+			SourcePathHash: wire.SourcePathHash,
+			ObjectID:       wire.ObjectID,
+			ObjectIDHash:   wire.ObjectIDHash,
+			SourceVersion:  wire.SourceVersion,
+			PayloadSHA256:  wire.PayloadSHA256,
+			PayloadFormat:  wire.PayloadFormat,
+		}
+		return metadata, wire.ManagedBy == metadataManagedByCompact || wire.ManagedBy == metadataManagedBy
 	}
 	var metadata variableMetadata
 	if err := json.Unmarshal([]byte(variable.Description), &metadata); err != nil {
@@ -496,12 +558,21 @@ func ownedByRequest(metadata variableMetadata, metadataOwned bool, identity owne
 	if !metadataOwned {
 		return false
 	}
+	sourcePathMatches := metadata.SourcePath == identity.SourcePath ||
+		(metadata.SourcePathHash != "" && metadata.SourcePathHash == metadataIdentityHash(identity.SourcePath))
+	objectIDMatches := metadata.ObjectID == identity.ObjectID ||
+		(metadata.ObjectIDHash != "" && metadata.ObjectIDHash == metadataIdentityHash(identity.ObjectID))
 	return metadata.AssociationID == identity.AssociationID &&
-		metadata.SourcePath == identity.SourcePath &&
-		metadata.ObjectID == identity.ObjectID &&
+		sourcePathMatches &&
+		objectIDMatches &&
 		identity.AssociationID != "" &&
 		identity.SourcePath != "" &&
 		identity.ObjectID != ""
+}
+
+func metadataIdentityHash(value string) string {
+	sum := sha256.Sum256([]byte(value))
+	return hex.EncodeToString(sum[:16])
 }
 
 func remoteSourceVersionNewer(metadata variableMetadata, sourceVersion int) bool {
@@ -683,7 +754,14 @@ func (c httpProjectVariableClient) newRequest(
 	if err != nil {
 		return nil, validationError("gitlab base_url must be a valid URL")
 	}
-	parsed.Path = strings.TrimRight(parsed.Path, "/") + "/api/v4" + apiPath
+	unescapedAPIPath, err := url.PathUnescape(apiPath)
+	if err != nil {
+		return nil, validationError("gitlab api path must be valid URL path escaping")
+	}
+	basePath := strings.TrimRight(parsed.Path, "/")
+	escapedBasePath := strings.TrimRight(parsed.EscapedPath(), "/")
+	parsed.Path = basePath + "/api/v4" + unescapedAPIPath
+	parsed.RawPath = escapedBasePath + "/api/v4" + apiPath
 	parsed.RawQuery = query.Encode()
 	var body io.Reader
 	if form != nil {

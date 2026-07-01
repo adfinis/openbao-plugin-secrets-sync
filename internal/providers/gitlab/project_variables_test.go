@@ -170,6 +170,24 @@ func TestValidateDestinationConfig(t *testing.T) {
 			errorClass: providers.ErrorClassValidation,
 		},
 		{
+			name: "remote http with explicit insecure opt in",
+			config: map[string]string{
+				ConfigKeyBaseURL:           "http://gitlab",
+				ConfigKeyProjectID:         testProjectID,
+				ConfigKeyToken:             testToken,
+				ConfigKeyAllowInsecureHTTP: "true",
+			},
+		},
+		{
+			name: "invalid insecure http opt in",
+			config: map[string]string{
+				ConfigKeyProjectID:         testProjectID,
+				ConfigKeyToken:             testToken,
+				ConfigKeyAllowInsecureHTTP: "sometimes",
+			},
+			errorClass: providers.ErrorClassValidation,
+		},
+		{
 			name: "invalid bool",
 			config: map[string]string{
 				ConfigKeyProjectID: testProjectID,
@@ -273,8 +291,11 @@ func TestHTTPClientProjectVariableRequests(t *testing.T) {
 		if got := r.Header.Get("PRIVATE-TOKEN"); got != testToken {
 			t.Fatalf("private token header = %q, want %q", got, testToken)
 		}
-		if got := r.URL.Path; got != "/api/v4/projects/group%2Fproject/variables/APP_PASSWORD" {
+		if got := r.URL.Path; got != "/api/v4/projects/group/project/variables/APP_PASSWORD" {
 			t.Fatalf("path = %s", got)
+		}
+		if got := r.URL.RawPath; got != "/api/v4/projects/group%2Fproject/variables/APP_PASSWORD" {
+			t.Fatalf("raw path = %s", got)
 		}
 		if got := r.URL.Query().Get("filter[environment_scope]"); got != testEnvScope {
 			t.Fatalf("environment scope filter = %q, want %q", got, testEnvScope)
@@ -531,5 +552,30 @@ func TestVariableFormOmitsSecretFromDescription(t *testing.T) {
 	}
 	if got := parsed.Get("value"); got != "secret-canary" {
 		t.Fatalf("encoded value = %q, want secret-canary", got)
+	}
+}
+
+func TestVariableMetadataDescriptionFitsGitLabLimit(t *testing.T) {
+	request := defaultUpsertRequest(testPayloadSHANew, []byte("secret"), 2)
+	request.ObjectID = strings.Repeat("A", variableKeyMaxBytes)
+	request.ResolvedName = request.ObjectID
+	request.SourcePath = strings.Repeat("path/", 50)
+
+	input := variableInputFromUpsert(defaultOptions(), request)
+	if len(input.Description) > variableDescriptionMaxBytes {
+		t.Fatalf(
+			"description length = %d, want <= %d: %s",
+			len(input.Description),
+			variableDescriptionMaxBytes,
+			input.Description,
+		)
+	}
+
+	metadata, owned := ownershipMetadata(&gitlabVariable{Description: input.Description})
+	if !ownedByRequest(metadata, owned, ownershipIdentityFromUpsert(request)) {
+		t.Fatalf("metadata does not match request identity: %#v", metadata)
+	}
+	if metadata.PayloadSHA256 != testPayloadSHANew {
+		t.Fatalf("payload sha = %s, want %s", metadata.PayloadSHA256, testPayloadSHANew)
 	}
 }

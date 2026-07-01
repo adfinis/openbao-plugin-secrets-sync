@@ -456,14 +456,18 @@ Current status: package has provider type `gitlab`, backend registration,
 project-level destination config, seal-wrapped API token storage, standard HTTP
 client boundary, provider conformance coverage, project variable plan/upsert,
 owned update, owned delete, read-state, health, and HTTP error classification.
-Real GitLab e2e coverage is intentionally opt-in/manual because it requires an
-external project and token.
+Self-contained Docker GitLab e2e coverage is opt-in because a full GitLab CE
+container is heavy. Real GitLab e2e coverage remains a later opt-in/manual
+fixture because it requires an external project and token.
 
 Current granularity support: `secret-path` and `secret-key`. For CI/CD
 variables, `secret-key` with `format=raw` is the recommended shape. The
 provider validates rendered variable names against GitLab's variable key rules.
 Ownership and payload hash metadata are stored in the variable description;
 the provider does not need to read variable values back for drift status.
+Non-local `http://` GitLab base URLs are rejected by default and require
+`allow_insecure_http=true`, which is intended for local Docker or private test
+networks rather than production destinations.
 
 ## Provider Test Expectations
 
