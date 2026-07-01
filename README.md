@@ -43,6 +43,7 @@ Self-contained e2e paths:
 
 ```sh
 make test-e2e
+make test-e2e-resilience
 make test-e2e-kind
 E2E_GITLAB_CONFIRM=1 make test-e2e-gitlab
 ```

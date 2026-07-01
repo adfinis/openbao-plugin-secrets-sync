@@ -67,6 +67,9 @@ page when you need to choose the right detailed document.
 
 - [LocalStack e2e workflow](../test/e2e/localstack/README.md) covers AWS
   Secrets Manager behavior against LocalStack.
+- [Restart resilience e2e workflow](../test/e2e/resilience/README.md) covers
+  durable OpenBao storage, static seal self-unseal, queued work, and status
+  persistence across OpenBao restart.
 - [Kind e2e workflow](../test/e2e/kind/README.md) covers Kubernetes Secrets
   behavior in a disposable kind cluster.
 - [GitLab e2e workflow](../test/e2e/gitlab/README.md) covers GitLab project
