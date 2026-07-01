@@ -110,6 +110,23 @@ jobs:
       - name: Run LocalStack e2e
         run: make test-e2e
 
+  resilience-e2e:
+    name: Restart Resilience E2E
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Setup repo tools
+        uses: ./.github/actions/setup-repo-tools
+        with:
+          cache-tools: "false"
+          bootstrap-tools: "false"
+
+      - name: Run restart resilience e2e
+        run: make test-e2e-resilience
+
   core:
     name: Core Quality
     runs-on: ubuntu-24.04
@@ -120,6 +137,7 @@ jobs:
       - security
       - heavy
       - localstack-e2e
+      - resilience-e2e
     steps:
       - name: Validate required CI graph
         env:
@@ -128,6 +146,7 @@ jobs:
           SECURITY: ${{ needs.security.result }}
           HEAVY: ${{ needs.heavy.result }}
           LOCALSTACK_E2E: ${{ needs.localstack-e2e.result }}
+          RESILIENCE_E2E: ${{ needs.resilience-e2e.result }}
         run: |
           set -euo pipefail
 
@@ -146,6 +165,7 @@ jobs:
           security=${SECURITY}
           heavy=${HEAVY}
           localstack-e2e=${LOCALSTACK_E2E}
+          resilience-e2e=${RESILIENCE_E2E}
           EOF
 
           if [ "${#failures[@]}" -gt 0 ]; then

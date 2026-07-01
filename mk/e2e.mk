@@ -58,6 +58,13 @@ E2E_OCI_REGISTRY_PORT ?= 15000
 E2E_OCI_REPOSITORY ?= openbao-plugin-secrets-sync
 E2E_OCI_IMAGE_IN_BAO ?= registry:5000/$(E2E_OCI_REPOSITORY)
 E2E_OCI_PUSH_REF ?= 127.0.0.1:$(E2E_OCI_REGISTRY_PORT)/$(E2E_OCI_REPOSITORY):$(E2E_PLUGIN_VERSION)
+E2E_RESILIENCE_COMPOSE_FILE ?= test/e2e/resilience/compose.yaml
+E2E_RESILIENCE_DIR ?= dist/e2e/resilience
+E2E_RESILIENCE_STATIC_SEAL_KEY ?= $(E2E_RESILIENCE_DIR)/static-unseal.key
+E2E_RESILIENCE_OPENBAO_PORT ?= 18205
+E2E_RESILIENCE_LOCALSTACK_PORT ?= 4567
+E2E_RESILIENCE_OPENBAO_ADDR ?= http://127.0.0.1:$(E2E_RESILIENCE_OPENBAO_PORT)
+E2E_RESILIENCE_LOCALSTACK_ENDPOINT ?= http://127.0.0.1:$(E2E_RESILIENCE_LOCALSTACK_PORT)
 
 .PHONY: e2e-build-plugin
 e2e-build-plugin: ## Build the Linux plugin binary used by the OpenBao e2e container.
@@ -111,6 +118,58 @@ test-e2e-release-localstack: e2e-stage-release-plugin ## Run LocalStack e2e agai
 	E2E_PLUGIN_PATH="$(E2E_PLUGIN_BIN)" \
 	E2E_PLUGIN_VERSION="$(E2E_PLUGIN_VERSION)" \
 	"$(GO)" test -tags=e2e ./test/e2e/localstack -count=1 -v
+
+.PHONY: e2e-resilience-fixture
+e2e-resilience-fixture: e2e-build-plugin ## Generate persistent OpenBao e2e fixture material.
+	@mkdir -p "$(E2E_RESILIENCE_DIR)"
+	@if [ ! -f "$(E2E_RESILIENCE_STATIC_SEAL_KEY)" ]; then \
+		tmp="$(E2E_RESILIENCE_STATIC_SEAL_KEY).tmp"; \
+		umask 077; \
+		openssl rand 32 > "$$tmp"; \
+		mv -f "$$tmp" "$(E2E_RESILIENCE_STATIC_SEAL_KEY)"; \
+	fi
+
+.PHONY: e2e-resilience-up
+e2e-resilience-up: e2e-resilience-fixture ## Start the persistent OpenBao plus LocalStack resilience stack.
+	@E2E_OPENBAO_IMAGE="$(E2E_OPENBAO_IMAGE)" \
+	E2E_RESILIENCE_OPENBAO_PORT="$(E2E_RESILIENCE_OPENBAO_PORT)" \
+	E2E_RESILIENCE_LOCALSTACK_PORT="$(E2E_RESILIENCE_LOCALSTACK_PORT)" \
+	$(DOCKER_COMPOSE) -f "$(E2E_RESILIENCE_COMPOSE_FILE)" up -d --wait
+
+.PHONY: e2e-resilience-down
+e2e-resilience-down: ## Stop the persistent OpenBao plus LocalStack resilience stack.
+	@E2E_OPENBAO_IMAGE="$(E2E_OPENBAO_IMAGE)" \
+	E2E_RESILIENCE_OPENBAO_PORT="$(E2E_RESILIENCE_OPENBAO_PORT)" \
+	E2E_RESILIENCE_LOCALSTACK_PORT="$(E2E_RESILIENCE_LOCALSTACK_PORT)" \
+	$(DOCKER_COMPOSE) -f "$(E2E_RESILIENCE_COMPOSE_FILE)" down -v --remove-orphans
+
+.PHONY: test-e2e-resilience
+test-e2e-resilience: e2e-resilience-fixture ## Run persistent OpenBao restart resilience e2e tests.
+	@set -eu; \
+	cleanup() { \
+		status="$$?"; \
+		if [ "$$status" -ne 0 ]; then \
+			E2E_OPENBAO_IMAGE="$(E2E_OPENBAO_IMAGE)" \
+			E2E_RESILIENCE_OPENBAO_PORT="$(E2E_RESILIENCE_OPENBAO_PORT)" \
+			E2E_RESILIENCE_LOCALSTACK_PORT="$(E2E_RESILIENCE_LOCALSTACK_PORT)" \
+			$(DOCKER_COMPOSE) -f "$(E2E_RESILIENCE_COMPOSE_FILE)" logs --no-color openbao localstack || true; \
+		fi; \
+		$(MAKE) e2e-resilience-down >/dev/null 2>&1 || true; \
+		exit "$$status"; \
+	}; \
+	trap cleanup EXIT; \
+	$(MAKE) e2e-resilience-up; \
+	AWS_ACCESS_KEY_ID=test \
+	AWS_SECRET_ACCESS_KEY=test \
+	AWS_REGION=us-east-1 \
+	AWS_DEFAULT_REGION=us-east-1 \
+	E2E_RESILIENCE_OPENBAO_ADDR="$(E2E_RESILIENCE_OPENBAO_ADDR)" \
+	E2E_RESILIENCE_LOCALSTACK_ENDPOINT="$(E2E_RESILIENCE_LOCALSTACK_ENDPOINT)" \
+	E2E_RESILIENCE_COMPOSE_FILE="$(CURDIR)/$(E2E_RESILIENCE_COMPOSE_FILE)" \
+	E2E_DOCKER_COMPOSE="$(DOCKER_COMPOSE)" \
+	E2E_PLUGIN_PATH="$(E2E_PLUGIN_BIN)" \
+	E2E_PLUGIN_VERSION="$(E2E_PLUGIN_VERSION)" \
+	"$(GO)" test -tags=e2e ./test/e2e/resilience -run TestOpenBaoRestartPreservesSecretSyncQueue -count=1 -v
 
 .PHONY: e2e-oci-build-plugin
 e2e-oci-build-plugin: ## Build the Linux plugin binary used by the OCI e2e image.

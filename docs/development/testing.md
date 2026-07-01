@@ -23,6 +23,7 @@ Use provider e2e gates only when the relevant runtime is available:
 
 ```sh
 make test-e2e
+make test-e2e-resilience
 make test-e2e-kind
 E2E_GITLAB_CONFIRM=1 make test-e2e-gitlab
 ```
@@ -101,13 +102,15 @@ FUZZTIME=60s make fuzz
 
 ### E2E Tests
 
-Self-contained e2e tests prove the OpenBao plugin boundary in dev mode,
-including plugin registration, mount, destination configuration, queue drain,
-provider API behavior, and status transitions.
+Self-contained e2e tests prove the OpenBao plugin boundary, including plugin
+registration, mount, destination configuration, queue drain, provider API
+behavior, status transitions, and selected OpenBao lifecycle behavior.
 
 Current self-contained e2e coverage:
 
 - LocalStack-backed AWS Secrets Manager;
+- persistent OpenBao restart resilience with file storage, static seal
+  self-unseal, queued work, and status persistence;
 - kind-backed Kubernetes Secrets;
 - Dockerized GitLab CE project variables;
 - OCI plugin distribution through a disposable TLS registry, OpenBao
@@ -122,6 +125,8 @@ Documented provider validation paths:
 - AWS Secrets Manager: LocalStack self-contained path in
   `test/e2e/localstack/README.md` and opt-in real AWS path in
   `test/e2e/aws/README.md`;
+- OpenBao lifecycle resilience: persistent self-contained path in
+  `test/e2e/resilience/README.md`;
 - Kubernetes Secrets: kind-backed real API-server path in
   `test/e2e/kind/README.md`;
 - GitLab project variables: Dockerized GitLab CE path in
@@ -189,4 +194,4 @@ Hardening should proceed in this order:
 2. Provider-agnostic state model expansion.
 3. Security boundary tests for redaction, SSRF, auth, and restore guard.
 4. Provider conformance expansion across AWS, Kubernetes, and GitLab.
-5. Restart, retry, and real-provider resilience e2e coverage.
+5. Retry and real-provider resilience e2e coverage.

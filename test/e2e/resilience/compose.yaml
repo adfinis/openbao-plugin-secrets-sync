@@ -1,0 +1,67 @@
+services:
+  localstack:
+    image: localstack/localstack:4.14.0
+    environment:
+      AWS_ACCESS_KEY_ID: test
+      AWS_SECRET_ACCESS_KEY: test
+      AWS_DEFAULT_REGION: us-east-1
+      DEBUG: "${DEBUG:-}"
+    ports:
+      - "127.0.0.1:${E2E_RESILIENCE_LOCALSTACK_PORT:-4567}:4566"
+    healthcheck:
+      test: ["CMD-SHELL", "awslocal secretsmanager list-secrets >/dev/null 2>&1"]
+      interval: 2s
+      timeout: 5s
+      retries: 30
+
+  openbao-fixture-dir:
+    image: ${E2E_OPENBAO_IMAGE:-ghcr.io/openbao/openbao:2.5.5@sha256:6150c4a6b62067db6141c8da7a6a6b5763f4f47c315343d0c848b40fecdfd452}
+    user: "0"
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        set -eu
+        mkdir -p /openbao/data /openbao/seal
+        cp /openbao/fixture/static-unseal.key /openbao/seal/static-unseal.key
+        chown -R 100:1000 /openbao/data /openbao/seal
+        chmod 0750 /openbao/data /openbao/seal
+        chmod 0400 /openbao/seal/static-unseal.key
+    volumes:
+      - ../../../dist/e2e/resilience/static-unseal.key:/openbao/fixture/static-unseal.key:ro
+      - openbao-data:/openbao/data
+      - openbao-seal:/openbao/seal
+
+  openbao:
+    image: ${E2E_OPENBAO_IMAGE:-ghcr.io/openbao/openbao:2.5.5@sha256:6150c4a6b62067db6141c8da7a6a6b5763f4f47c315343d0c848b40fecdfd452}
+    cap_add:
+      - IPC_LOCK
+    depends_on:
+      localstack:
+        condition: service_healthy
+      openbao-fixture-dir:
+        condition: service_completed_successfully
+    environment:
+      AWS_ACCESS_KEY_ID: test
+      AWS_SECRET_ACCESS_KEY: test
+      AWS_REGION: us-east-1
+      AWS_DEFAULT_REGION: us-east-1
+      BAO_ADDR: http://127.0.0.1:8200
+    command:
+      - server
+      - -config=/openbao/e2e-config/node0.hcl
+    ports:
+      - "127.0.0.1:${E2E_RESILIENCE_OPENBAO_PORT:-18205}:8200"
+    volumes:
+      - ../../../bin/e2e:/openbao/plugins:ro
+      - openbao-seal:/openbao/seal:ro
+      - ./config/node0.hcl:/openbao/e2e-config/node0.hcl:ro
+      - openbao-data:/openbao/data
+    healthcheck:
+      test: ["CMD-SHELL", "bao status -address=http://127.0.0.1:8200 >/dev/null 2>&1; code=$$?; [ \"$$code\" -eq 0 ] || [ \"$$code\" -eq 2 ]"]
+      interval: 2s
+      timeout: 5s
+      retries: 30
+
+volumes:
+  openbao-data:
+  openbao-seal:
