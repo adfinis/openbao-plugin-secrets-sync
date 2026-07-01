@@ -2662,6 +2662,12 @@ func TestQueueSummaryOldestAge(t *testing.T) {
 	b := Backend(&logical.BackendConfig{})
 	storage := &logical.InmemStorage{}
 
+	configResp := handleRequest(t, b, storage, logical.UpdateOperation, configPath, map[string]interface{}{
+		"queue_capacity": 2,
+	})
+	if configResp != nil && configResp.IsError() {
+		t.Fatalf("unexpected config write error: %v", configResp.Error())
+	}
 	writeAppDBSecret(t, b, storage, "initial")
 	createFakeDestination(t, b, storage, "default")
 	associationResp := createDefaultFakeAssociation(t, b, storage)
@@ -2679,6 +2685,12 @@ func TestQueueSummaryOldestAge(t *testing.T) {
 	assertNoErrorResponse(t, queueResp)
 	if got := queueResp.Data["oldest_age_seconds"].(int); got < 120 {
 		t.Fatalf("oldest_age_seconds = %v, want at least 120", got)
+	}
+	if got := queueResp.Data["capacity"]; got != 2 {
+		t.Fatalf("capacity = %v, want 2", got)
+	}
+	if got := queueResp.Data["utilization"]; got != 0.5 {
+		t.Fatalf("utilization = %v, want 0.5", got)
 	}
 }
 

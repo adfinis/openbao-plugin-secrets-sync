@@ -5,7 +5,9 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"time"
 
+	"github.com/adfinis/openbao-secret-sync/internal/observability"
 	"github.com/adfinis/openbao-secret-sync/internal/providers"
 	"github.com/adfinis/openbao-secret-sync/internal/providers/awssecretsmanager"
 	"github.com/adfinis/openbao-secret-sync/internal/providers/gitlab"
@@ -367,7 +369,9 @@ func (b *secretSyncBackend) pathDestinationValidate(
 	if err != nil {
 		return nil, err
 	}
+	providerStart := time.Now()
 	providerErr := provider.Validate(ctx, resolvedConfig)
+	b.recordProviderRequest(ctx, provider.Type(), observability.OperationValidate, providerErr, time.Since(providerStart))
 	if providerErr != nil {
 		return &logical.Response{Data: newResponseData(
 			responseField("valid", false),
@@ -403,11 +407,27 @@ func (b *secretSyncBackend) pathDestinationCheck(
 	valid := true
 	validationErrorClass := ""
 	validationMessage := ""
+	providerStart := time.Now()
 	if providerErr := provider.Validate(ctx, resolvedConfig); providerErr != nil {
+		b.recordProviderRequest(
+			ctx,
+			provider.Type(),
+			observability.OperationValidate,
+			providerErr,
+			time.Since(providerStart),
+		)
 		valid = false
 		validationErrorClass = string(providerErrorClass(providerErr))
 		validationMessage = providerErr.Error()
 		blockers = append(blockers, "validation_failed")
+	} else {
+		b.recordProviderRequest(
+			ctx,
+			provider.Type(),
+			observability.OperationValidate,
+			nil,
+			time.Since(providerStart),
+		)
 	}
 	healthChecked := false
 	healthy := false
@@ -415,7 +435,9 @@ func (b *secretSyncBackend) pathDestinationCheck(
 	healthMessage := ""
 	if valid && !record.Disabled {
 		healthChecked = true
+		providerStart = time.Now()
 		result, providerErr := provider.Health(ctx, resolvedConfig)
+		b.recordProviderHealthRequest(ctx, provider.Type(), result, providerErr, time.Since(providerStart))
 		if providerErr != nil {
 			healthErrorClass = string(providerErrorClass(providerErr))
 			healthMessage = providerErr.Error()
@@ -432,6 +454,7 @@ func (b *secretSyncBackend) pathDestinationCheck(
 			}
 		}
 	}
+	b.recordReadinessCheck(ctx, observability.CheckDestination, record.Type, blockers)
 	return &logical.Response{Data: newResponseData(
 		responseField("ready", len(blockers) == 0),
 		responseField("valid", valid),
@@ -461,7 +484,9 @@ func (b *secretSyncBackend) pathDestinationHealth(
 	if err != nil {
 		return nil, err
 	}
+	providerStart := time.Now()
 	result, providerErr := provider.Health(ctx, resolvedConfig)
+	b.recordProviderHealthRequest(ctx, provider.Type(), result, providerErr, time.Since(providerStart))
 	if providerErr != nil {
 		return &logical.Response{Data: newResponseData(
 			responseField("healthy", false),

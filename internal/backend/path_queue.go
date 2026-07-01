@@ -23,6 +23,8 @@ type queueSummary struct {
 	Terminal         int
 	Canceled         int
 	OldestAgeSeconds int
+	Capacity         int
+	Utilization      float64
 }
 
 func pathQueue(b *secretSyncBackend) []*framework.Path {
@@ -114,10 +116,15 @@ func (b *secretSyncBackend) pathQueueRead(
 	req *logical.Request,
 	_ *framework.FieldData,
 ) (*logical.Response, error) {
+	cfg, err := readGlobalConfig(ctx, req.Storage)
+	if err != nil {
+		return nil, err
+	}
 	summary, err := readQueueSummary(ctx, req.Storage, nowUTC())
 	if err != nil {
 		return nil, err
 	}
+	summary.applyCapacity(cfg.QueueCapacity)
 	b.recordQueueSummary(ctx, summary)
 	return &logical.Response{Data: queueSummaryResponse(summary)}, nil
 }
@@ -132,12 +139,15 @@ func (b *secretSyncBackend) pathQueueDrain(
 		return nil, err
 	}
 	if cfg.Disabled {
+		b.recordRemoteMutationBlocked(ctx, observability.OperationDrain, observability.ReasonDisabled)
 		return logical.ErrorResponse("secret sync is disabled"), nil
 	}
 	if cfg.RestoreGuard {
+		b.recordRemoteMutationBlocked(ctx, observability.OperationDrain, observability.ReasonRestoreGuard)
 		return logical.ErrorResponse(restoreGuardActiveError), nil
 	}
 	if !b.remoteMutationAllowed() {
+		b.recordRemoteMutationBlocked(ctx, observability.OperationDrain, observability.ReasonReplicationState)
 		return logical.ErrorResponse(remoteMutationUnsafeError), nil
 	}
 	maxOperations := data.Get("max_operations").(int)
@@ -159,6 +169,7 @@ func (b *secretSyncBackend) pathQueueDrain(
 	if err != nil {
 		return nil, err
 	}
+	summary.applyCapacity(cfg.QueueCapacity)
 	b.recordQueueSummary(ctx, summary)
 	b.observer.Operation(ctx, observability.OperationEvent{
 		Operation: observability.OperationDrain,
@@ -173,6 +184,8 @@ func (b *secretSyncBackend) pathQueueDrain(
 		responseField("queue_terminal", summary.Terminal),
 		responseField("queue_canceled", summary.Canceled),
 		responseField("queue_oldest_age_seconds", summary.OldestAgeSeconds),
+		responseField("queue_capacity", summary.Capacity),
+		responseField("queue_utilization", summary.Utilization),
 		responseField("queue", queueSummaryResponse(summary)),
 	)}, nil
 }
@@ -182,6 +195,10 @@ func (b *secretSyncBackend) recordQueueSummary(ctx context.Context, summary queu
 	b.observer.QueueDepth(ctx, outboxStateRetryWait, summary.RetryWait)
 	b.observer.QueueDepth(ctx, outboxStateFailedTerminal, summary.Terminal)
 	b.observer.QueueDepth(ctx, outboxStateCanceled, summary.Canceled)
+	b.observer.QueueCapacity(ctx, observability.QueueCapacityEvent{
+		Capacity:    summary.Capacity,
+		Utilization: summary.Utilization,
+	})
 }
 
 func readQueueSummary(ctx context.Context, storage logical.Storage, now time.Time) (queueSummary, error) {
@@ -232,6 +249,18 @@ func (summary *queueSummary) recordQueuedAge(record outboxRecord, now time.Time)
 	}
 }
 
+func (summary *queueSummary) applyCapacity(capacity int) {
+	if capacity <= 0 {
+		capacity = defaultQueueCapacity
+	}
+	summary.Capacity = capacity
+	summary.Utilization = float64(summary.queuedDepth()) / float64(capacity)
+}
+
+func (summary queueSummary) queuedDepth() int {
+	return summary.Pending + summary.RetryWait
+}
+
 func queueSummaryResponse(summary queueSummary) map[string]interface{} { //nolint:forbidigo
 	return newResponseData(
 		responseField("pending", summary.Pending),
@@ -240,6 +269,8 @@ func queueSummaryResponse(summary queueSummary) map[string]interface{} { //nolin
 		responseField("terminal", summary.Terminal),
 		responseField("canceled", summary.Canceled),
 		responseField("oldest_age_seconds", summary.OldestAgeSeconds),
+		responseField("capacity", summary.Capacity),
+		responseField("utilization", summary.Utilization),
 	)
 }
 

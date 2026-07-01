@@ -13,7 +13,11 @@ func TestMetricNamesUseOpenTelemetryInstrumentShape(t *testing.T) {
 		MetricOperations,
 		MetricProviderRequests,
 		MetricProviderRequestDuration,
+		MetricReadinessChecks,
+		MetricRemoteMutationBlocked,
 		MetricReconcileRuns,
+		MetricQueueCapacity,
+		MetricQueueUtilization,
 		MetricRestoreGuardActive,
 	}
 
@@ -50,6 +54,22 @@ func TestMetricAttributesStayLowCardinality(t *testing.T) {
 			}),
 		},
 		{
+			name: "readiness check",
+			attributes: readinessCheckAttributes(ReadinessCheckEvent{
+				Check:           CheckDestination,
+				Result:          ResultFailure,
+				Blocker:         "health_failed",
+				DestinationType: "aws-sm",
+			}),
+		},
+		{
+			name: "remote mutation blocked",
+			attributes: remoteMutationBlockedAttributes(RemoteMutationBlockedEvent{
+				Operation: OperationDrain,
+				Reason:    ReasonRestoreGuard,
+			}),
+		},
+		{
 			name: "reconcile run",
 			attributes: reconcileRunAttributes(ReconcileRunEvent{
 				Result:          ResultFailure,
@@ -68,6 +88,9 @@ func TestMetricAttributesStayLowCardinality(t *testing.T) {
 		AttributeResult:          {},
 		AttributeErrorClass:      {},
 		AttributeGranularity:     {},
+		AttributeCheck:           {},
+		AttributeBlocker:         {},
+		AttributeReason:          {},
 	}
 	forbiddenKeys := map[attribute.Key]struct{}{
 		"path":             {},
@@ -106,6 +129,14 @@ func TestBlankAttributeValuesAreNormalized(t *testing.T) {
 	providerAttrs := providerRequestAttributes(ProviderRequestEvent{})
 	assertAttributeValue(t, providerAttrs, AttributeProvider, ValueUnknown)
 	assertAttributeValue(t, providerAttrs, AttributeErrorClass, ValueNone)
+
+	readinessAttrs := readinessCheckAttributes(ReadinessCheckEvent{})
+	assertAttributeValue(t, readinessAttrs, AttributeCheck, ValueUnknown)
+	assertAttributeValue(t, readinessAttrs, AttributeBlocker, ValueNone)
+
+	blockedAttrs := remoteMutationBlockedAttributes(RemoteMutationBlockedEvent{})
+	assertAttributeValue(t, blockedAttrs, AttributeOperation, ValueUnknown)
+	assertAttributeValue(t, blockedAttrs, AttributeReason, ValueUnknown)
 }
 
 func assertAttributeValue(

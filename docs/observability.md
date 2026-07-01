@@ -14,9 +14,13 @@ Implemented OpenTelemetry instrument names:
 
 ```text
 openbao.secret_sync.queue.depth
+openbao.secret_sync.queue.capacity
+openbao.secret_sync.queue.utilization
 openbao.secret_sync.operations
 openbao.secret_sync.provider.requests
 openbao.secret_sync.provider.request.duration
+openbao.secret_sync.readiness.checks
+openbao.secret_sync.remote_mutation.blocked
 openbao.secret_sync.reconcile.runs
 openbao.secret_sync.restore_guard.active
 ```
@@ -29,11 +33,16 @@ instrument contract.
 
 Current instrumentation points:
 
-- queue summary reads and drains record queue depth by durable outbox state;
+- queue summary reads and drains record queue depth by durable outbox state,
+  configured capacity, and capacity utilization;
 - queue drain records a logical drain operation result;
+- blocked periodic runs and manual drains record the safety gate that blocked
+  remote mutation;
 - dispatch records logical upsert/delete operation outcomes;
-- provider plan, upsert, delete, and read-state calls record request counts and
-  durations;
+- destination readiness checks record a low-cardinality source or destination
+  check result and primary blocker;
+- provider validate, health, plan, upsert, delete, and read-state calls record
+  request counts and durations;
 - reconcile plan/apply records one result per reconciled object;
 - config read/write and restore-guard acknowledgement record restore guard
   active state.
@@ -50,6 +59,9 @@ state
 result
 error_class
 granularity
+check
+blocker
+reason
 ```
 
 Forbidden attributes:

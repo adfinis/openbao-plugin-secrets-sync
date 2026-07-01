@@ -130,6 +130,10 @@ Read the queue summary:
 bao read secret-sync/queue
 ```
 
+Queue summaries include `capacity` and `utilization`. Treat sustained high
+utilization as backpressure: increase drain frequency, reduce producer rate, or
+raise `queue_capacity` after checking storage and provider limits.
+
 For deterministic local testing or controlled catch-up, drain due operations:
 
 ```sh
@@ -150,6 +154,24 @@ bao write -force secret-sync/queue/<operation-id>/cancel
 ```
 
 `queue/drain` can execute remote mutations. Keep it operator-scoped.
+
+## Operational Signals
+
+The plugin emits OpenTelemetry metric API calls only. Exporter setup remains an
+OpenBao deployment concern.
+
+Useful early alert inputs:
+
+- `openbao.secret_sync.restore_guard.active` stays `1` after an expected
+  restore or deployment review window;
+- `openbao.secret_sync.queue.utilization` remains high or increases while
+  `openbao.secret_sync.queue.depth{state="pending"}` is not draining;
+- `openbao.secret_sync.remote_mutation.blocked` increases with reason
+  `disabled`, `restore_guard`, or `replication_state`;
+- `openbao.secret_sync.provider.requests` failures increase by provider,
+  operation, or error class;
+- `openbao.secret_sync.readiness.checks` failures identify onboarding blockers
+  without exposing source paths or destination names.
 
 ## Status And Reconcile
 

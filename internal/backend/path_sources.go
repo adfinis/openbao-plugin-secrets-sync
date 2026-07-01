@@ -3,11 +3,12 @@ package backend
 import (
 	"context"
 
+	"github.com/adfinis/openbao-secret-sync/internal/observability"
 	"github.com/openbao/openbao/sdk/v2/framework"
 	"github.com/openbao/openbao/sdk/v2/logical"
 )
 
-func pathSources(_ *secretSyncBackend) []*framework.Path {
+func pathSources(b *secretSyncBackend) []*framework.Path {
 	return []*framework.Path{
 		{
 			Pattern: "sources/(?P<path>.+)/check",
@@ -19,7 +20,7 @@ func pathSources(_ *secretSyncBackend) []*framework.Path {
 			},
 			Operations: map[logical.Operation]framework.OperationHandler{
 				logical.ReadOperation: &framework.PathOperation{
-					Callback: pathSourceCheck,
+					Callback: b.pathSourceCheck,
 					Summary:  "Check source readiness.",
 				},
 			},
@@ -46,7 +47,7 @@ func pathSources(_ *secretSyncBackend) []*framework.Path {
 	}
 }
 
-func pathSourceCheck(
+func (b *secretSyncBackend) pathSourceCheck(
 	ctx context.Context,
 	req *logical.Request,
 	data *framework.FieldData,
@@ -92,6 +93,7 @@ func pathSourceCheck(
 		syncable = sourceMetadataSyncable(*metadata)
 	}
 	blockers := sourceReadinessBlockers(metadata, syncable, currentVersionAvailable)
+	b.recordReadinessCheck(ctx, observability.CheckSource, "", blockers)
 	return &logical.Response{Data: newResponseData(
 		responseField("path", path),
 		responseField("ready", len(blockers) == 0),

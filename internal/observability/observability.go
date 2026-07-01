@@ -17,7 +17,11 @@ const (
 	MetricOperations              = "openbao.secret_sync.operations"
 	MetricProviderRequests        = "openbao.secret_sync.provider.requests"
 	MetricProviderRequestDuration = "openbao.secret_sync.provider.request.duration"
+	MetricReadinessChecks         = "openbao.secret_sync.readiness.checks"
+	MetricRemoteMutationBlocked   = "openbao.secret_sync.remote_mutation.blocked"
 	MetricReconcileRuns           = "openbao.secret_sync.reconcile.runs"
+	MetricQueueCapacity           = "openbao.secret_sync.queue.capacity"
+	MetricQueueUtilization        = "openbao.secret_sync.queue.utilization"
 	MetricRestoreGuardActive      = "openbao.secret_sync.restore_guard.active"
 
 	AttributeProvider        = "provider"
@@ -27,6 +31,9 @@ const (
 	AttributeResult          = "result"
 	AttributeErrorClass      = "error_class"
 	AttributeGranularity     = "granularity"
+	AttributeCheck           = "check"
+	AttributeBlocker         = "blocker"
+	AttributeReason          = "reason"
 
 	ValueNone    = "none"
 	ValueUnknown = "unknown"
@@ -40,7 +47,17 @@ const (
 	OperationDelete    = "delete"
 	OperationReadState = "read_state"
 	OperationPlan      = "plan"
+	OperationValidate  = "validate"
+	OperationHealth    = "health"
 	OperationDrain     = "drain"
+	OperationPeriodic  = "periodic"
+
+	CheckSource      = "source"
+	CheckDestination = "destination"
+
+	ReasonDisabled         = "disabled"
+	ReasonRestoreGuard     = "restore_guard"
+	ReasonReplicationState = "replication_state"
 )
 
 // Recorder captures the plugin's metric surface.
@@ -48,7 +65,10 @@ type Recorder interface {
 	QueueDepth(context.Context, string, int)
 	Operation(context.Context, OperationEvent)
 	ProviderRequest(context.Context, ProviderRequestEvent)
+	ReadinessCheck(context.Context, ReadinessCheckEvent)
+	RemoteMutationBlocked(context.Context, RemoteMutationBlockedEvent)
 	ReconcileRun(context.Context, ReconcileRunEvent)
+	QueueCapacity(context.Context, QueueCapacityEvent)
 	RestoreGuardActive(context.Context, bool)
 }
 
@@ -70,12 +90,32 @@ type ProviderRequestEvent struct {
 	Duration   time.Duration
 }
 
+// ReadinessCheckEvent describes one source or destination readiness check.
+type ReadinessCheckEvent struct {
+	Check           string
+	Result          string
+	Blocker         string
+	DestinationType string
+}
+
+// RemoteMutationBlockedEvent describes a blocked remote mutation attempt.
+type RemoteMutationBlockedEvent struct {
+	Operation string
+	Reason    string
+}
+
 // ReconcileRunEvent describes one reconcile object result.
 type ReconcileRunEvent struct {
 	Result          string
 	ErrorClass      string
 	DestinationType string
 	Granularity     string
+}
+
+// QueueCapacityEvent describes current durable queue capacity pressure.
+type QueueCapacityEvent struct {
+	Capacity    int
+	Utilization float64
 }
 
 // New returns the default OpenTelemetry recorder. It is safe when no OTel SDK
@@ -119,6 +159,20 @@ func NewWithMeter(meter metric.Meter) (Recorder, error) {
 	if err != nil {
 		return nil, err
 	}
+	readinessChecksTotal, err := meter.Int64Counter(
+		MetricReadinessChecks,
+		metric.WithDescription("Source and destination readiness check results."),
+	)
+	if err != nil {
+		return nil, err
+	}
+	remoteMutationBlockedTotal, err := meter.Int64Counter(
+		MetricRemoteMutationBlocked,
+		metric.WithDescription("Remote mutation attempts blocked by safety gates."),
+	)
+	if err != nil {
+		return nil, err
+	}
 	reconcileRunsTotal, err := meter.Int64Counter(
 		MetricReconcileRuns,
 		metric.WithDescription("Reconcile object results."),
@@ -133,13 +187,32 @@ func NewWithMeter(meter metric.Meter) (Recorder, error) {
 	if err != nil {
 		return nil, err
 	}
+	queueCapacity, err := meter.Int64Gauge(
+		MetricQueueCapacity,
+		metric.WithDescription("Configured durable outbox queue capacity."),
+	)
+	if err != nil {
+		return nil, err
+	}
+	queueUtilization, err := meter.Float64Gauge(
+		MetricQueueUtilization,
+		metric.WithDescription("Durable queued operation depth divided by configured queue capacity."),
+		metric.WithUnit("1"),
+	)
+	if err != nil {
+		return nil, err
+	}
 	return meterRecorder{
-		queueDepth:             queueDepth,
-		operationsTotal:        operationsTotal,
-		providerRequestsTotal:  providerRequestsTotal,
-		providerRequestSeconds: providerRequestSeconds,
-		reconcileRunsTotal:     reconcileRunsTotal,
-		restoreGuardActive:     restoreGuardActive,
+		queueDepth:                 queueDepth,
+		operationsTotal:            operationsTotal,
+		providerRequestsTotal:      providerRequestsTotal,
+		providerRequestSeconds:     providerRequestSeconds,
+		readinessChecksTotal:       readinessChecksTotal,
+		remoteMutationBlockedTotal: remoteMutationBlockedTotal,
+		reconcileRunsTotal:         reconcileRunsTotal,
+		queueCapacity:              queueCapacity,
+		queueUtilization:           queueUtilization,
+		restoreGuardActive:         restoreGuardActive,
 	}, nil
 }
 
@@ -149,16 +222,24 @@ type Noop struct{}
 func (Noop) QueueDepth(context.Context, string, int)               {}
 func (Noop) Operation(context.Context, OperationEvent)             {}
 func (Noop) ProviderRequest(context.Context, ProviderRequestEvent) {}
-func (Noop) ReconcileRun(context.Context, ReconcileRunEvent)       {}
-func (Noop) RestoreGuardActive(context.Context, bool)              {}
+func (Noop) ReadinessCheck(context.Context, ReadinessCheckEvent)   {}
+func (Noop) RemoteMutationBlocked(context.Context, RemoteMutationBlockedEvent) {
+}
+func (Noop) ReconcileRun(context.Context, ReconcileRunEvent)   {}
+func (Noop) QueueCapacity(context.Context, QueueCapacityEvent) {}
+func (Noop) RestoreGuardActive(context.Context, bool)          {}
 
 type meterRecorder struct {
-	queueDepth             metric.Int64Gauge
-	operationsTotal        metric.Int64Counter
-	providerRequestsTotal  metric.Int64Counter
-	providerRequestSeconds metric.Float64Histogram
-	reconcileRunsTotal     metric.Int64Counter
-	restoreGuardActive     metric.Int64Gauge
+	queueDepth                 metric.Int64Gauge
+	operationsTotal            metric.Int64Counter
+	providerRequestsTotal      metric.Int64Counter
+	providerRequestSeconds     metric.Float64Histogram
+	readinessChecksTotal       metric.Int64Counter
+	remoteMutationBlockedTotal metric.Int64Counter
+	reconcileRunsTotal         metric.Int64Counter
+	queueCapacity              metric.Int64Gauge
+	queueUtilization           metric.Float64Gauge
+	restoreGuardActive         metric.Int64Gauge
 }
 
 func (r meterRecorder) QueueDepth(ctx context.Context, state string, depth int) {
@@ -177,8 +258,21 @@ func (r meterRecorder) ProviderRequest(ctx context.Context, event ProviderReques
 	r.providerRequestSeconds.Record(ctx, event.Duration.Seconds(), metric.WithAttributes(attributes...))
 }
 
+func (r meterRecorder) ReadinessCheck(ctx context.Context, event ReadinessCheckEvent) {
+	r.readinessChecksTotal.Add(ctx, 1, metric.WithAttributes(readinessCheckAttributes(event)...))
+}
+
+func (r meterRecorder) RemoteMutationBlocked(ctx context.Context, event RemoteMutationBlockedEvent) {
+	r.remoteMutationBlockedTotal.Add(ctx, 1, metric.WithAttributes(remoteMutationBlockedAttributes(event)...))
+}
+
 func (r meterRecorder) ReconcileRun(ctx context.Context, event ReconcileRunEvent) {
 	r.reconcileRunsTotal.Add(ctx, 1, metric.WithAttributes(reconcileRunAttributes(event)...))
+}
+
+func (r meterRecorder) QueueCapacity(ctx context.Context, event QueueCapacityEvent) {
+	r.queueCapacity.Record(ctx, int64(event.Capacity))
+	r.queueUtilization.Record(ctx, event.Utilization)
 }
 
 func (r meterRecorder) RestoreGuardActive(ctx context.Context, active bool) {
@@ -205,6 +299,22 @@ func providerRequestAttributes(event ProviderRequestEvent) []attribute.KeyValue 
 		attribute.String(AttributeOperation, normalize(event.Operation)),
 		attribute.String(AttributeResult, normalize(event.Result)),
 		attribute.String(AttributeErrorClass, normalizeNone(event.ErrorClass)),
+	}
+}
+
+func readinessCheckAttributes(event ReadinessCheckEvent) []attribute.KeyValue {
+	return []attribute.KeyValue{
+		attribute.String(AttributeCheck, normalize(event.Check)),
+		attribute.String(AttributeResult, normalize(event.Result)),
+		attribute.String(AttributeBlocker, normalizeNone(event.Blocker)),
+		attribute.String(AttributeDestinationType, normalize(event.DestinationType)),
+	}
+}
+
+func remoteMutationBlockedAttributes(event RemoteMutationBlockedEvent) []attribute.KeyValue {
+	return []attribute.KeyValue{
+		attribute.String(AttributeOperation, normalize(event.Operation)),
+		attribute.String(AttributeReason, normalize(event.Reason)),
 	}
 }
 

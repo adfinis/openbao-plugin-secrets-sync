@@ -108,6 +108,7 @@ func (b *secretSyncBackend) periodic(ctx context.Context, req *logical.Request) 
 		return nil
 	}
 	if !b.remoteMutationAllowed() {
+		b.recordRemoteMutationBlocked(ctx, observability.OperationPeriodic, observability.ReasonReplicationState)
 		return nil
 	}
 	if _, err := ensureRuntimeState(ctx, req.Storage); err != nil {
@@ -117,7 +118,12 @@ func (b *secretSyncBackend) periodic(ctx context.Context, req *logical.Request) 
 	if err != nil {
 		return err
 	}
-	if cfg.Disabled || cfg.RestoreGuard {
+	if cfg.Disabled {
+		b.recordRemoteMutationBlocked(ctx, observability.OperationPeriodic, observability.ReasonDisabled)
+		return nil
+	}
+	if cfg.RestoreGuard {
+		b.recordRemoteMutationBlocked(ctx, observability.OperationPeriodic, observability.ReasonRestoreGuard)
 		return nil
 	}
 	now := nowUTC()

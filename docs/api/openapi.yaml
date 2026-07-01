@@ -1576,6 +1576,11 @@ components:
               type: integer
             queue_oldest_age_seconds:
               type: integer
+            queue_capacity:
+              type: integer
+            queue_utilization:
+              type: number
+              format: double
             queue:
               $ref: "#/components/schemas/QueueSummary"
       required: [data]
@@ -1595,6 +1600,11 @@ components:
           type: integer
         oldest_age_seconds:
           type: integer
+        capacity:
+          type: integer
+        utilization:
+          type: number
+          format: double
 
     QueueOperationResponse:
       type: object
