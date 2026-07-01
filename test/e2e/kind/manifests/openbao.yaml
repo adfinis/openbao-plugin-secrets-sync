@@ -43,6 +43,13 @@ spec:
         app.kubernetes.io/part-of: openbao-secret-sync-e2e
     spec:
       serviceAccountName: openbao
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 100
+        runAsGroup: 100
+        fsGroup: 100
+        seccompProfile:
+          type: RuntimeDefault
       containers:
         - name: openbao
           image: openbao-secret-sync-e2e:dev
@@ -61,6 +68,11 @@ spec:
           ports:
             - name: http
               containerPort: 8200
+          volumeMounts:
+            - name: openbao-home
+              mountPath: /home/openbao
+            - name: openbao-tmp
+              mountPath: /tmp
           readinessProbe:
             exec:
               command:
@@ -70,9 +82,18 @@ spec:
             periodSeconds: 2
             failureThreshold: 30
           securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
             capabilities:
+              drop:
+                - ALL
               add:
                 - IPC_LOCK
+      volumes:
+        - name: openbao-home
+          emptyDir: {}
+        - name: openbao-tmp
+          emptyDir: {}
 ---
 apiVersion: v1
 kind: Service

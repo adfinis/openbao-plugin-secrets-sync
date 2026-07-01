@@ -74,7 +74,13 @@ verify-vendor: ## Verify vendor/ is synchronized with go.mod and go.sum when ven
 
 .PHONY: fuzz
 fuzz: ## Run curated fuzz smoke targets.
-	@printf '%s\n' 'No fuzz targets yet; skipping fuzz.'
+	@set -eu; \
+	for target in $(FUZZ_TARGETS); do \
+		pkg="$${target%%:*}"; \
+		fuzz="$${target#*:}"; \
+		printf '==> fuzz %s %s\n' "$$pkg" "$$fuzz"; \
+		"$(GO)" test "$$pkg" -run='^$$' -fuzz="$$fuzz" -fuzztime="$(FUZZTIME)"; \
+	done
 
 .PHONY: versions-check
 versions-check: ## Check central version policy exists and contains no floating latest.

@@ -52,6 +52,17 @@ Implemented backend slices now include:
   mounting, in-cluster Kubernetes auth, destination validation, health,
   queue drain, create, update, reconcile/read-state, delete, ownership labels,
   and payload metadata.
+- self-contained OpenBao plus Dockerized GitLab CE e2e coverage for plugin
+  registration, mounting, project bootstrap, destination validation, health,
+  queue drain, create, update, delete, ownership metadata, and status
+  transitions.
+- test hardening baseline with documented unit, contract, model, fuzz, e2e,
+  and security lanes.
+- curated fuzz smoke targets for raw payload canonicalization, JSON payload
+  determinism, and destination name-template rendering.
+- first core backend state-model test covering source writes, association
+  creation, queue lifecycle, disable/enable, manual sync, source delete,
+  delete-mode dispatch, status state, and secret-value redaction invariants.
 
 ## MVP Scope
 
@@ -90,6 +101,8 @@ Implemented backend slices now include:
   Secrets Manager.
 - Self-contained e2e test against OpenBao dev mode in kind and Kubernetes
   Secrets.
+- Self-contained e2e test against OpenBao dev mode and Dockerized GitLab CE
+  project variables.
 
 ### Should Have
 
@@ -97,8 +110,8 @@ Implemented backend slices now include:
 - Drift detection.
 - OpenBao/plugin telemetry integration, with a metrics endpoint only as a
   fallback if runtime telemetry cannot expose plugin OTel instruments.
-- Provider-specific local integration using LocalStack, kind, or Dockerized
-  GitLab.
+- Broader provider-specific local integration using LocalStack, kind, or
+  Dockerized GitLab.
 - Opt-in real GitLab project variable e2e test with disposable project
   fixture.
 - Structured runbook examples.
@@ -270,10 +283,14 @@ Tasks:
 - Add rate limiting.
 - Add exporter/runtime integration once the OpenBao plugin telemetry boundary
   is clear.
-- Add structured redaction tests.
+- Expand structured redaction tests.
 - Add fault injection tests for transient destination failure.
 - Add e2e tests for plugin restart and OpenBao restart.
 - Add restore and clone simulation tests.
+- Expand provider-agnostic model tests across retry, terminal failure, partial
+  success, restart, restore, and reconcile transitions.
+- Expand curated fuzz coverage around API input decoding, template validation,
+  provider-safe names, metadata, and redacted status/plan responses.
 - Write initial runbooks.
 
 Exit criteria:

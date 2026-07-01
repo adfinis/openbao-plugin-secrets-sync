@@ -13,6 +13,7 @@ SEMGREP_TARGETS ?= cmd internal .github
 SEMGREP_ARTIFACT_DIR ?= dist/semgrep
 SEMGREP_OUTPUT_JSON ?= $(SEMGREP_ARTIFACT_DIR)/semgrep.json
 FUZZTIME ?= 10s
+FUZZ_TARGETS ?= ./internal/payload:FuzzBuildRaw ./internal/payload:FuzzBuildJSON ./internal/backend:FuzzRenderAssociationObjectName
 GO_SOURCE_DIRS := $(shell for d in cmd internal test; do [ -d "$$d" ] && printf '%s ' "$$d"; done)
 
 BINARY_NAME ?= openbao-plugin-secrets-sync

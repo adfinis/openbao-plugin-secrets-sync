@@ -42,6 +42,8 @@ and operator diagnostics are OpenBao-native and plugin-first.
   authorization, redaction, ownership, audit, metrics, restore, and runbooks.
 - [Observability](observability.md) - OpenTelemetry metric surface, attribute
   policy, and exporter boundary.
+- [Testing and hardening](testing.md) - unit, model, fuzz, e2e, and security
+  test lanes.
 - [Implementation plan](implementation-plan.md) - MVP scope, phased plan, test
   strategy, and open decisions.
 - [LocalStack e2e workflow](../test/e2e/localstack/README.md) - self-contained
@@ -50,6 +52,8 @@ and operator diagnostics are OpenBao-native and plugin-first.
   plus kind test stack for Kubernetes Secrets sync behavior.
 - [Manual AWS e2e workflow](../test/e2e/aws/README.md) - opt-in real AWS
   sandbox test with OpenTofu-managed IAM fixtures.
+- [GitLab e2e workflow](../test/e2e/gitlab/README.md) - opt-in Dockerized
+  GitLab CE test stack for project variable sync behavior.
 
 ## How To Use These Docs
 
