@@ -31,6 +31,8 @@ page when you need to choose the right detailed document.
   inspecting status.
 - [Operator runbook](operator-runbook.md) gives operational checks,
   troubleshooting flows, restore-guard handling, and failure response guidance.
+- [Release engineering](release.md) describes the current artifact workflow and
+  plugin verification steps.
 - [Security and operations](security-operations.md) records the threat model,
   authorization shape, redaction rules, restore safety, packaging, and
   operational requirements.

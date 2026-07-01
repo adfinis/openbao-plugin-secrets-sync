@@ -1,0 +1,163 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "[0-9]*.[0-9]*.[0-9]*"
+      - "[0-9]*.[0-9]*.[0-9]*-*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Semver tag to build, for example 0.1.0-preview.1"
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+  cancel-in-progress: false
+
+jobs:
+  artifacts:
+    name: Build And Upload Plugin Artifacts
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Resolve release ref
+        id: release
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          INPUT_TAG: ${{ inputs.tag }}
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          if [[ "${EVENT_NAME}" == "workflow_dispatch" ]]; then
+            version="${INPUT_TAG}"
+            ref="refs/tags/${INPUT_TAG}"
+          else
+            version="${REF_NAME}"
+            ref="refs/tags/${REF_NAME}"
+          fi
+          if ! [[ "${version}" =~ ^[0-9]+\.[0-9]+\.[0-9]+([\-+].*)?$ ]]; then
+            echo "version must be a semver tag, got ${version}" >&2
+            exit 1
+          fi
+          {
+            echo "version=${version}"
+            echo "ref=${ref}"
+          } >> "${GITHUB_OUTPUT}"
+
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: ${{ steps.release.outputs.ref }}
+          fetch-depth: 0
+
+      - name: Setup repo tools
+        uses: ./.github/actions/setup-repo-tools
+        with:
+          bootstrap-tools: "false"
+
+      - name: Compute build metadata
+        id: metadata
+        run: |
+          set -euo pipefail
+          sha="$(git rev-parse HEAD)"
+          source_date_epoch="$(git show -s --format=%ct HEAD)"
+          build_date="$(date -u -d "@${source_date_epoch}" +%Y-%m-%dT%H:%M:%SZ)"
+          {
+            echo "commit=${sha}"
+            echo "source_date_epoch=${source_date_epoch}"
+            echo "build_date=${build_date}"
+          } >> "${GITHUB_OUTPUT}"
+
+      - name: Build release artifacts
+        env:
+          SOURCE_DATE_EPOCH: ${{ steps.metadata.outputs.source_date_epoch }}
+        run: |
+          make release-artifacts \
+            VERSION="${{ steps.release.outputs.version }}" \
+            COMMIT="${{ steps.metadata.outputs.commit }}" \
+            BUILD_DATE="${{ steps.metadata.outputs.build_date }}" \
+            DIRTY=false
+
+      - name: Verify checksums
+        run: cd dist/release && shasum -a 256 -c checksums.txt
+
+      - name: Upload workflow artifact
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: release-plugin-artifacts-${{ steps.release.outputs.version }}
+          path: dist/release/*
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Ensure GitHub release exists
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ steps.release.outputs.version }}
+        run: |
+          set -euo pipefail
+          if gh release view "${VERSION}" --json tagName >/dev/null 2>&1; then
+            exit 0
+          fi
+          prerelease_flag=""
+          if [[ "${VERSION}" =~ ^[0-9]+\.[0-9]+\.[0-9]+- ]]; then
+            prerelease_flag="--prerelease"
+          fi
+          gh release create "${VERSION}" \
+            --verify-tag \
+            --draft \
+            ${prerelease_flag} \
+            --title "${VERSION}" \
+            --notes "Draft release for ${VERSION}. Release assets were built by the release workflow."
+
+      - name: Upload release assets
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ steps.release.outputs.version }}
+        run: |
+          set -euo pipefail
+          release_json="$(gh release view "${VERSION}" --json isDraft,assets)"
+          release_is_draft="$(jq -r '.isDraft' <<<"${release_json}")"
+          declare -A existing_asset_sizes=()
+          while IFS=$'\t' read -r name size; do
+            if [[ -n "${name}" ]]; then
+              existing_asset_sizes["${name}"]="${size}"
+            fi
+          done < <(jq -r '.assets[]? | [.name, (.size|tostring)] | @tsv' <<<"${release_json}")
+
+          tmp_existing="$(mktemp -d)"
+          trap 'rm -rf "${tmp_existing}"' EXIT
+
+          shopt -s nullglob
+          to_upload=()
+          for file in dist/release/*; do
+            name="$(basename "${file}")"
+            if [[ -n "${existing_asset_sizes[${name}]-}" ]]; then
+              local_size="$(stat -c%s "${file}")"
+              if [[ "${local_size}" != "${existing_asset_sizes[${name}]}" ]]; then
+                echo "Release asset '${name}' already exists but size differs." >&2
+                exit 1
+              fi
+              gh release download "${VERSION}" --pattern "${name}" --dir "${tmp_existing}"
+              local_sha="$(sha256sum "${file}" | awk '{print $1}')"
+              release_sha="$(sha256sum "${tmp_existing}/${name}" | awk '{print $1}')"
+              if [[ "${local_sha}" != "${release_sha}" ]]; then
+                echo "Release asset '${name}' already exists but content differs." >&2
+                exit 1
+              fi
+              continue
+            fi
+            to_upload+=("${file}")
+          done
+
+          if (( ${#to_upload[@]} > 0 )); then
+            if [[ "${release_is_draft}" != "true" ]]; then
+              echo "Release '${VERSION}' is already published and missing one or more local assets." >&2
+              echo "Refusing to mutate a published release." >&2
+              exit 1
+            fi
+            gh release upload "${VERSION}" "${to_upload[@]}"
+          fi
