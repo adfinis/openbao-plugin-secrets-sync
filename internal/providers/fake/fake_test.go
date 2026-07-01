@@ -94,6 +94,7 @@ func TestProviderConformance(t *testing.T) {
 			SourceVersion:  1,
 			RemoteVersion:  "fake",
 		},
+		Maturity: fakeMaturityMatrix(),
 		UpsertErrors: []providertest.UpsertErrorCase{
 			{
 				Name:       "rate-limit",
@@ -119,4 +120,130 @@ func TestProviderConformance(t *testing.T) {
 			},
 		},
 	})
+}
+
+func fakeMaturityMatrix() *providertest.MaturityMatrix {
+	secretPayload := []byte(`{"password":"secret"}`)
+	oversizedPayload := make([]byte, Provider{}.Capabilities().MaxPayloadBytes+1)
+
+	return &providertest.MaturityMatrix{
+		OwnershipLoss: []providertest.MaturityCase{
+			{
+				Name:            "upsert-unowned",
+				Operation:       providertest.OperationUpsert,
+				UpsertRequest:   defaultFakeUpsertRequest("prod/ownership/app/db", secretPayload),
+				ErrorClass:      providers.ErrorClassOwnership,
+				NoResultOnError: true,
+			},
+			{
+				Name:             "read-state-unowned",
+				Operation:        providertest.OperationReadState,
+				ReadStateRequest: defaultFakeReadStateRequest("prod/ownership/app/db"),
+				ReadState: &providertest.ReadStateCase{
+					Request:        defaultFakeReadStateRequest("prod/ownership/app/db"),
+					Exists:         true,
+					OwnershipKnown: true,
+					Owned:          false,
+				},
+			},
+		},
+		AuthFailure: providertest.MaturityCase{
+			Name:            "upsert-authn",
+			Operation:       providertest.OperationUpsert,
+			UpsertRequest:   defaultFakeUpsertRequest("prod/authn/app/db", secretPayload),
+			ErrorClass:      providers.ErrorClassAuthn,
+			NoResultOnError: true,
+		},
+		Throttling: providertest.MaturityCase{
+			Name:            "upsert-rate-limit",
+			Operation:       providertest.OperationUpsert,
+			UpsertRequest:   defaultFakeUpsertRequest("prod/rate-limit/app/db", secretPayload),
+			ErrorClass:      providers.ErrorClassRateLimit,
+			NoResultOnError: true,
+		},
+		PayloadLimit: providertest.MaturityCase{
+			Name:            "oversized-payload",
+			Operation:       providertest.OperationUpsert,
+			UpsertRequest:   defaultFakeUpsertRequest("prod/app/db", oversizedPayload),
+			ErrorClass:      providers.ErrorClassCapacity,
+			NoResultOnError: true,
+		},
+		PartialSuccess: providertest.PartialSuccessCase{
+			Name: "single-fake-mutation",
+			Mode: providertest.PartialSuccessAtomic,
+			Case: providertest.MaturityCase{
+				Operation:     providertest.OperationUpsert,
+				UpsertRequest: defaultFakeUpsertRequest("prod/app/db", secretPayload),
+				RemoteVersion: "fake",
+			},
+		},
+		StaleRemoteState: providertest.MaturityCase{
+			Name:            "upsert-drift",
+			Operation:       providertest.OperationUpsert,
+			UpsertRequest:   defaultFakeUpsertRequest("prod/drift-newer/app/db", secretPayload),
+			ErrorClass:      providers.ErrorClassDrift,
+			NoResultOnError: true,
+		},
+		DeleteSemantics: []providertest.MaturityCase{
+			{
+				Name:          "missing-delete-is-idempotent",
+				Operation:     providertest.OperationDelete,
+				DeleteRequest: defaultFakeDeleteRequest("prod/missing/app/db"),
+				RemoteVersion: "missing",
+			},
+			{
+				Name:          "owned-delete",
+				Operation:     providertest.OperationDelete,
+				DeleteRequest: defaultFakeDeleteRequest("prod/app/db"),
+				RemoteVersion: "deleted",
+			},
+		},
+	}
+}
+
+func defaultFakeUpsertRequest(resolvedName string, data []byte) providers.UpsertRequest {
+	return providers.UpsertRequest{
+		Destination:   providers.DestinationConfig{Name: "default"},
+		Runtime:       defaultFakeRuntimeIdentity(),
+		ResolvedName:  resolvedName,
+		Format:        "json",
+		Payload:       data,
+		PayloadSHA256: "sha256:test",
+		SourcePath:    "app/db",
+		SourceVersion: 1,
+		AssociationID: "assoc-1",
+		ObjectID:      "secret-path",
+	}
+}
+
+func defaultFakeDeleteRequest(resolvedName string) providers.DeleteRequest {
+	return providers.DeleteRequest{
+		Destination:   providers.DestinationConfig{Name: "default"},
+		Runtime:       defaultFakeRuntimeIdentity(),
+		ResolvedName:  resolvedName,
+		SourcePath:    "app/db",
+		SourceVersion: 1,
+		AssociationID: "assoc-1",
+		ObjectID:      "secret-path",
+	}
+}
+
+func defaultFakeReadStateRequest(resolvedName string) providers.ReadStateRequest {
+	return providers.ReadStateRequest{
+		Destination:   providers.DestinationConfig{Name: "default"},
+		Runtime:       defaultFakeRuntimeIdentity(),
+		ResolvedName:  resolvedName,
+		PayloadSHA256: "sha256:test",
+		SourcePath:    "app/db",
+		SourceVersion: 1,
+		AssociationID: "assoc-1",
+		ObjectID:      "secret-path",
+	}
+}
+
+func defaultFakeRuntimeIdentity() providers.RuntimeIdentity {
+	return providers.RuntimeIdentity{
+		PluginInstanceID: "inst-test",
+		RestoreEpoch:     "epoch-test",
+	}
 }

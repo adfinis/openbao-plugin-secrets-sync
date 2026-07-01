@@ -8,6 +8,7 @@ import (
 
 	"github.com/adfinis/openbao-secret-sync/internal/domain"
 	"github.com/adfinis/openbao-secret-sync/internal/outbox"
+	"github.com/adfinis/openbao-secret-sync/internal/providers"
 	"github.com/openbao/openbao/sdk/v2/logical"
 )
 
@@ -212,6 +213,108 @@ func TestCoreStateModelSourceAssociationQueueLifecycle(t *testing.T) {
 	}
 }
 
+func TestCoreStateModelProviderFailureInvariants(t *testing.T) {
+	testCases := []struct {
+		name           string
+		resolvedName   string
+		errorClass     providers.ErrorClass
+		state          domain.SyncState
+		operationState string
+		retryable      bool
+	}{
+		{
+			name:           "authn",
+			resolvedName:   "prod/authn/app/db",
+			errorClass:     providers.ErrorClassAuthn,
+			state:          domain.SyncStateDestinationAuthError,
+			operationState: outboxStateFailedTerminal,
+		},
+		{
+			name:           "authz",
+			resolvedName:   "prod/authz/app/db",
+			errorClass:     providers.ErrorClassAuthz,
+			state:          domain.SyncStateDestinationPolicyError,
+			operationState: outboxStateFailedTerminal,
+		},
+		{
+			name:           "ownership",
+			resolvedName:   "prod/ownership/app/db",
+			errorClass:     providers.ErrorClassOwnership,
+			state:          domain.SyncStateRemoteOwnershipLost,
+			operationState: outboxStateFailedTerminal,
+		},
+		{
+			name:           "drift",
+			resolvedName:   "prod/drift-newer/app/db",
+			errorClass:     providers.ErrorClassDrift,
+			state:          domain.SyncStateDrifted,
+			operationState: outboxStateFailedTerminal,
+		},
+		{
+			name:           "rate-limit",
+			resolvedName:   "prod/rate-limit/app/db",
+			errorClass:     providers.ErrorClassRateLimit,
+			state:          domain.SyncStateDestinationRateLimited,
+			operationState: outboxStateRetryWait,
+			retryable:      true,
+		},
+		{
+			name:           "unavailable",
+			resolvedName:   "prod/unavailable/app/db",
+			errorClass:     providers.ErrorClassUnavailable,
+			state:          domain.SyncStateDestinationUnavailable,
+			operationState: outboxStateRetryWait,
+			retryable:      true,
+		},
+	}
+
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			b := Backend(&logical.BackendConfig{})
+			storage := &logical.InmemStorage{}
+
+			writeAppDBSecret(t, b, storage, modelSecretCanary+"-"+testCase.name)
+			createFakeDestination(t, b, storage, "default")
+			associationResp := createFakeAssociationWithResolvedName(t, b, storage, testCase.resolvedName)
+			operationID := requireSingleOperationID(t, operationIDsFromResponse(t, associationResp), "association")
+
+			acknowledgeRestoreGuard(t, b, storage)
+			drainResp := handleRequest(t, b, storage, logical.UpdateOperation, "queue/drain", map[string]interface{}{
+				"max_operations": 1,
+			})
+			assertNoErrorResponse(t, drainResp)
+			if got := drainResp.Data["processed"]; got != 1 {
+				t.Fatalf("processed = %v, want 1", got)
+			}
+
+			operation := assertOutboxOperation(t, storage, operationID, 1, testCase.operationState)
+			if operation.Attempts != 1 {
+				t.Fatalf("attempts = %d, want 1", operation.Attempts)
+			}
+			if testCase.retryable {
+				assertFutureNotBefore(t, operation.NotBefore)
+				if operation.ClaimOwner != "" || operation.ClaimExpiresTime != "" || operation.ClaimAttempt != 0 {
+					t.Fatalf("claim fields after retryable failure = %#v, want cleared", operation)
+				}
+			} else if operation.NotBefore != "" {
+				t.Fatalf("not_before = %q, want empty for terminal failure", operation.NotBefore)
+			}
+
+			sourceState := testCase.state
+			if testCase.retryable {
+				sourceState = domain.SyncStatePending
+			}
+			assertCoreStateModel(t, b, storage, coreStateModel{
+				version:         1,
+				sourceAvailable: true,
+				pending:         boolToInt(testCase.retryable),
+				state:           sourceState,
+			})
+			assertStatusModelFailure(t, b, storage, testCase.errorClass, testCase.state)
+		})
+	}
+}
+
 func drainCoreModelQueue(t *testing.T, b *secretSyncBackend, storage logical.Storage, wantProcessed int) {
 	t.Helper()
 	acknowledgeRestoreGuard(t, b, storage)
@@ -320,4 +423,40 @@ func assertCoreStatusModel(t *testing.T, b logical.Backend, storage logical.Stor
 	if strings.Contains(fmt.Sprint(resp.Data), modelSecretCanary) {
 		t.Fatalf("status leaks secret canary: %#v", resp.Data)
 	}
+}
+
+func assertStatusModelFailure(
+	t *testing.T,
+	b logical.Backend,
+	storage logical.Storage,
+	errorClass providers.ErrorClass,
+	state domain.SyncState,
+) {
+	t.Helper()
+	resp := handleRequest(t, b, storage, logical.ReadOperation, "status/app/db", nil)
+	assertNoErrorResponse(t, resp)
+	objects := resp.Data["objects"].([]map[string]interface{})
+	if len(objects) != 1 {
+		t.Fatalf("status objects length = %d, want 1", len(objects))
+	}
+	object := objects[0]
+	if got := object["last_error_class"]; got != string(errorClass) {
+		t.Fatalf("last_error_class = %v, want %s", got, errorClass)
+	}
+	if got := object["state"]; got != string(state) {
+		t.Fatalf("object state = %v, want %s", got, state)
+	}
+	if strings.Contains(fmt.Sprint(object), modelSecretCanary) {
+		t.Fatalf("status object leaks secret canary: %#v", object)
+	}
+	if got := object["payload_sha256"].(string); !strings.HasPrefix(got, "sha256:") {
+		t.Fatalf("payload_sha256 = %q, want sha256 prefix", got)
+	}
+}
+
+func boolToInt(value bool) int {
+	if value {
+		return 1
+	}
+	return 0
 }

@@ -400,12 +400,18 @@ func runPartialSuccessCase(
 	t.Run("partial-success/"+name, func(t *testing.T) {
 		switch partialCase.Mode {
 		case PartialSuccessAtomic:
+			if partialCase.Case.ErrorClass != "" {
+				t.Fatal("atomic partial-success case must not expect an error class")
+			}
 			if partialCase.Case.Operation != "" {
 				runMaturityCase(t, defaultProvider, partialCase.Case)
 			}
 		case PartialSuccessClassifiedFailure:
 			if partialCase.Case.Operation == "" {
 				t.Fatal("classified partial-success requires an operation case")
+			}
+			if partialCase.Case.ErrorClass == "" {
+				t.Fatal("classified partial-success requires an expected error class")
 			}
 			runMaturityCase(t, defaultProvider, partialCase.Case)
 		default:
@@ -420,6 +426,7 @@ func runMaturityCase(
 	maturityCase MaturityCase,
 ) {
 	t.Helper()
+	assertMaturityCaseWellFormed(t, maturityCase)
 	provider := maturityCase.Provider
 	if provider == nil {
 		provider = defaultProvider
@@ -437,6 +444,93 @@ func runMaturityCase(
 		runMaturityHealthCase(t, provider, maturityCase)
 	default:
 		t.Fatalf("unknown maturity operation %q", maturityCase.Operation)
+	}
+}
+
+func assertMaturityCaseWellFormed(t *testing.T, maturityCase MaturityCase) {
+	t.Helper()
+	switch maturityCase.Operation {
+	case OperationPlan:
+		assertPlanRequestWellFormed(t, maturityCase.PlanRequest)
+		if maturityCase.PlanAction == "" {
+			t.Fatal("plan maturity case requires expected plan action")
+		}
+	case OperationUpsert:
+		assertUpsertRequestWellFormed(t, maturityCase.UpsertRequest)
+		assertMutationExpectationWellFormed(t, maturityCase)
+	case OperationDelete:
+		assertDeleteRequestWellFormed(t, maturityCase.DeleteRequest)
+		assertMutationExpectationWellFormed(t, maturityCase)
+	case OperationReadState:
+		assertReadStateRequestWellFormed(t, maturityCase.ReadStateRequest)
+		if maturityCase.ErrorClass == "" && maturityCase.ReadState != nil {
+			assertReadStateRequestWellFormed(t, maturityCase.ReadState.Request)
+		}
+	case OperationHealth:
+		if maturityCase.HealthDestination.Name == "" {
+			t.Fatal("health maturity case requires destination name")
+		}
+	default:
+		return
+	}
+}
+
+func assertPlanRequestWellFormed(t *testing.T, request providers.PlanRequest) {
+	t.Helper()
+	if request.ResolvedName == "" ||
+		request.SourcePath == "" ||
+		request.SourceVersion <= 0 ||
+		request.AssociationID == "" ||
+		request.ObjectID == "" {
+		t.Fatalf("plan maturity request missing identity fields: %#v", request)
+	}
+}
+
+func assertUpsertRequestWellFormed(t *testing.T, request providers.UpsertRequest) {
+	t.Helper()
+	if request.ResolvedName == "" ||
+		request.SourcePath == "" ||
+		request.SourceVersion <= 0 ||
+		request.AssociationID == "" ||
+		request.ObjectID == "" ||
+		request.PayloadSHA256 == "" ||
+		request.Payload == nil {
+		t.Fatalf("upsert maturity request missing identity or payload fields: %#v", request)
+	}
+}
+
+func assertDeleteRequestWellFormed(t *testing.T, request providers.DeleteRequest) {
+	t.Helper()
+	if request.ResolvedName == "" ||
+		request.SourcePath == "" ||
+		request.SourceVersion <= 0 ||
+		request.AssociationID == "" ||
+		request.ObjectID == "" {
+		t.Fatalf("delete maturity request missing identity fields: %#v", request)
+	}
+}
+
+func assertReadStateRequestWellFormed(t *testing.T, request providers.ReadStateRequest) {
+	t.Helper()
+	if request.ResolvedName == "" ||
+		request.SourcePath == "" ||
+		request.SourceVersion <= 0 ||
+		request.AssociationID == "" ||
+		request.ObjectID == "" {
+		t.Fatalf("read-state maturity request missing identity fields: %#v", request)
+	}
+}
+
+func assertMutationExpectationWellFormed(t *testing.T, maturityCase MaturityCase) {
+	t.Helper()
+	if maturityCase.ErrorClass != "" {
+		if !maturityCase.NoResultOnError {
+			t.Fatal("mutation error maturity case must require no result on error")
+		}
+		return
+	}
+	if maturityCase.RemoteVersion == "" {
+		t.Fatal("successful mutation maturity case requires expected remote version")
 	}
 }
 

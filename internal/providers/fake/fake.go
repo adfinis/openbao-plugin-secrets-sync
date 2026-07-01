@@ -67,6 +67,9 @@ func (Provider) Plan(_ context.Context, req providers.PlanRequest) (*providers.P
 }
 
 func (Provider) Upsert(_ context.Context, req providers.UpsertRequest) (*providers.SyncResult, error) {
+	if len(req.Payload) > (Provider{}).Capabilities().MaxPayloadBytes {
+		return nil, &providers.Error{Class: providers.ErrorClassCapacity, Message: "fake payload too large"}
+	}
 	if err := fakeMutationError(req.ResolvedName); err != nil {
 		return nil, err
 	}
@@ -74,6 +77,9 @@ func (Provider) Upsert(_ context.Context, req providers.UpsertRequest) (*provide
 }
 
 func (Provider) Delete(_ context.Context, req providers.DeleteRequest) (*providers.SyncResult, error) {
+	if strings.Contains(req.ResolvedName, "missing") {
+		return &providers.SyncResult{RemoteVersion: "missing"}, nil
+	}
 	if err := fakeMutationError(req.ResolvedName); err != nil {
 		return nil, err
 	}
@@ -149,6 +155,8 @@ func fakeMutationError(resolvedName string) error {
 		return &providers.Error{Class: providers.ErrorClassOwnership, Message: "fake ownership failure"}
 	case strings.Contains(resolvedName, "collision"):
 		return &providers.Error{Class: providers.ErrorClassCollision, Message: "fake collision"}
+	case strings.Contains(resolvedName, "drift"):
+		return &providers.Error{Class: providers.ErrorClassDrift, Message: "fake remote drift"}
 	default:
 		return nil
 	}
