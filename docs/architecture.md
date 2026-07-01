@@ -93,13 +93,13 @@ processing fail closed with a clear operator error before source or remote
 mutation.
 
 `identity/plugin-instance` is generated once per mount and exposed through
-`config` reads. It should be included in ownership metadata where providers
-allow it. This helps distinguish two OpenBao mounts using the same remote
-destination.
+`config` reads. Provider requests carry it, and providers include it in
+ownership metadata where supported. This helps distinguish two OpenBao mounts
+using the same remote destination.
 
 `identity/restore-epoch` is generated once per mount and rotates when an active
-restore guard is acknowledged. Remote ownership metadata should include the
-epoch when supported.
+restore guard is acknowledged. Provider requests carry it, and providers
+include it in remote ownership metadata where supported.
 
 ### Secret Version Record
 

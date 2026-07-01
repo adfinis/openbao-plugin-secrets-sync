@@ -25,6 +25,8 @@ const (
 	testRegion          = "eu-central-1"
 	testEndpointURL     = "http://localhost:4566"
 	testRoleARN         = "arn:aws:iam::123456789012:role/openbao-secret-sync"
+	testPluginInstance  = "inst-test"
+	testRestoreEpoch    = "epoch-test"
 )
 
 func TestProviderConformance(t *testing.T) {
@@ -385,6 +387,8 @@ func TestUpsertCreatesMissingSecretWithOwnershipTags(t *testing.T) {
 	assertTag(t, client.createSecretInput.Tags, tagSourcePath, testSourcePath)
 	assertTag(t, client.createSecretInput.Tags, tagObjectID, testObjectID)
 	assertTag(t, client.createSecretInput.Tags, tagPayloadSHA256, testPayloadSHANew)
+	assertTag(t, client.createSecretInput.Tags, tagPluginInstance, testPluginInstance)
+	assertTag(t, client.createSecretInput.Tags, tagRestoreEpoch, testRestoreEpoch)
 }
 
 func TestUpsertUpdatesOwnedSecretAndTagsHash(t *testing.T) {
@@ -410,6 +414,8 @@ func TestUpsertUpdatesOwnedSecretAndTagsHash(t *testing.T) {
 		t.Fatal("TagResource input must be captured")
 	}
 	assertTag(t, client.tagResourceInput.Tags, tagPayloadSHA256, testPayloadSHANew)
+	assertTag(t, client.tagResourceInput.Tags, tagPluginInstance, testPluginInstance)
+	assertTag(t, client.tagResourceInput.Tags, tagRestoreEpoch, testRestoreEpoch)
 }
 
 func TestUpsertRejectsUnownedSecret(t *testing.T) {
@@ -420,6 +426,23 @@ func TestUpsertRejectsUnownedSecret(t *testing.T) {
 	assertProviderErrorClass(t, err, providers.ErrorClassOwnership)
 	if client.putSecretValueInput != nil {
 		t.Fatal("PutSecretValue must not be called for unowned secret")
+	}
+}
+
+func TestOwnedByRequestRejectsRuntimeIdentityMismatch(t *testing.T) {
+	request := defaultUpsertRequest()
+	identity := ownershipIdentityFromUpsert(request)
+	tags := ownershipTagsFromUpsert(request)
+	if !ownedByRequest(tags, identity) {
+		t.Fatalf("ownedByRequest returned false for matching runtime identity")
+	}
+	for index := range tags {
+		if aws.ToString(tags[index].Key) == tagPluginInstance {
+			tags[index].Value = aws.String("inst-other")
+		}
+	}
+	if ownedByRequest(tags, identity) {
+		t.Fatal("ownedByRequest returned true for mismatched plugin instance")
 	}
 }
 
@@ -663,6 +686,7 @@ func TestErrorClassification(t *testing.T) {
 func defaultPlanRequest(payloadSHA256 string) providers.PlanRequest {
 	return providers.PlanRequest{
 		Destination:   defaultDestinationConfig(),
+		Runtime:       defaultRuntimeIdentity(),
 		ResolvedName:  testResolvedName,
 		PayloadSHA256: payloadSHA256,
 		PayloadBytes:  21,
@@ -676,6 +700,7 @@ func defaultPlanRequest(payloadSHA256 string) providers.PlanRequest {
 func defaultUpsertRequest() providers.UpsertRequest {
 	return providers.UpsertRequest{
 		Destination:   defaultDestinationConfig(),
+		Runtime:       defaultRuntimeIdentity(),
 		ResolvedName:  testResolvedName,
 		Format:        "json",
 		Payload:       []byte(`{"password":"secret"}`),
@@ -690,6 +715,7 @@ func defaultUpsertRequest() providers.UpsertRequest {
 func defaultDeleteRequest() providers.DeleteRequest {
 	return providers.DeleteRequest{
 		Destination:   defaultDestinationConfig(),
+		Runtime:       defaultRuntimeIdentity(),
 		ResolvedName:  testResolvedName,
 		SourcePath:    testSourcePath,
 		SourceVersion: 1,
@@ -701,12 +727,20 @@ func defaultDeleteRequest() providers.DeleteRequest {
 func defaultReadStateRequest() providers.ReadStateRequest {
 	return providers.ReadStateRequest{
 		Destination:   defaultDestinationConfig(),
+		Runtime:       defaultRuntimeIdentity(),
 		ResolvedName:  testResolvedName,
 		PayloadSHA256: testPayloadSHANew,
 		SourcePath:    testSourcePath,
 		SourceVersion: 1,
 		AssociationID: testAssociationID,
 		ObjectID:      testObjectID,
+	}
+}
+
+func defaultRuntimeIdentity() providers.RuntimeIdentity {
+	return providers.RuntimeIdentity{
+		PluginInstanceID: testPluginInstance,
+		RestoreEpoch:     testRestoreEpoch,
 	}
 }
 
@@ -736,6 +770,8 @@ func ownedDescribeOutputAtVersion(
 			tag(tagSourceVersion, strconv.Itoa(sourceVersion)),
 			tag(tagObjectID, testObjectID),
 			tag(tagPayloadSHA256, payloadSHA256),
+			tag(tagPluginInstance, testPluginInstance),
+			tag(tagRestoreEpoch, testRestoreEpoch),
 		},
 		VersionIdsToStages: map[string][]string{
 			"current-version": {"AWSCURRENT"},

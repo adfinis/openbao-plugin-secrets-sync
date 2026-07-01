@@ -44,12 +44,14 @@ const (
 
 	labelManaged = "openbao.adfinis.com/managed"
 
-	annotationAssociationID = "openbao.adfinis.com/association-id"
-	annotationSourcePath    = "openbao.adfinis.com/source-path"
-	annotationSourceVersion = "openbao.adfinis.com/source-version"
-	annotationObjectID      = "openbao.adfinis.com/object-id"
-	annotationPayloadSHA256 = "openbao.adfinis.com/payload-sha256"
-	annotationFormat        = "openbao.adfinis.com/format"
+	annotationAssociationID  = "openbao.adfinis.com/association-id"
+	annotationSourcePath     = "openbao.adfinis.com/source-path"
+	annotationSourceVersion  = "openbao.adfinis.com/source-version"
+	annotationObjectID       = "openbao.adfinis.com/object-id"
+	annotationPayloadSHA256  = "openbao.adfinis.com/payload-sha256"
+	annotationFormat         = "openbao.adfinis.com/format"
+	annotationPluginInstance = "openbao.adfinis.com/plugin-instance"
+	annotationRestoreEpoch   = "openbao.adfinis.com/restore-epoch"
 )
 
 type clientFactory func(context.Context, providers.DestinationConfig) (kubernetes.Interface, error)
@@ -398,40 +400,50 @@ func createSecret(
 }
 
 type ownershipIdentity struct {
-	AssociationID string
-	SourcePath    string
-	ObjectID      string
+	AssociationID    string
+	SourcePath       string
+	ObjectID         string
+	PluginInstanceID string
+	RestoreEpoch     string
 }
 
 func ownershipIdentityFromPlan(req providers.PlanRequest) ownershipIdentity {
 	return ownershipIdentity{
-		AssociationID: req.AssociationID,
-		SourcePath:    req.SourcePath,
-		ObjectID:      req.ObjectID,
+		AssociationID:    req.AssociationID,
+		SourcePath:       req.SourcePath,
+		ObjectID:         req.ObjectID,
+		PluginInstanceID: req.Runtime.PluginInstanceID,
+		RestoreEpoch:     req.Runtime.RestoreEpoch,
 	}
 }
 
 func ownershipIdentityFromUpsert(req providers.UpsertRequest) ownershipIdentity {
 	return ownershipIdentity{
-		AssociationID: req.AssociationID,
-		SourcePath:    req.SourcePath,
-		ObjectID:      req.ObjectID,
+		AssociationID:    req.AssociationID,
+		SourcePath:       req.SourcePath,
+		ObjectID:         req.ObjectID,
+		PluginInstanceID: req.Runtime.PluginInstanceID,
+		RestoreEpoch:     req.Runtime.RestoreEpoch,
 	}
 }
 
 func ownershipIdentityFromDelete(req providers.DeleteRequest) ownershipIdentity {
 	return ownershipIdentity{
-		AssociationID: req.AssociationID,
-		SourcePath:    req.SourcePath,
-		ObjectID:      req.ObjectID,
+		AssociationID:    req.AssociationID,
+		SourcePath:       req.SourcePath,
+		ObjectID:         req.ObjectID,
+		PluginInstanceID: req.Runtime.PluginInstanceID,
+		RestoreEpoch:     req.Runtime.RestoreEpoch,
 	}
 }
 
 func ownershipIdentityFromReadState(req providers.ReadStateRequest) ownershipIdentity {
 	return ownershipIdentity{
-		AssociationID: req.AssociationID,
-		SourcePath:    req.SourcePath,
-		ObjectID:      req.ObjectID,
+		AssociationID:    req.AssociationID,
+		SourcePath:       req.SourcePath,
+		ObjectID:         req.ObjectID,
+		PluginInstanceID: req.Runtime.PluginInstanceID,
+		RestoreEpoch:     req.Runtime.RestoreEpoch,
 	}
 }
 
@@ -459,6 +471,12 @@ func applyOwnershipMetadata(
 	secret.Annotations[annotationObjectID] = identity.ObjectID
 	secret.Annotations[annotationPayloadSHA256] = payloadSHA256
 	secret.Annotations[annotationFormat] = format
+	if identity.PluginInstanceID != "" {
+		secret.Annotations[annotationPluginInstance] = identity.PluginInstanceID
+	}
+	if identity.RestoreEpoch != "" {
+		secret.Annotations[annotationRestoreEpoch] = identity.RestoreEpoch
+	}
 }
 
 func ownedByRequest(secret *corev1.Secret, identity ownershipIdentity) bool {
@@ -467,11 +485,20 @@ func ownedByRequest(secret *corev1.Secret, identity ownershipIdentity) bool {
 	}
 	return requiredAnnotationMatches(secret.Annotations, annotationAssociationID, identity.AssociationID) &&
 		requiredAnnotationMatches(secret.Annotations, annotationSourcePath, identity.SourcePath) &&
-		requiredAnnotationMatches(secret.Annotations, annotationObjectID, identity.ObjectID)
+		requiredAnnotationMatches(secret.Annotations, annotationObjectID, identity.ObjectID) &&
+		runtimeAnnotationMatches(secret.Annotations, annotationPluginInstance, identity.PluginInstanceID) &&
+		runtimeAnnotationMatches(secret.Annotations, annotationRestoreEpoch, identity.RestoreEpoch)
 }
 
 func requiredAnnotationMatches(annotations map[string]string, key string, expected string) bool {
 	return expected != "" && annotationValue(annotations, key) == expected
+}
+
+func runtimeAnnotationMatches(annotations map[string]string, key string, expected string) bool {
+	if expected == "" {
+		return true
+	}
+	return annotationValue(annotations, key) == expected
 }
 
 func annotationValue(annotations map[string]string, key string) string {

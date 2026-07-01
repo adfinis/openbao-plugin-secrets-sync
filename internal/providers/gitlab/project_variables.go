@@ -409,78 +409,94 @@ func validateVariableKey(key string) error {
 }
 
 type ownershipIdentity struct {
-	AssociationID string
-	SourcePath    string
-	ObjectID      string
+	AssociationID    string
+	SourcePath       string
+	ObjectID         string
+	PluginInstanceID string
+	RestoreEpoch     string
 }
 
 func ownershipIdentityFromPlan(req providers.PlanRequest) ownershipIdentity {
 	return ownershipIdentity{
-		AssociationID: req.AssociationID,
-		SourcePath:    req.SourcePath,
-		ObjectID:      req.ObjectID,
+		AssociationID:    req.AssociationID,
+		SourcePath:       req.SourcePath,
+		ObjectID:         req.ObjectID,
+		PluginInstanceID: req.Runtime.PluginInstanceID,
+		RestoreEpoch:     req.Runtime.RestoreEpoch,
 	}
 }
 
 func ownershipIdentityFromUpsert(req providers.UpsertRequest) ownershipIdentity {
 	return ownershipIdentity{
-		AssociationID: req.AssociationID,
-		SourcePath:    req.SourcePath,
-		ObjectID:      req.ObjectID,
+		AssociationID:    req.AssociationID,
+		SourcePath:       req.SourcePath,
+		ObjectID:         req.ObjectID,
+		PluginInstanceID: req.Runtime.PluginInstanceID,
+		RestoreEpoch:     req.Runtime.RestoreEpoch,
 	}
 }
 
 func ownershipIdentityFromDelete(req providers.DeleteRequest) ownershipIdentity {
 	return ownershipIdentity{
-		AssociationID: req.AssociationID,
-		SourcePath:    req.SourcePath,
-		ObjectID:      req.ObjectID,
+		AssociationID:    req.AssociationID,
+		SourcePath:       req.SourcePath,
+		ObjectID:         req.ObjectID,
+		PluginInstanceID: req.Runtime.PluginInstanceID,
+		RestoreEpoch:     req.Runtime.RestoreEpoch,
 	}
 }
 
 func ownershipIdentityFromReadState(req providers.ReadStateRequest) ownershipIdentity {
 	return ownershipIdentity{
-		AssociationID: req.AssociationID,
-		SourcePath:    req.SourcePath,
-		ObjectID:      req.ObjectID,
+		AssociationID:    req.AssociationID,
+		SourcePath:       req.SourcePath,
+		ObjectID:         req.ObjectID,
+		PluginInstanceID: req.Runtime.PluginInstanceID,
+		RestoreEpoch:     req.Runtime.RestoreEpoch,
 	}
 }
 
 type variableMetadata struct {
-	ManagedBy      string `json:"managed_by"`
-	AssociationID  string `json:"association_id"`
-	SourcePath     string `json:"source_path"`
-	SourcePathHash string `json:"-"`
-	ObjectID       string `json:"object_id"`
-	ObjectIDHash   string `json:"-"`
-	SourceVersion  int    `json:"source_version"`
-	PayloadSHA256  string `json:"payload_sha256"`
-	PayloadFormat  string `json:"payload_format"`
-	EnvironmentRef string `json:"environment_scope"`
+	ManagedBy        string `json:"managed_by"`
+	AssociationID    string `json:"association_id"`
+	SourcePath       string `json:"source_path"`
+	SourcePathHash   string `json:"-"`
+	ObjectID         string `json:"object_id"`
+	ObjectIDHash     string `json:"-"`
+	PluginInstanceID string `json:"plugin_instance_id,omitempty"`
+	RestoreEpoch     string `json:"restore_epoch,omitempty"`
+	SourceVersion    int    `json:"source_version"`
+	PayloadSHA256    string `json:"payload_sha256"`
+	PayloadFormat    string `json:"payload_format"`
+	EnvironmentRef   string `json:"environment_scope"`
 }
 
 type variableMetadataWire struct {
-	ManagedBy      string `json:"m"`
-	AssociationID  string `json:"a"`
-	SourcePath     string `json:"p,omitempty"`
-	SourcePathHash string `json:"ph,omitempty"`
-	ObjectID       string `json:"o,omitempty"`
-	ObjectIDHash   string `json:"oh,omitempty"`
-	SourceVersion  int    `json:"v"`
-	PayloadSHA256  string `json:"h"`
-	PayloadFormat  string `json:"f"`
+	ManagedBy        string `json:"m"`
+	AssociationID    string `json:"a"`
+	SourcePath       string `json:"p,omitempty"`
+	SourcePathHash   string `json:"ph,omitempty"`
+	ObjectID         string `json:"o,omitempty"`
+	ObjectIDHash     string `json:"oh,omitempty"`
+	PluginInstanceID string `json:"i,omitempty"`
+	RestoreEpoch     string `json:"r,omitempty"`
+	SourceVersion    int    `json:"v"`
+	PayloadSHA256    string `json:"h"`
+	PayloadFormat    string `json:"f"`
 }
 
 func variableInputFromUpsert(options gitlabDestinationOptions, req providers.UpsertRequest) gitlabVariableInput {
 	metadata := variableMetadata{
-		ManagedBy:      metadataManagedBy,
-		AssociationID:  req.AssociationID,
-		SourcePath:     req.SourcePath,
-		ObjectID:       req.ObjectID,
-		SourceVersion:  req.SourceVersion,
-		PayloadSHA256:  req.PayloadSHA256,
-		PayloadFormat:  req.Format,
-		EnvironmentRef: options.environmentScope,
+		ManagedBy:        metadataManagedBy,
+		AssociationID:    req.AssociationID,
+		SourcePath:       req.SourcePath,
+		ObjectID:         req.ObjectID,
+		PluginInstanceID: req.Runtime.PluginInstanceID,
+		RestoreEpoch:     req.Runtime.RestoreEpoch,
+		SourceVersion:    req.SourceVersion,
+		PayloadSHA256:    req.PayloadSHA256,
+		PayloadFormat:    req.Format,
+		EnvironmentRef:   options.environmentScope,
 	}
 	return gitlabVariableInput{
 		Key:              req.ResolvedName,
@@ -497,13 +513,15 @@ func variableInputFromUpsert(options gitlabDestinationOptions, req providers.Ups
 
 func metadataDescription(metadata variableMetadata) string {
 	wire := variableMetadataWire{
-		ManagedBy:     metadataManagedByCompact,
-		AssociationID: metadata.AssociationID,
-		SourcePath:    metadata.SourcePath,
-		ObjectID:      metadata.ObjectID,
-		SourceVersion: metadata.SourceVersion,
-		PayloadSHA256: metadata.PayloadSHA256,
-		PayloadFormat: metadata.PayloadFormat,
+		ManagedBy:        metadataManagedByCompact,
+		AssociationID:    metadata.AssociationID,
+		SourcePath:       metadata.SourcePath,
+		ObjectID:         metadata.ObjectID,
+		PluginInstanceID: metadata.PluginInstanceID,
+		RestoreEpoch:     metadata.RestoreEpoch,
+		SourceVersion:    metadata.SourceVersion,
+		PayloadSHA256:    metadata.PayloadSHA256,
+		PayloadFormat:    metadata.PayloadFormat,
 	}
 	payload := mustMarshalMetadata(wire)
 	if len(payload) <= variableDescriptionMaxBytes {
@@ -535,15 +553,17 @@ func ownershipMetadata(variable *gitlabVariable) (variableMetadata, bool) {
 	var wire variableMetadataWire
 	if err := json.Unmarshal([]byte(variable.Description), &wire); err == nil && wire.ManagedBy != "" {
 		metadata := variableMetadata{
-			ManagedBy:      metadataManagedBy,
-			AssociationID:  wire.AssociationID,
-			SourcePath:     wire.SourcePath,
-			SourcePathHash: wire.SourcePathHash,
-			ObjectID:       wire.ObjectID,
-			ObjectIDHash:   wire.ObjectIDHash,
-			SourceVersion:  wire.SourceVersion,
-			PayloadSHA256:  wire.PayloadSHA256,
-			PayloadFormat:  wire.PayloadFormat,
+			ManagedBy:        metadataManagedBy,
+			AssociationID:    wire.AssociationID,
+			SourcePath:       wire.SourcePath,
+			SourcePathHash:   wire.SourcePathHash,
+			ObjectID:         wire.ObjectID,
+			ObjectIDHash:     wire.ObjectIDHash,
+			PluginInstanceID: wire.PluginInstanceID,
+			RestoreEpoch:     wire.RestoreEpoch,
+			SourceVersion:    wire.SourceVersion,
+			PayloadSHA256:    wire.PayloadSHA256,
+			PayloadFormat:    wire.PayloadFormat,
 		}
 		return metadata, wire.ManagedBy == metadataManagedByCompact || wire.ManagedBy == metadataManagedBy
 	}
@@ -565,9 +585,18 @@ func ownedByRequest(metadata variableMetadata, metadataOwned bool, identity owne
 	return metadata.AssociationID == identity.AssociationID &&
 		sourcePathMatches &&
 		objectIDMatches &&
+		runtimeMetadataValueMatches(metadata.PluginInstanceID, identity.PluginInstanceID) &&
+		runtimeMetadataValueMatches(metadata.RestoreEpoch, identity.RestoreEpoch) &&
 		identity.AssociationID != "" &&
 		identity.SourcePath != "" &&
 		identity.ObjectID != ""
+}
+
+func runtimeMetadataValueMatches(actual string, expected string) bool {
+	if expected == "" {
+		return true
+	}
+	return actual == expected
 }
 
 func metadataIdentityHash(value string) string {

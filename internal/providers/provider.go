@@ -33,6 +33,12 @@ type DestinationConfig struct {
 	Config map[string]string
 }
 
+// RuntimeIdentity identifies the OpenBao mount instance that produced a provider request.
+type RuntimeIdentity struct {
+	PluginInstanceID string
+	RestoreEpoch     string
+}
+
 // ErrorClass is a stable class for provider and provider-boundary failures.
 type ErrorClass string
 
@@ -76,6 +82,7 @@ func (e *Error) Error() string {
 // PlanRequest describes a dry-run provider operation.
 type PlanRequest struct {
 	Destination   DestinationConfig
+	Runtime       RuntimeIdentity
 	ResolvedName  string
 	Format        string
 	PayloadSHA256 string
@@ -96,6 +103,7 @@ type PlanResult struct {
 // UpsertRequest describes a remote create or update operation.
 type UpsertRequest struct {
 	Destination   DestinationConfig
+	Runtime       RuntimeIdentity
 	ResolvedName  string
 	Format        string
 	Payload       []byte
@@ -109,6 +117,7 @@ type UpsertRequest struct {
 // DeleteRequest describes a remote delete operation.
 type DeleteRequest struct {
 	Destination   DestinationConfig
+	Runtime       RuntimeIdentity
 	ResolvedName  string
 	SourcePath    string
 	SourceVersion int
@@ -119,6 +128,7 @@ type DeleteRequest struct {
 // ReadStateRequest describes a remote state lookup.
 type ReadStateRequest struct {
 	Destination   DestinationConfig
+	Runtime       RuntimeIdentity
 	ResolvedName  string
 	PayloadSHA256 string
 	SourcePath    string

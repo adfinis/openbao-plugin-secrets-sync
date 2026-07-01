@@ -26,6 +26,8 @@ const (
 	testObjectID        = "APP_PASSWORD"
 	testPayloadSHAOld   = "sha256:old"
 	testPayloadSHANew   = "sha256:new"
+	testPluginInstance  = "inst-test"
+	testRestoreEpoch    = "epoch-test"
 )
 
 func TestProviderConformance(t *testing.T) {
@@ -362,6 +364,7 @@ func defaultOptions() gitlabDestinationOptions {
 func defaultPlanRequest(payloadSHA256 string, version int) providers.PlanRequest {
 	return providers.PlanRequest{
 		Destination:   defaultDestinationConfig(),
+		Runtime:       defaultRuntimeIdentity(),
 		ResolvedName:  testResolvedName,
 		Format:        payload.FormatRaw,
 		PayloadSHA256: payloadSHA256,
@@ -376,6 +379,7 @@ func defaultPlanRequest(payloadSHA256 string, version int) providers.PlanRequest
 func defaultUpsertRequest(payloadSHA256 string, value []byte, version int) providers.UpsertRequest {
 	return providers.UpsertRequest{
 		Destination:   defaultDestinationConfig(),
+		Runtime:       defaultRuntimeIdentity(),
 		ResolvedName:  testResolvedName,
 		Format:        payload.FormatRaw,
 		Payload:       value,
@@ -390,6 +394,7 @@ func defaultUpsertRequest(payloadSHA256 string, value []byte, version int) provi
 func defaultDeleteRequest(version int) providers.DeleteRequest {
 	return providers.DeleteRequest{
 		Destination:   defaultDestinationConfig(),
+		Runtime:       defaultRuntimeIdentity(),
 		ResolvedName:  testResolvedName,
 		SourcePath:    testSourcePath,
 		SourceVersion: version,
@@ -401,6 +406,7 @@ func defaultDeleteRequest(version int) providers.DeleteRequest {
 func defaultReadStateRequest(payloadSHA256 string, version int) providers.ReadStateRequest {
 	return providers.ReadStateRequest{
 		Destination:   defaultDestinationConfig(),
+		Runtime:       defaultRuntimeIdentity(),
 		ResolvedName:  testResolvedName,
 		PayloadSHA256: payloadSHA256,
 		SourcePath:    testSourcePath,
@@ -410,7 +416,20 @@ func defaultReadStateRequest(payloadSHA256 string, version int) providers.ReadSt
 	}
 }
 
+func defaultRuntimeIdentity() providers.RuntimeIdentity {
+	return providers.RuntimeIdentity{
+		PluginInstanceID: testPluginInstance,
+		RestoreEpoch:     testRestoreEpoch,
+	}
+}
+
 func ownedVariable(metadata variableMetadata) *gitlabVariable {
+	if metadata.PluginInstanceID == "" {
+		metadata.PluginInstanceID = testPluginInstance
+	}
+	if metadata.RestoreEpoch == "" {
+		metadata.RestoreEpoch = testRestoreEpoch
+	}
 	return &gitlabVariable{
 		Key:              testResolvedName,
 		EnvironmentScope: testEnvScope,
@@ -553,6 +572,38 @@ func TestVariableFormOmitsSecretFromDescription(t *testing.T) {
 	if got := parsed.Get("value"); got != "secret-canary" {
 		t.Fatalf("encoded value = %q, want secret-canary", got)
 	}
+	metadata, owned := ownershipMetadata(&gitlabVariable{Description: form.Get("description")})
+	if !owned {
+		t.Fatalf("description metadata is not owned: %s", form.Get("description"))
+	}
+	if metadata.PluginInstanceID != testPluginInstance {
+		t.Fatalf("plugin instance = %s, want %s", metadata.PluginInstanceID, testPluginInstance)
+	}
+	if metadata.RestoreEpoch != testRestoreEpoch {
+		t.Fatalf("restore epoch = %s, want %s", metadata.RestoreEpoch, testRestoreEpoch)
+	}
+}
+
+func TestOwnedByRequestRejectsRuntimeIdentityMismatch(t *testing.T) {
+	request := defaultUpsertRequest(testPayloadSHANew, []byte("secret"), 2)
+	metadata, owned := ownershipMetadata(ownedVariable(variableMetadata{
+		ManagedBy:        metadataManagedBy,
+		AssociationID:    request.AssociationID,
+		SourcePath:       request.SourcePath,
+		ObjectID:         request.ObjectID,
+		PluginInstanceID: request.Runtime.PluginInstanceID,
+		RestoreEpoch:     request.Runtime.RestoreEpoch,
+		SourceVersion:    request.SourceVersion,
+		PayloadSHA256:    request.PayloadSHA256,
+		PayloadFormat:    request.Format,
+	}))
+	if !ownedByRequest(metadata, owned, ownershipIdentityFromUpsert(request)) {
+		t.Fatal("ownedByRequest returned false for matching runtime identity")
+	}
+	metadata.PluginInstanceID = "inst-other"
+	if ownedByRequest(metadata, owned, ownershipIdentityFromUpsert(request)) {
+		t.Fatal("ownedByRequest returned true for mismatched plugin instance")
+	}
 }
 
 func TestVariableMetadataDescriptionFitsGitLabLimit(t *testing.T) {
@@ -577,5 +628,11 @@ func TestVariableMetadataDescriptionFitsGitLabLimit(t *testing.T) {
 	}
 	if metadata.PayloadSHA256 != testPayloadSHANew {
 		t.Fatalf("payload sha = %s, want %s", metadata.PayloadSHA256, testPayloadSHANew)
+	}
+	if metadata.PluginInstanceID != testPluginInstance {
+		t.Fatalf("plugin instance = %s, want %s", metadata.PluginInstanceID, testPluginInstance)
+	}
+	if metadata.RestoreEpoch != testRestoreEpoch {
+		t.Fatalf("restore epoch = %s, want %s", metadata.RestoreEpoch, testRestoreEpoch)
 	}
 }

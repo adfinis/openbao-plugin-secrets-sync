@@ -32,6 +32,10 @@ Implemented backend slices now include:
 - persisted storage schema, plugin instance identity, and restore epoch records
   with request-time schema compatibility checks and restore-epoch rotation on
   restore guard acknowledgement;
+- provider ownership metadata now carries plugin instance identity and restore
+  epoch for AWS Secrets Manager, Kubernetes Secrets, and GitLab project
+  variables, and populated provider metadata must match the current mount
+  identity before mutation proceeds;
 - OpenTelemetry metric API instrumentation for queue depth, dispatch,
   provider requests, reconcile results, and restore guard state;
 - status records with payload hashes and no secret payload disclosure;
@@ -294,8 +298,6 @@ Tasks:
   is clear.
 - Expand structured redaction tests beyond API responses into logs, metrics,
   and provider diagnostics.
-- Include plugin instance identity and restore epoch in provider ownership
-  metadata where provider metadata surfaces allow it.
 - Add fault injection tests for transient destination failure.
 - Add e2e tests for plugin restart and OpenBao restart.
 - Add restore and clone simulation tests.

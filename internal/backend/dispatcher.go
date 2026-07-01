@@ -129,9 +129,14 @@ func (b *secretSyncBackend) processUpsert(
 	if err != nil {
 		return err
 	}
+	runtimeIdentity, err := providerRuntimeIdentity(ctx, storage)
+	if err != nil {
+		return err
+	}
 	providerStart := time.Now()
 	result, err := upsertContext.provider.Upsert(ctx, providers.UpsertRequest{
 		Destination:   resolvedDestinationConfig,
+		Runtime:       runtimeIdentity,
 		ResolvedName:  resolvedName,
 		Format:        preparedPayload.Format,
 		Payload:       preparedPayload.Bytes,
@@ -208,9 +213,14 @@ func (b *secretSyncBackend) processDelete(
 	if err != nil {
 		return err
 	}
+	runtimeIdentity, err := providerRuntimeIdentity(ctx, storage)
+	if err != nil {
+		return err
+	}
 	providerStart := time.Now()
 	result, err := deleteContext.provider.Delete(ctx, providers.DeleteRequest{
 		Destination:   resolvedDestinationConfig,
+		Runtime:       runtimeIdentity,
 		ResolvedName:  resolvedName,
 		SourcePath:    record.Path,
 		SourceVersion: record.Version,

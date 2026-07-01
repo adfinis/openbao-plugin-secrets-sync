@@ -368,6 +368,10 @@ func (b *secretSyncBackend) pathAssociationPlan(
 	if err != nil {
 		return logical.ErrorResponse(err.Error()), nil
 	}
+	runtimeIdentity, err := providerRuntimeIdentity(ctx, req.Storage)
+	if err != nil {
+		return nil, err
+	}
 	eligibilityErr := validateAssociationActivation(record, *metadata)
 	sourceEligible := eligibilityErr == nil
 	if record.Granularity == syncGranularitySecretKey {
@@ -379,6 +383,7 @@ func (b *secretSyncBackend) pathAssociationPlan(
 			*version,
 			*destination,
 			provider,
+			runtimeIdentity,
 			sourceEligible,
 		)
 	}
@@ -390,6 +395,7 @@ func (b *secretSyncBackend) pathAssociationPlan(
 		*version,
 		*destination,
 		provider,
+		runtimeIdentity,
 		eligibilityErr,
 	)
 }
@@ -402,6 +408,7 @@ func (b *secretSyncBackend) pathAssociationSecretPathPlan(
 	version versionRecord,
 	destination destinationRecord,
 	provider providers.Provider,
+	runtimeIdentity providers.RuntimeIdentity,
 	eligibilityErr error,
 ) (*logical.Response, error) {
 	preparedPayload, err := buildCanonicalPayloadForObject(
@@ -443,7 +450,13 @@ func (b *secretSyncBackend) pathAssociationSecretPathPlan(
 	if err != nil {
 		return nil, err
 	}
-	planRequest := providerPlanRequest(record, resolvedDestinationConfig, metadata.CurrentVersion, preparedPayload)
+	planRequest := providerPlanRequest(
+		record,
+		resolvedDestinationConfig,
+		runtimeIdentity,
+		metadata.CurrentVersion,
+		preparedPayload,
+	)
 	providerStart := time.Now()
 	plan, providerErr := provider.Plan(ctx, planRequest)
 	b.recordProviderRequest(ctx, provider.Type(), observability.OperationPlan, providerErr, time.Since(providerStart))
@@ -501,6 +514,7 @@ func currentSourceVersionFromPlanRequest(
 func providerPlanRequest(
 	record associationRecord,
 	destination providers.DestinationConfig,
+	runtimeIdentity providers.RuntimeIdentity,
 	version int,
 	preparedPayload payloadpkg.CanonicalPayload,
 ) providers.PlanRequest {
@@ -510,6 +524,7 @@ func providerPlanRequest(
 	}
 	return providers.PlanRequest{
 		Destination:   destination,
+		Runtime:       runtimeIdentity,
 		ResolvedName:  resolvedName,
 		Format:        preparedPayload.Format,
 		PayloadSHA256: preparedPayload.SHA256,
@@ -529,6 +544,7 @@ func (b *secretSyncBackend) pathAssociationSecretKeyPlan(
 	version versionRecord,
 	destination destinationRecord,
 	provider providers.Provider,
+	runtimeIdentity providers.RuntimeIdentity,
 	sourceEligible bool,
 ) (*logical.Response, error) {
 	resolvedDestinationConfig, err := destinationConfig(ctx, storage, destination)
@@ -546,6 +562,7 @@ func (b *secretSyncBackend) pathAssociationSecretKeyPlan(
 			record,
 			resolvedDestinationConfig,
 			provider,
+			runtimeIdentity,
 			metadata.CurrentVersion,
 			version.Data,
 			objectID,
@@ -569,6 +586,7 @@ func (b *secretSyncBackend) planSecretKeyObject(
 	record associationRecord,
 	destination providers.DestinationConfig,
 	provider providers.Provider,
+	runtimeIdentity providers.RuntimeIdentity,
 	version int,
 	data secretPayload,
 	objectID string,
@@ -608,6 +626,7 @@ func (b *secretSyncBackend) planSecretKeyObject(
 	providerStart := time.Now()
 	plan, providerErr := provider.Plan(ctx, providers.PlanRequest{
 		Destination:   destination,
+		Runtime:       runtimeIdentity,
 		ResolvedName:  resolvedName,
 		Format:        payload.Format,
 		PayloadSHA256: payload.SHA256,

@@ -142,19 +142,24 @@ response bodies.
 
 Default safety mode is `overwrite_owned_only`.
 
-Remote ownership metadata should include:
+Remote ownership metadata should include the fields supported by the provider:
 
 ```text
 openbao-sync=true
 openbao-sync-plugin-instance=<plugin-instance-id>
 openbao-sync-restore-epoch=<restore-epoch>
-openbao-sync-mount=<mount-accessor-or-name>
 openbao-sync-association=<association-id>
 openbao-sync-path=<source-path>
 openbao-sync-version=<source-version>
 openbao-sync-object=<object-id>
 openbao-sync-payload-sha256=<hash>
 ```
+
+AWS Secrets Manager tags, Kubernetes annotations, and GitLab variable
+descriptions include plugin instance and restore epoch metadata. Provider
+ownership checks require these values to match the current mount identity when
+the request carries them; missing or mismatched values are treated as ownership
+loss.
 
 If ownership metadata is absent or conflicts, the plugin reports
 `REMOTE_OWNERSHIP_LOST` or `DRIFTED` and does not overwrite unless policy
@@ -203,7 +208,7 @@ The plugin needs a safe mode:
 - `reconcile/<path>/plan` and `reconcile/<path>` before pushing restored data
   to destinations;
 - explicit operator acknowledgement to resume sync;
-- persisted restore epoch rotated on acknowledgement and included in future
+- persisted restore epoch rotated on acknowledgement and included in provider
   ownership metadata where possible.
 
 Operators should be able to choose how to handle existing outbox operations

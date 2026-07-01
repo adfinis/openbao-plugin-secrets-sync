@@ -65,12 +65,14 @@ const (
 
 	defaultDeleteRecoveryWindowDays = 7
 
-	tagManaged       = "openbao-sync"
-	tagAssociationID = "openbao-sync-association"
-	tagSourcePath    = "openbao-sync-path"
-	tagSourceVersion = "openbao-sync-version"
-	tagObjectID      = "openbao-sync-object"
-	tagPayloadSHA256 = "openbao-sync-payload-sha256"
+	tagManaged        = "openbao-sync"
+	tagAssociationID  = "openbao-sync-association"
+	tagSourcePath     = "openbao-sync-path"
+	tagSourceVersion  = "openbao-sync-version"
+	tagObjectID       = "openbao-sync-object"
+	tagPayloadSHA256  = "openbao-sync-payload-sha256"
+	tagPluginInstance = "openbao-sync-plugin-instance"
+	tagRestoreEpoch   = "openbao-sync-restore-epoch"
 )
 
 type secretsManagerClient interface {
@@ -553,40 +555,50 @@ func createSecret(
 }
 
 type ownershipIdentity struct {
-	AssociationID string
-	SourcePath    string
-	ObjectID      string
+	AssociationID    string
+	SourcePath       string
+	ObjectID         string
+	PluginInstanceID string
+	RestoreEpoch     string
 }
 
 func ownershipIdentityFromPlan(req providers.PlanRequest) ownershipIdentity {
 	return ownershipIdentity{
-		AssociationID: req.AssociationID,
-		SourcePath:    req.SourcePath,
-		ObjectID:      req.ObjectID,
+		AssociationID:    req.AssociationID,
+		SourcePath:       req.SourcePath,
+		ObjectID:         req.ObjectID,
+		PluginInstanceID: req.Runtime.PluginInstanceID,
+		RestoreEpoch:     req.Runtime.RestoreEpoch,
 	}
 }
 
 func ownershipIdentityFromUpsert(req providers.UpsertRequest) ownershipIdentity {
 	return ownershipIdentity{
-		AssociationID: req.AssociationID,
-		SourcePath:    req.SourcePath,
-		ObjectID:      req.ObjectID,
+		AssociationID:    req.AssociationID,
+		SourcePath:       req.SourcePath,
+		ObjectID:         req.ObjectID,
+		PluginInstanceID: req.Runtime.PluginInstanceID,
+		RestoreEpoch:     req.Runtime.RestoreEpoch,
 	}
 }
 
 func ownershipIdentityFromDelete(req providers.DeleteRequest) ownershipIdentity {
 	return ownershipIdentity{
-		AssociationID: req.AssociationID,
-		SourcePath:    req.SourcePath,
-		ObjectID:      req.ObjectID,
+		AssociationID:    req.AssociationID,
+		SourcePath:       req.SourcePath,
+		ObjectID:         req.ObjectID,
+		PluginInstanceID: req.Runtime.PluginInstanceID,
+		RestoreEpoch:     req.Runtime.RestoreEpoch,
 	}
 }
 
 func ownershipIdentityFromReadState(req providers.ReadStateRequest) ownershipIdentity {
 	return ownershipIdentity{
-		AssociationID: req.AssociationID,
-		SourcePath:    req.SourcePath,
-		ObjectID:      req.ObjectID,
+		AssociationID:    req.AssociationID,
+		SourcePath:       req.SourcePath,
+		ObjectID:         req.ObjectID,
+		PluginInstanceID: req.Runtime.PluginInstanceID,
+		RestoreEpoch:     req.Runtime.RestoreEpoch,
 	}
 }
 
@@ -595,7 +607,7 @@ func hasOwnershipIdentityFromReadState(req providers.ReadStateRequest) bool {
 }
 
 func ownershipTagsFromUpsert(req providers.UpsertRequest) []smtypes.Tag {
-	return []smtypes.Tag{
+	tags := []smtypes.Tag{
 		tag(tagManaged, "true"),
 		tag(tagAssociationID, req.AssociationID),
 		tag(tagSourcePath, req.SourcePath),
@@ -603,6 +615,13 @@ func ownershipTagsFromUpsert(req providers.UpsertRequest) []smtypes.Tag {
 		tag(tagObjectID, req.ObjectID),
 		tag(tagPayloadSHA256, req.PayloadSHA256),
 	}
+	if req.Runtime.PluginInstanceID != "" {
+		tags = append(tags, tag(tagPluginInstance, req.Runtime.PluginInstanceID))
+	}
+	if req.Runtime.RestoreEpoch != "" {
+		tags = append(tags, tag(tagRestoreEpoch, req.Runtime.RestoreEpoch))
+	}
+	return tags
 }
 
 func ownedByRequest(tags []smtypes.Tag, identity ownershipIdentity) bool {
@@ -611,11 +630,20 @@ func ownedByRequest(tags []smtypes.Tag, identity ownershipIdentity) bool {
 	}
 	return requiredTagMatches(tags, tagAssociationID, identity.AssociationID) &&
 		requiredTagMatches(tags, tagSourcePath, identity.SourcePath) &&
-		requiredTagMatches(tags, tagObjectID, identity.ObjectID)
+		requiredTagMatches(tags, tagObjectID, identity.ObjectID) &&
+		runtimeTagMatches(tags, tagPluginInstance, identity.PluginInstanceID) &&
+		runtimeTagMatches(tags, tagRestoreEpoch, identity.RestoreEpoch)
 }
 
 func requiredTagMatches(tags []smtypes.Tag, key string, expected string) bool {
 	return expected != "" && tagValue(tags, key) == expected
+}
+
+func runtimeTagMatches(tags []smtypes.Tag, key string, expected string) bool {
+	if expected == "" {
+		return true
+	}
+	return tagValue(tags, key) == expected
 }
 
 func remoteSourceVersionNewer(tags []smtypes.Tag, sourceVersion int) bool {

@@ -203,6 +203,17 @@ func (b *secretSyncBackend) reconcileAssociation(
 			"destination config resolution failed",
 		)
 	}
+	runtimeIdentity, err := providerRuntimeIdentity(ctx, storage)
+	if err != nil {
+		return reconcileStaticResults(
+			association,
+			metadata.CurrentVersion,
+			objectIDs,
+			domain.SyncStateInternalError,
+			providers.ErrorClassInternal,
+			"runtime identity resolution failed",
+		)
+	}
 	results := make([]reconcileObjectResult, 0, len(objectIDs))
 	for _, objectID := range objectIDs {
 		results = append(results, b.reconcileAssociationObject(
@@ -210,6 +221,7 @@ func (b *secretSyncBackend) reconcileAssociation(
 			association,
 			provider,
 			resolvedDestinationConfig,
+			runtimeIdentity,
 			metadata.CurrentVersion,
 			version,
 			objectID,
@@ -223,6 +235,7 @@ func (b *secretSyncBackend) reconcileAssociationObject(
 	association associationRecord,
 	provider providers.Provider,
 	destinationConfig providers.DestinationConfig,
+	runtimeIdentity providers.RuntimeIdentity,
 	sourceVersion int,
 	version versionRecord,
 	objectID string,
@@ -261,6 +274,7 @@ func (b *secretSyncBackend) reconcileAssociationObject(
 	remoteState, err := provider.ReadState(ctx, providerReadStateRequest(
 		association,
 		destinationConfig,
+		runtimeIdentity,
 		sourceVersion,
 		payload,
 		objectID,
@@ -313,6 +327,7 @@ func prepareReconcilePayload(
 func providerReadStateRequest(
 	association associationRecord,
 	destination providers.DestinationConfig,
+	runtimeIdentity providers.RuntimeIdentity,
 	version int,
 	payload payloadpkg.CanonicalPayload,
 	objectID string,
@@ -320,6 +335,7 @@ func providerReadStateRequest(
 ) providers.ReadStateRequest {
 	return providers.ReadStateRequest{
 		Destination:   destination,
+		Runtime:       runtimeIdentity,
 		ResolvedName:  resolvedName,
 		PayloadSHA256: payload.SHA256,
 		SourcePath:    association.Path,

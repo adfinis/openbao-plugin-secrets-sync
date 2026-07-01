@@ -27,6 +27,8 @@ const (
 	testObjectID        = "secret-path"
 	testPayloadSHAOld   = "sha256:old"
 	testPayloadSHANew   = "sha256:new"
+	testPluginInstance  = "inst-test"
+	testRestoreEpoch    = "epoch-test"
 )
 
 var secretsResource = schema.GroupResource{Resource: "secrets"}
@@ -287,6 +289,8 @@ func TestUpsertCreatesSecretWithOwnershipMetadata(t *testing.T) {
 	assertAnnotation(t, secret, annotationSourceVersion, "1")
 	assertAnnotation(t, secret, annotationObjectID, testObjectID)
 	assertAnnotation(t, secret, annotationPayloadSHA256, testPayloadSHANew)
+	assertAnnotation(t, secret, annotationPluginInstance, testPluginInstance)
+	assertAnnotation(t, secret, annotationRestoreEpoch, testRestoreEpoch)
 }
 
 func TestUpsertUpdatesOwnedSecretAndPreservesForeignMetadata(t *testing.T) {
@@ -351,6 +355,20 @@ func TestUpsertRejectsUnsafeRemoteState(t *testing.T) {
 			))
 			assertProviderErrorClass(t, err, tt.errorClass)
 		})
+	}
+}
+
+func TestOwnedByRequestRejectsRuntimeIdentityMismatch(t *testing.T) {
+	request := defaultUpsertRequest(testPayloadSHANew, []byte(`{"password":"new"}`), 1)
+	secret := ownedSecret(testPayloadSHANew, 1, []byte(`{"password":"new"}`))
+	secret.Annotations[annotationPluginInstance] = testPluginInstance
+	secret.Annotations[annotationRestoreEpoch] = testRestoreEpoch
+	if !ownedByRequest(secret, ownershipIdentityFromUpsert(request)) {
+		t.Fatal("ownedByRequest returned false for matching runtime identity")
+	}
+	secret.Annotations[annotationPluginInstance] = "inst-other"
+	if ownedByRequest(secret, ownershipIdentityFromUpsert(request)) {
+		t.Fatal("ownedByRequest returned true for mismatched plugin instance")
 	}
 }
 
@@ -508,6 +526,7 @@ func defaultPlanRequest(payloadSHA256 string, sourceVersion int) providers.PlanR
 func planRequest(resolvedName string, payloadSHA256 string, sourceVersion int) providers.PlanRequest {
 	return providers.PlanRequest{
 		Destination:   defaultDestinationConfig(),
+		Runtime:       defaultRuntimeIdentity(),
 		ResolvedName:  resolvedName,
 		Format:        "json",
 		PayloadSHA256: payloadSHA256,
@@ -522,6 +541,7 @@ func planRequest(resolvedName string, payloadSHA256 string, sourceVersion int) p
 func defaultUpsertRequest(payloadSHA256 string, payload []byte, sourceVersion int) providers.UpsertRequest {
 	return providers.UpsertRequest{
 		Destination:   defaultDestinationConfig(),
+		Runtime:       defaultRuntimeIdentity(),
 		ResolvedName:  testResolvedName,
 		Format:        "json",
 		Payload:       payload,
@@ -536,6 +556,7 @@ func defaultUpsertRequest(payloadSHA256 string, payload []byte, sourceVersion in
 func defaultDeleteRequest(sourceVersion int) providers.DeleteRequest {
 	return providers.DeleteRequest{
 		Destination:   defaultDestinationConfig(),
+		Runtime:       defaultRuntimeIdentity(),
 		ResolvedName:  testResolvedName,
 		SourcePath:    testSourcePath,
 		SourceVersion: sourceVersion,
@@ -547,12 +568,20 @@ func defaultDeleteRequest(sourceVersion int) providers.DeleteRequest {
 func defaultReadStateRequest(payloadSHA256 string, sourceVersion int) providers.ReadStateRequest {
 	return providers.ReadStateRequest{
 		Destination:   defaultDestinationConfig(),
+		Runtime:       defaultRuntimeIdentity(),
 		ResolvedName:  testResolvedName,
 		PayloadSHA256: payloadSHA256,
 		SourcePath:    testSourcePath,
 		SourceVersion: sourceVersion,
 		AssociationID: testAssociationID,
 		ObjectID:      testObjectID,
+	}
+}
+
+func defaultRuntimeIdentity() providers.RuntimeIdentity {
+	return providers.RuntimeIdentity{
+		PluginInstanceID: testPluginInstance,
+		RestoreEpoch:     testRestoreEpoch,
 	}
 }
 
@@ -565,12 +594,14 @@ func ownedSecret(payloadSHA256 string, sourceVersion int, payload []byte) *corev
 				labelManaged: "true",
 			},
 			Annotations: map[string]string{
-				annotationAssociationID: testAssociationID,
-				annotationSourcePath:    testSourcePath,
-				annotationSourceVersion: "1",
-				annotationObjectID:      testObjectID,
-				annotationPayloadSHA256: payloadSHA256,
-				annotationFormat:        "json",
+				annotationAssociationID:  testAssociationID,
+				annotationSourcePath:     testSourcePath,
+				annotationSourceVersion:  "1",
+				annotationObjectID:       testObjectID,
+				annotationPayloadSHA256:  payloadSHA256,
+				annotationFormat:         "json",
+				annotationPluginInstance: testPluginInstance,
+				annotationRestoreEpoch:   testRestoreEpoch,
 			},
 			ResourceVersion: "rv-1",
 		},

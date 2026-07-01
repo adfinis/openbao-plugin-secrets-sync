@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/adfinis/openbao-secret-sync/internal/providers"
 	"github.com/openbao/openbao/sdk/v2/logical"
 )
 
@@ -47,6 +48,17 @@ func ensureRuntimeState(ctx context.Context, storage logical.Storage) (runtimeSt
 		Schema:         schema,
 		PluginInstance: pluginInstance,
 		RestoreEpoch:   restoreEpoch,
+	}, nil
+}
+
+func providerRuntimeIdentity(ctx context.Context, storage logical.Storage) (providers.RuntimeIdentity, error) {
+	state, err := ensureRuntimeState(ctx, storage)
+	if err != nil {
+		return providers.RuntimeIdentity{}, err
+	}
+	return providers.RuntimeIdentity{
+		PluginInstanceID: state.PluginInstance.ID,
+		RestoreEpoch:     state.RestoreEpoch.Epoch,
 	}, nil
 }
 
