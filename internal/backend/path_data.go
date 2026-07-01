@@ -589,6 +589,47 @@ func staleQueuedUpsertIDsForOperations(
 	return staleIDs, nil
 }
 
+func queuedDeleteIDsForUpsertOperations(
+	ctx context.Context,
+	storage logical.Storage,
+	operations []outboxRecord,
+) ([]string, error) {
+	targetVersions := make(map[string]int, len(operations))
+	path := ""
+	for _, operation := range operations {
+		if operation.Type != outbox.OperationTypeUpsert {
+			continue
+		}
+		if path == "" {
+			path = operation.Path
+		}
+		targetVersions[outboxObjectKey(operation.AssociationID, operation.ObjectID)] = operation.Version
+	}
+	if len(targetVersions) == 0 || path == "" {
+		return nil, nil
+	}
+	ids, err := listQueuedOutboxIDsForPath(ctx, storage, path)
+	if err != nil {
+		return nil, err
+	}
+	matchingIDs := []string{}
+	for _, id := range ids {
+		record, err := getOutbox(ctx, storage, id)
+		if err != nil {
+			return nil, err
+		}
+		if record == nil || record.Type != outbox.OperationTypeDelete {
+			continue
+		}
+		targetVersion, ok := targetVersions[outboxObjectKey(record.AssociationID, record.ObjectID)]
+		if !ok || record.Version != targetVersion {
+			continue
+		}
+		matchingIDs = append(matchingIDs, record.ID)
+	}
+	return matchingIDs, nil
+}
+
 func outboxObjectKey(associationID string, objectID string) string {
 	return associationID + "\x00" + objectID
 }

@@ -64,7 +64,7 @@ func (b *secretSyncBackend) pathDeleteVersionsWrite(
 	req *logical.Request,
 	data *framework.FieldData,
 ) (*logical.Response, error) {
-	return b.runVersionMutation(ctx, req, data, softDeleteVersion)
+	return b.runVersionMutation(ctx, req, data, versionMutationDelete, softDeleteVersion)
 }
 
 func (b *secretSyncBackend) pathUndeleteWrite(
@@ -72,7 +72,7 @@ func (b *secretSyncBackend) pathUndeleteWrite(
 	req *logical.Request,
 	data *framework.FieldData,
 ) (*logical.Response, error) {
-	return b.runVersionMutation(ctx, req, data, undeleteVersion)
+	return b.runVersionMutation(ctx, req, data, versionMutationUndelete, undeleteVersion)
 }
 
 func (b *secretSyncBackend) pathDestroyWrite(
@@ -80,8 +80,16 @@ func (b *secretSyncBackend) pathDestroyWrite(
 	req *logical.Request,
 	data *framework.FieldData,
 ) (*logical.Response, error) {
-	return b.runVersionMutation(ctx, req, data, destroyVersion)
+	return b.runVersionMutation(ctx, req, data, versionMutationDestroy, destroyVersion)
 }
+
+type versionMutationKind string
+
+const (
+	versionMutationDelete   versionMutationKind = "delete"
+	versionMutationUndelete versionMutationKind = "undelete"
+	versionMutationDestroy  versionMutationKind = "destroy"
+)
 
 type versionMutationFunc func(
 	context.Context,
@@ -96,6 +104,7 @@ func (b *secretSyncBackend) runVersionMutation(
 	ctx context.Context,
 	req *logical.Request,
 	data *framework.FieldData,
+	kind versionMutationKind,
 	mutate versionMutationFunc,
 ) (*logical.Response, error) {
 	path, versions, err := versionMutationRequest(data)
@@ -114,6 +123,21 @@ func (b *secretSyncBackend) runVersionMutation(
 	}
 	now := nowUTC().Format(timeFormatRFC3339)
 	for _, version := range versions {
+		if version == metadata.CurrentVersion {
+			var err error
+			switch kind {
+			case versionMutationDelete, versionMutationDestroy:
+				err = b.mutateCurrentVersionDelete(ctx, req.Storage, metadata, path, version, now, mutate)
+			case versionMutationUndelete:
+				err = b.mutateCurrentVersionUndelete(ctx, req.Storage, metadata, path, version, now, mutate)
+			default:
+				err = mutate(ctx, req.Storage, metadata, path, version, now)
+			}
+			if err != nil {
+				return logical.ErrorResponse(err.Error()), nil
+			}
+			continue
+		}
 		if err := mutate(ctx, req.Storage, metadata, path, version, now); err != nil {
 			return logical.ErrorResponse(err.Error()), nil
 		}
@@ -122,6 +146,98 @@ func (b *secretSyncBackend) runVersionMutation(
 		return nil, err
 	}
 	return nil, nil
+}
+
+func (b *secretSyncBackend) mutateCurrentVersionDelete(
+	ctx context.Context,
+	storage logical.Storage,
+	metadata *metadataRecord,
+	path string,
+	version int,
+	now string,
+	mutate versionMutationFunc,
+) error {
+	b.enqueueMu.Lock()
+	defer b.enqueueMu.Unlock()
+
+	deletePlan, err := buildSourceDeletePlan(ctx, storage, path, version, now)
+	if err != nil {
+		return err
+	}
+	if err := ensureQueueCapacityAfterReplacement(
+		ctx,
+		storage,
+		deletePlan.additionalOperations,
+		len(deletePlan.staleUpsertIDs),
+	); err != nil {
+		return err
+	}
+	if err := putPendingEnqueueIntent(ctx, storage, path, version, deletePlan.operations, now); err != nil {
+		return err
+	}
+	if err := mutate(ctx, storage, metadata, path, version, now); err != nil {
+		return err
+	}
+	if err := cancelQueuedOutboxIDs(ctx, storage, deletePlan.staleUpsertIDs, now); err != nil {
+		return err
+	}
+	if err := putOutboxRecords(ctx, storage, deletePlan.operations); err != nil {
+		return err
+	}
+	return completeEnqueueIntent(ctx, storage, path, version, deletePlan.operations, now)
+}
+
+func (b *secretSyncBackend) mutateCurrentVersionUndelete(
+	ctx context.Context,
+	storage logical.Storage,
+	metadata *metadataRecord,
+	path string,
+	version int,
+	now string,
+	mutate versionMutationFunc,
+) error {
+	versionRecord, err := getVersion(ctx, storage, path, version)
+	if err != nil {
+		return err
+	}
+	if versionRecord == nil || versionRecord.Destroyed || versionRecord.DeletionTime == "" {
+		return mutate(ctx, storage, metadata, path, version, now)
+	}
+	associations, err := enabledAssociationsForPath(ctx, storage, path)
+	if err != nil {
+		return err
+	}
+	operations, _, err := newAssociationOutboxRecords(associations, version, versionRecord.Data, now)
+	if err != nil {
+		return err
+	}
+	b.enqueueMu.Lock()
+	defer b.enqueueMu.Unlock()
+
+	staleDeleteIDs, err := queuedDeleteIDsForUpsertOperations(ctx, storage, operations)
+	if err != nil {
+		return err
+	}
+	additionalOperations, err := additionalQueuedOperationCount(ctx, storage, operations)
+	if err != nil {
+		return err
+	}
+	if err := ensureQueueCapacityAfterReplacement(ctx, storage, additionalOperations, len(staleDeleteIDs)); err != nil {
+		return err
+	}
+	if err := putPendingEnqueueIntent(ctx, storage, path, version, operations, now); err != nil {
+		return err
+	}
+	if err := mutate(ctx, storage, metadata, path, version, now); err != nil {
+		return err
+	}
+	if err := cancelQueuedOutboxIDs(ctx, storage, staleDeleteIDs, now); err != nil {
+		return err
+	}
+	if err := putOutboxRecords(ctx, storage, operations); err != nil {
+		return err
+	}
+	return completeEnqueueIntent(ctx, storage, path, version, operations, now)
 }
 
 func versionMutationRequest(data *framework.FieldData) (string, []int, error) {

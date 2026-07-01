@@ -1020,6 +1020,92 @@ func TestDeleteVersionsSoftDeletesSelectedVersions(t *testing.T) {
 	}
 }
 
+func TestCurrentVersionMutationQueuesRemoteDelete(t *testing.T) {
+	for _, testCase := range []struct {
+		name string
+		path string
+	}{
+		{name: "delete", path: "delete/app/db"},
+		{name: "destroy", path: "destroy/app/db"},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			b := Backend(&logical.BackendConfig{})
+			storage := &logical.InmemStorage{}
+
+			writeAppDBSecret(t, b, storage, "initial")
+			createFakeDestination(t, b, storage, "default")
+			associationResp := createFakeAssociationWithDeleteMode(t, b, storage, deleteModeDelete)
+			associationID := associationIDFromResponse(t, associationResp)
+			upsertOperationID := operationIDsFromResponse(t, associationResp)[0]
+			deleteOperationID := newOperationID(
+				"app/db",
+				1,
+				associationID,
+				syncObjectIDSecretPath,
+				outbox.OperationTypeDelete,
+			)
+
+			mutationResp := handleRequest(t, b, storage, logical.UpdateOperation, testCase.path, map[string]interface{}{
+				"versions": []int{1},
+			})
+			if mutationResp != nil && mutationResp.IsError() {
+				t.Fatalf("unexpected %s response: %v", testCase.name, mutationResp.Error())
+			}
+
+			assertOutboxOperation(t, storage, upsertOperationID, 1, outboxStateCanceled)
+			deleteOperation := assertOutboxOperation(t, storage, deleteOperationID, 1, outboxStatePending)
+			if got := deleteOperation.Type; got != outbox.OperationTypeDelete {
+				t.Fatalf("operation type = %s, want %s", got, outbox.OperationTypeDelete)
+			}
+			readResp := handleRequest(t, b, storage, logical.ReadOperation, "data/app/db", nil)
+			if readResp != nil {
+				t.Fatalf("mutated current version response = %#v, want nil", readResp)
+			}
+		})
+	}
+}
+
+func TestUndeleteCurrentVersionQueuesUpsertAfterRemoteDelete(t *testing.T) {
+	b := Backend(&logical.BackendConfig{})
+	storage := &logical.InmemStorage{}
+
+	writeAppDBSecret(t, b, storage, "initial")
+	createFakeDestination(t, b, storage, "default")
+	associationResp := createFakeAssociationWithDeleteMode(t, b, storage, deleteModeDelete)
+	associationID := associationIDFromResponse(t, associationResp)
+	upsertOperationID := operationIDsFromResponse(t, associationResp)[0]
+	runPeriodicAllowed(t, b, storage, "periodic upsert")
+
+	deleteResp := handleRequest(t, b, storage, logical.DeleteOperation, "data/app/db", nil)
+	assertNoErrorResponse(t, deleteResp)
+	deleteOperationID := newOperationID(
+		"app/db",
+		1,
+		associationID,
+		syncObjectIDSecretPath,
+		outbox.OperationTypeDelete,
+	)
+	runPeriodicAllowed(t, b, storage, "periodic delete")
+	assertOutboxOperation(t, storage, deleteOperationID, 1, outboxStateSucceeded)
+
+	undeleteResp := handleRequest(t, b, storage, logical.UpdateOperation, "undelete/app/db", map[string]interface{}{
+		"versions": []int{1},
+	})
+	if undeleteResp != nil && undeleteResp.IsError() {
+		t.Fatalf("unexpected undelete response: %v", undeleteResp.Error())
+	}
+	assertOutboxOperation(t, storage, upsertOperationID, 1, outboxStatePending)
+
+	runPeriodicAllowed(t, b, storage, "periodic undelete upsert")
+	assertOutboxOperation(t, storage, upsertOperationID, 1, outboxStateSucceeded)
+	statusResp := handleRequest(t, b, storage, logical.ReadOperation, "status/app/db", nil)
+	assertNoErrorResponse(t, statusResp)
+	objects := statusResp.Data["objects"].([]map[string]interface{})
+	if len(objects) != 1 || objects[0]["state"] != string(domain.SyncStateSynced) {
+		t.Fatalf("status objects = %#v, want synced object", objects)
+	}
+}
+
 func TestDataDeleteRetainModeCancelsQueuedUpsert(t *testing.T) {
 	b := Backend(&logical.BackendConfig{})
 	storage := &logical.InmemStorage{}
@@ -3741,7 +3827,7 @@ func createFakeAssociationWithDeleteMode(
 	b logical.Backend,
 	storage logical.Storage,
 	deleteMode string,
-) {
+) *logical.Response {
 	t.Helper()
 	markAppDBSyncable(t, b, storage)
 	resp := handleRequest(t, b, storage, logical.UpdateOperation, "associations/app/db", map[string]interface{}{
@@ -3753,6 +3839,7 @@ func createFakeAssociationWithDeleteMode(
 		"delete_mode":      deleteMode,
 	})
 	assertNoErrorResponse(t, resp)
+	return resp
 }
 
 func createFakeAssociationWithResolvedName(
