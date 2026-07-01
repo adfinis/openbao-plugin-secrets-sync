@@ -135,6 +135,9 @@ The release process has three separate automation steps:
 Release Please commits are signed off through `release-please-config.json` with
 the `github-actions[bot]` identity. Release PR checks created by
 `GITHUB_TOKEN` can require manual approval in the GitHub UI before they run.
+Because `GITHUB_TOKEN`-created pull requests do not trigger normal pull request
+workflows, the release-please workflow explicitly dispatches the required
+`Core Quality` and `Dependency Review` checks against the release PR branch.
 
 The release tag workflow requires the signing key secrets:
 

@@ -12,6 +12,7 @@ on:
         type: string
 
 permissions:
+  actions: write
   contents: write
   pull-requests: write
   issues: write
@@ -27,9 +28,48 @@ jobs:
     if: ${{ !github.event.repository.fork }}
     steps:
       - name: Run release-please
+        id: release-please
         uses: googleapis/release-please-action@45996ed1f6d02564a971a2fa1b5860e934307cf7 # v5.0.0
         with:
           config-file: release-please-config.json
           manifest-file: .release-please-manifest.json
           release-as: ${{ github.event_name == 'workflow_dispatch' && inputs.release_as || '' }}
           skip-github-release: true
+
+      - name: Dispatch release PR checks
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          RELEASE_BRANCH: release-please--branches--main
+        run: |
+          set -euo pipefail
+
+          if ! gh api "repos/${REPO}/git/ref/heads/${RELEASE_BRANCH}" >/dev/null 2>&1; then
+            echo "No release-please branch found; skipping release PR check dispatch."
+            exit 0
+          fi
+
+          pr_number="$(
+            gh pr list \
+              --repo "${REPO}" \
+              --head "${RELEASE_BRANCH}" \
+              --state open \
+              --json number \
+              --jq '.[0].number // ""'
+          )"
+          if [[ -z "${pr_number}" ]]; then
+            echo "No open release-please PR found; skipping release PR check dispatch."
+            exit 0
+          fi
+
+          gh workflow run ci.yml \
+            --repo "${REPO}" \
+            --ref "${RELEASE_BRANCH}"
+
+          gh workflow run dependency-review.yml \
+            --repo "${REPO}" \
+            --ref "${RELEASE_BRANCH}" \
+            -f base_ref=main \
+            -f head_ref="${RELEASE_BRANCH}"
+
+          echo "Dispatched required checks for release PR #${pr_number}."

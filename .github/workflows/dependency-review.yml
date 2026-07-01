@@ -3,6 +3,16 @@ name: Dependency Review
 on:
   pull_request:
     types: [opened, synchronize, reopened]
+  workflow_dispatch:
+    inputs:
+      base_ref:
+        description: Base ref for manual or release-please dependency review.
+        required: true
+        type: string
+      head_ref:
+        description: Head ref for manual or release-please dependency review.
+        required: true
+        type: string
 
 permissions:
   contents: read
@@ -17,6 +27,15 @@ jobs:
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
 
       - name: Dependency Review
+        if: ${{ github.event_name == 'pull_request' }}
         uses: actions/dependency-review-action@a1d282b36b6f3519aa1f3fc636f609c47dddb294 # v5.0.0
         with:
           config-file: .github/dependency-review-config.yml
+
+      - name: Dependency Review
+        if: ${{ github.event_name == 'workflow_dispatch' }}
+        uses: actions/dependency-review-action@a1d282b36b6f3519aa1f3fc636f609c47dddb294 # v5.0.0
+        with:
+          config-file: .github/dependency-review-config.yml
+          base-ref: ${{ inputs.base_ref }}
+          head-ref: ${{ inputs.head_ref }}
