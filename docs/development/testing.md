@@ -109,8 +109,9 @@ behavior, status transitions, and selected OpenBao lifecycle behavior.
 Current self-contained e2e coverage:
 
 - LocalStack-backed AWS Secrets Manager;
-- persistent OpenBao restart resilience with file storage, static seal
-  self-unseal, queued work, and status persistence;
+- persistent OpenBao lifecycle resilience with three-node Raft storage, static
+  seal self-unseal, HA failover, queued work, status persistence, and operator
+  seal recovery;
 - kind-backed Kubernetes Secrets;
 - Dockerized GitLab CE project variables;
 - OCI plugin distribution through a disposable TLS registry, OpenBao

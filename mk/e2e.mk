@@ -62,8 +62,12 @@ E2E_RESILIENCE_COMPOSE_FILE ?= test/e2e/resilience/compose.yaml
 E2E_RESILIENCE_DIR ?= dist/e2e/resilience
 E2E_RESILIENCE_STATIC_SEAL_KEY ?= $(E2E_RESILIENCE_DIR)/static-unseal.key
 E2E_RESILIENCE_OPENBAO_PORT ?= 18205
+E2E_RESILIENCE_OPENBAO_STANDBY_PORT ?= 18206
+E2E_RESILIENCE_OPENBAO_STANDBY_2_PORT ?= 18207
 E2E_RESILIENCE_LOCALSTACK_PORT ?= 4567
 E2E_RESILIENCE_OPENBAO_ADDR ?= http://127.0.0.1:$(E2E_RESILIENCE_OPENBAO_PORT)
+E2E_RESILIENCE_OPENBAO_STANDBY_ADDR ?= http://127.0.0.1:$(E2E_RESILIENCE_OPENBAO_STANDBY_PORT)
+E2E_RESILIENCE_OPENBAO_STANDBY_2_ADDR ?= http://127.0.0.1:$(E2E_RESILIENCE_OPENBAO_STANDBY_2_PORT)
 E2E_RESILIENCE_LOCALSTACK_ENDPOINT ?= http://127.0.0.1:$(E2E_RESILIENCE_LOCALSTACK_PORT)
 
 .PHONY: e2e-build-plugin
@@ -133,6 +137,8 @@ e2e-resilience-fixture: e2e-build-plugin ## Generate persistent OpenBao e2e fixt
 e2e-resilience-up: e2e-resilience-fixture ## Start the persistent OpenBao plus LocalStack resilience stack.
 	@E2E_OPENBAO_IMAGE="$(E2E_OPENBAO_IMAGE)" \
 	E2E_RESILIENCE_OPENBAO_PORT="$(E2E_RESILIENCE_OPENBAO_PORT)" \
+	E2E_RESILIENCE_OPENBAO_STANDBY_PORT="$(E2E_RESILIENCE_OPENBAO_STANDBY_PORT)" \
+	E2E_RESILIENCE_OPENBAO_STANDBY_2_PORT="$(E2E_RESILIENCE_OPENBAO_STANDBY_2_PORT)" \
 	E2E_RESILIENCE_LOCALSTACK_PORT="$(E2E_RESILIENCE_LOCALSTACK_PORT)" \
 	$(DOCKER_COMPOSE) -f "$(E2E_RESILIENCE_COMPOSE_FILE)" up -d --wait
 
@@ -140,19 +146,23 @@ e2e-resilience-up: e2e-resilience-fixture ## Start the persistent OpenBao plus L
 e2e-resilience-down: ## Stop the persistent OpenBao plus LocalStack resilience stack.
 	@E2E_OPENBAO_IMAGE="$(E2E_OPENBAO_IMAGE)" \
 	E2E_RESILIENCE_OPENBAO_PORT="$(E2E_RESILIENCE_OPENBAO_PORT)" \
+	E2E_RESILIENCE_OPENBAO_STANDBY_PORT="$(E2E_RESILIENCE_OPENBAO_STANDBY_PORT)" \
+	E2E_RESILIENCE_OPENBAO_STANDBY_2_PORT="$(E2E_RESILIENCE_OPENBAO_STANDBY_2_PORT)" \
 	E2E_RESILIENCE_LOCALSTACK_PORT="$(E2E_RESILIENCE_LOCALSTACK_PORT)" \
 	$(DOCKER_COMPOSE) -f "$(E2E_RESILIENCE_COMPOSE_FILE)" down -v --remove-orphans
 
 .PHONY: test-e2e-resilience
-test-e2e-resilience: e2e-resilience-fixture ## Run persistent OpenBao restart resilience e2e tests.
+test-e2e-resilience: e2e-resilience-fixture ## Run persistent OpenBao lifecycle resilience e2e tests.
 	@set -eu; \
 	cleanup() { \
 		status="$$?"; \
 		if [ "$$status" -ne 0 ]; then \
 			E2E_OPENBAO_IMAGE="$(E2E_OPENBAO_IMAGE)" \
 			E2E_RESILIENCE_OPENBAO_PORT="$(E2E_RESILIENCE_OPENBAO_PORT)" \
+			E2E_RESILIENCE_OPENBAO_STANDBY_PORT="$(E2E_RESILIENCE_OPENBAO_STANDBY_PORT)" \
+			E2E_RESILIENCE_OPENBAO_STANDBY_2_PORT="$(E2E_RESILIENCE_OPENBAO_STANDBY_2_PORT)" \
 			E2E_RESILIENCE_LOCALSTACK_PORT="$(E2E_RESILIENCE_LOCALSTACK_PORT)" \
-			$(DOCKER_COMPOSE) -f "$(E2E_RESILIENCE_COMPOSE_FILE)" logs --no-color openbao localstack || true; \
+			$(DOCKER_COMPOSE) -f "$(E2E_RESILIENCE_COMPOSE_FILE)" logs --no-color openbao openbao-standby openbao-standby-2 localstack || true; \
 		fi; \
 		$(MAKE) e2e-resilience-down >/dev/null 2>&1 || true; \
 		exit "$$status"; \
@@ -164,12 +174,14 @@ test-e2e-resilience: e2e-resilience-fixture ## Run persistent OpenBao restart re
 	AWS_REGION=us-east-1 \
 	AWS_DEFAULT_REGION=us-east-1 \
 	E2E_RESILIENCE_OPENBAO_ADDR="$(E2E_RESILIENCE_OPENBAO_ADDR)" \
+	E2E_RESILIENCE_OPENBAO_STANDBY_ADDR="$(E2E_RESILIENCE_OPENBAO_STANDBY_ADDR)" \
+	E2E_RESILIENCE_OPENBAO_STANDBY_2_ADDR="$(E2E_RESILIENCE_OPENBAO_STANDBY_2_ADDR)" \
 	E2E_RESILIENCE_LOCALSTACK_ENDPOINT="$(E2E_RESILIENCE_LOCALSTACK_ENDPOINT)" \
 	E2E_RESILIENCE_COMPOSE_FILE="$(CURDIR)/$(E2E_RESILIENCE_COMPOSE_FILE)" \
 	E2E_DOCKER_COMPOSE="$(DOCKER_COMPOSE)" \
 	E2E_PLUGIN_PATH="$(E2E_PLUGIN_BIN)" \
 	E2E_PLUGIN_VERSION="$(E2E_PLUGIN_VERSION)" \
-	"$(GO)" test -tags=e2e ./test/e2e/resilience -run TestOpenBaoRestartPreservesSecretSyncQueue -count=1 -v
+	"$(GO)" test -tags=e2e ./test/e2e/resilience -run TestOpenBaoLifecyclePreservesSecretSyncState -count=1 -v
 
 .PHONY: e2e-oci-build-plugin
 e2e-oci-build-plugin: ## Build the Linux plugin binary used by the OCI e2e image.
