@@ -16,9 +16,27 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  core:
-    name: Core Quality
+  fast:
+    name: Fast Checks
     runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Setup repo tools
+        uses: ./.github/actions/setup-repo-tools
+        with:
+          cache-tools: "false"
+          bootstrap-tools: "false"
+
+      - name: Run fast checks
+        run: make ci-fast
+
+  lint:
+    name: Lint
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
     env:
       SEMGREP_VERSION: "1.157.0"
     steps:
@@ -36,10 +54,104 @@ jobs:
           python -m pip install "semgrep==${SEMGREP_VERSION}"
           echo "${GITHUB_WORKSPACE}/.venv-semgrep/bin" >> "${GITHUB_PATH}"
 
+      - name: Run lint checks
+        run: make lint
+
+  security:
+    name: Security
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Setup repo tools
+        uses: ./.github/actions/setup-repo-tools
+
       - name: Install Trivy
         uses: aquasecurity/setup-trivy@81e514348e19b6112ce2a7e3ecbafe19c1e1f567 # v0.3.1
         with:
           version: v0.69.3
 
-      - name: Run core quality gate
-        run: make ci-core
+      - name: Run security checks
+        run: make security-ci
+
+  heavy:
+    name: Race, Fuzz, Release Artifacts
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Setup repo tools
+        uses: ./.github/actions/setup-repo-tools
+        with:
+          cache-tools: "false"
+          bootstrap-tools: "false"
+
+      - name: Run heavy checks
+        run: make ci-heavy
+
+  localstack-e2e:
+    name: LocalStack E2E
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Setup repo tools
+        uses: ./.github/actions/setup-repo-tools
+        with:
+          cache-tools: "false"
+          bootstrap-tools: "false"
+
+      - name: Run LocalStack e2e
+        run: make test-e2e
+
+  core:
+    name: Core Quality
+    runs-on: ubuntu-24.04
+    if: always()
+    needs:
+      - fast
+      - lint
+      - security
+      - heavy
+      - localstack-e2e
+    steps:
+      - name: Validate required CI graph
+        env:
+          FAST: ${{ needs.fast.result }}
+          LINT: ${{ needs.lint.result }}
+          SECURITY: ${{ needs.security.result }}
+          HEAVY: ${{ needs.heavy.result }}
+          LOCALSTACK_E2E: ${{ needs.localstack-e2e.result }}
+        run: |
+          set -euo pipefail
+
+          failures=()
+          while IFS='=' read -r job result; do
+            case "${result}" in
+              success|skipped)
+                ;;
+              *)
+                failures+=("${job}:${result}")
+                ;;
+            esac
+          done <<EOF
+          fast=${FAST}
+          lint=${LINT}
+          security=${SECURITY}
+          heavy=${HEAVY}
+          localstack-e2e=${LOCALSTACK_E2E}
+          EOF
+
+          if [ "${#failures[@]}" -gt 0 ]; then
+            printf 'Required CI graph failures:\n' >&2
+            printf '  - %s\n' "${failures[@]}" >&2
+            exit 1
+          fi
+
+          echo "Required CI graph completed successfully."

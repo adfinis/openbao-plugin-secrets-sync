@@ -1,0 +1,9 @@
+#!/bin/sh
+set -eu
+
+if [ "${OPENBAO_SECRET_SYNC_SKIP_HOOKS:-}" = "1" ]; then
+  exit 0
+fi
+
+printf '%s\n' 'Running pre-push checks...'
+make ci-fast
