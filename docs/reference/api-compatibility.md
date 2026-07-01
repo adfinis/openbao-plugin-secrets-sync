@@ -1,7 +1,5 @@
 # API Compatibility
 
-Status: draft
-Date: 2026-06-30
 
 `openbao-plugin-secrets-sync` exposes a KV-v2-like local source-secret API. The
 goal is operator familiarity, not drop-in replacement compatibility with the

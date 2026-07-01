@@ -1,7 +1,5 @@
 # Observability
 
-Status: draft
-Date: 2026-07-01
 
 The first observability slice instruments the plugin with OpenTelemetry metric
 API calls behind `internal/observability`. It intentionally does not configure

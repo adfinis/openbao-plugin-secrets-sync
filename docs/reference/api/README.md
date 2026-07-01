@@ -1,7 +1,5 @@
-# API Inspection Artifacts
+# API inspection artifacts
 
-Status: draft
-Date: 2026-07-01
 
 This directory contains API review artifacts for the OpenBao Secret Sync
 plugin.

@@ -1,7 +1,5 @@
-# User Guide
+# User guide
 
-Status: draft
-Date: 2026-06-30
 
 This guide shows the current operator workflow for the OpenBao Secret Sync
 plugin. The plugin stores source secrets in its own mount, then synchronizes
@@ -12,18 +10,13 @@ The current implementation supports:
 - KV-v2-like source storage under `data/*` and `metadata/*`;
 - source opt-in through `sources/<path>/enable` or
   `custom_metadata.syncable=true`;
-- destination config for the fake provider, AWS Secrets Manager, Kubernetes
-  Secrets, and GitLab project variables;
-- AWS SDK default auth and AWS assume-role auth;
-- Kubernetes in-cluster auth and kubeconfig auth;
+- destination config for AWS Secrets Manager, Kubernetes Secrets, and GitLab
+  project variables;
 - asynchronous queue processing with manual `queue/drain`;
 - association planning, create, manual sync, disable, enable, and delete;
 - status inspection and explicit remote delete semantics.
 
-Static AWS access keys and session tokens are intentionally not supported yet.
-Use workload identity or `auth_mode=assume_role`.
-
-## Install And Mount
+## Install and mount
 
 Build the plugin binary:
 
@@ -59,76 +52,29 @@ manual drains can write destination state:
 bao write -force secret-sync/config/restore-guard/acknowledge
 ```
 
-## Configure AWS Secrets Manager
+## Choose a provider
 
-Default AWS SDK credential chain:
+Configure at least one destination before you create an association:
 
-```sh
-bao write secret-sync/destinations/aws-sm/prod \
-  region=eu-central-1 \
-  auth_mode=default
-```
+- [AWS Secrets Manager](../providers/aws-secrets-manager.md)
+- [Kubernetes Secrets](../providers/kubernetes-secrets.md)
+- [GitLab project variables](../providers/gitlab-project-variables.md)
 
-Assume-role auth:
+Provider docs include destination config, supported association shape, naming
+constraints, and provider-specific troubleshooting.
 
-```sh
-bao write secret-sync/destinations/aws-sm/prod \
-  region=eu-central-1 \
-  auth_mode=assume_role \
-  role_arn=arn:aws:iam::123456789012:role/openbao-secret-sync \
-  external_id=tenant-or-environment-id \
-  session_name=openbao-secret-sync
-```
-
-Custom endpoints require an explicit endpoint policy. Use `local` for
-LocalStack and other local development endpoints:
-
-```sh
-bao write secret-sync/destinations/aws-sm/local \
-  region=us-east-1 \
-  auth_mode=default \
-  endpoint_url=http://localstack:4566 \
-  endpoint_policy=local
-```
-
-Use `private` only for explicitly approved HTTPS private endpoint deployments:
-
-```sh
-bao write secret-sync/destinations/aws-sm/private \
-  region=eu-central-1 \
-  auth_mode=assume_role \
-  role_arn=arn:aws:iam::123456789012:role/openbao-secret-sync \
-  external_id=tenant-or-environment-id \
-  endpoint_url=https://vpce-1234567890abcdef.secretsmanager.eu-central-1.vpce.amazonaws.com \
-  endpoint_policy=private
-```
-
-Read destination config. Sensitive fields are redacted:
-
-```sh
-bao read secret-sync/destinations/aws-sm/prod
-```
-
-Check destination readiness:
-
-```sh
-bao read secret-sync/destinations/aws-sm/prod/check
-```
-
-Use `destinations/aws-sm/prod/validate` and
-`destinations/aws-sm/prod/health` when you need split configuration and
-runtime diagnostics.
-
-## Constrain Destination Use
+## Constrain destination use
 
 Destinations can restrict which source paths and remote object names may use
 them. These fields are useful when delegated app owners can create
-associations but should only sync their own path and remote prefix:
+associations but should only sync their own path and remote prefix.
 
-```sh
-bao write secret-sync/destinations/aws-sm/prod \
-  region=eu-central-1 \
-  auth_mode=default \
+Add these fields when you configure a destination. This fragment omits
+provider-specific required fields:
+
+```text
+bao write secret-sync/destinations/PROVIDER_TYPE/NAME \
+  PROVIDER_SPECIFIC_FIELDS \
   allowed_source_path_prefixes=apps/team-a,shared/team-a \
   allowed_resolved_name_prefixes=openbao-secret-sync/team-a/
 ```
@@ -138,79 +84,7 @@ bao write secret-sync/destinations/aws-sm/prod \
 `allowed_resolved_name_prefixes` is a literal remote-name prefix. Keep a
 trailing `/` when you want a folder-like boundary.
 
-## Configure Kubernetes Secrets
-
-Use in-cluster auth when OpenBao runs in the target Kubernetes cluster:
-
-```sh
-bao write secret-sync/destinations/k8s/apps \
-  namespace=apps \
-  auth_mode=in_cluster
-```
-
-Use kubeconfig auth for local development or external cluster access:
-
-```sh
-bao write secret-sync/destinations/k8s/apps \
-  namespace=apps \
-  auth_mode=kubeconfig \
-  kubeconfig_path="$HOME/.kube/config" \
-  context=kind-openbao
-```
-
-The Kubernetes provider writes one `Opaque` Secret per `secret-path`
-association. The canonical payload is stored in the Secret `data.payload` key.
-Ownership metadata is stored in labels and annotations. The `resolved_name`
-must be a valid Kubernetes Secret name, so use a DNS-safe name such as `app-db`
-instead of `app/db`.
-
-Check destination readiness:
-
-```sh
-bao read secret-sync/destinations/k8s/apps/check
-```
-
-## Configure GitLab Project Variables
-
-The GitLab provider writes project-level CI/CD variables. Use a token with the
-least project scope needed to manage CI/CD variables:
-
-```sh
-bao write secret-sync/destinations/gitlab/prod \
-  project_id=platform/app \
-  environment_scope=production \
-  token="$GITLAB_TOKEN"
-```
-
-For self-managed GitLab, set `base_url`:
-
-```sh
-bao write secret-sync/destinations/gitlab/prod \
-  base_url=https://gitlab.example.com \
-  project_id=platform/app \
-  environment_scope=production \
-  protected=true \
-  variable_raw=true \
-  token="$GITLAB_TOKEN"
-```
-
-Non-local `http://` GitLab URLs are rejected by default. For a local Docker or
-private test network that intentionally uses HTTP, set
-`allow_insecure_http=true`; production destinations should use HTTPS.
-
-Sensitive fields are redacted and seal-wrapped:
-
-```sh
-bao read secret-sync/destinations/gitlab/prod
-```
-
-Check destination readiness:
-
-```sh
-bao read secret-sync/destinations/gitlab/prod/check
-```
-
-## Write Source Data
+## Write source data
 
 Mark a source path as syncable:
 
@@ -237,7 +111,7 @@ Check source readiness before creating the association:
 bao read secret-sync/sources/app/db/check
 ```
 
-## Plan And Create An Association
+## Plan and create an association
 
 Plan first. Planning reads remote metadata where the provider supports it, but
 does not mutate remote state:
@@ -263,55 +137,13 @@ destination needs a different remote name, payload shape, or delete behavior.
 Create and plan responses include a `defaults` object beside the effective
 values so these defaults are visible in CLI and API output.
 
-For Kubernetes, use the `k8s` destination type and a Kubernetes-safe
-`resolved_name`:
+For provider-specific association examples, supported granularities, and remote
+name constraints, see the [provider guides](../providers/README.md).
 
-```sh
-bao write secret-sync/associations/app/db \
-  destination_type=k8s \
-  destination_name=apps \
-  resolved_name=app-db
-```
-
-`secret-key` granularity creates one destination object per top-level source
-key. It requires `name_template` instead of `resolved_name`, and the template
-must include `{{ key }}`:
-
-```sh
-bao write secret-sync/associations/app/db \
-  destination_type=fake \
-  destination_name=default \
-  name_template='prod/{{ path }}/{{ key }}' \
-  granularity=secret-key
-```
-
-For `json` format, each remote object receives canonical JSON containing only
-its source key. For example, source data with `password` and `username` creates
-objects such as `prod/app/db/password` and `prod/app/db/username`. Source keys
-used with `secret-key` granularity must be non-empty, have no surrounding
-whitespace, and must not contain `/`, `.`, or `..`.
-
-For GitLab project variables, use `secret-key` with `format=raw` so each
-source key becomes one CI/CD variable value. GitLab variable keys may contain
-only letters, digits, and `_`, so choose a compatible template:
-
-```sh
-bao write secret-sync/associations/app/db \
-  destination_type=gitlab \
-  destination_name=prod \
-  name_template='APP_{{ key }}' \
-  granularity=secret-key \
-  format=raw \
-  delete_mode=delete
-```
-
-Current provider support:
-
-- `fake`: `secret-path` and `secret-key`.
-- `aws-sm`: `secret-path` only.
-- `gitlab`: `secret-path` and `secret-key`; `secret-key` with `format=raw` is
-  the recommended shape for CI/CD variables.
-- `k8s`: `secret-path` only.
+Some providers support `secret-key` granularity, which creates one destination
+object per top-level source key. Source keys used with `secret-key`
+granularity must be non-empty, have no surrounding whitespace, and must not
+contain `/`, `.`, or `..`.
 
 The write returns `sync_operation_ids`. Queue processing is asynchronous.
 For one-to-one associations, lifecycle responses also include top-level fields
@@ -319,7 +151,7 @@ such as `association_id`, `destination_ref`, `resolved_name`, `enabled`, and
 `delete_mode` so they are easy to read in the default `bao` table output. The
 nested `association` object remains available for scripts.
 
-## Process And Inspect Queue Work
+## Process and inspect queue work
 
 Drain due operations manually for deterministic testing or controlled catch-up:
 
@@ -345,7 +177,7 @@ bao write -force secret-sync/queue/<operation-id>/retry
 bao write -force secret-sync/queue/<operation-id>/cancel
 ```
 
-## Reconcile Remote State
+## Reconcile remote state
 
 Plan reconcile without changing local status or remote objects:
 
@@ -364,7 +196,7 @@ mutate destination secrets. It reports remote existence, ownership metadata,
 payload hash metadata, source version metadata, and stable failure states where
 the provider supports those fields.
 
-## Check Sync Status
+## Check sync status
 
 Read per-source status:
 
@@ -398,7 +230,7 @@ Use JSON output when copying identifiers into follow-up commands:
 bao read -format=json secret-sync/status/app/db | jq .data
 ```
 
-## Update Or Delete Source Data
+## Update or delete source data
 
 Updating the source path enqueues sync for enabled associations:
 
@@ -420,7 +252,7 @@ bao write secret-sync/queue/drain max_operations=10
 Use `delete_mode=retain` when remote secrets must remain after local source
 deletion. This is the default.
 
-## Association Lifecycle
+## Association lifecycle
 
 Read associations for a source path:
 
@@ -448,7 +280,7 @@ delete with `delete_mode=delete` when owned remote deletion is required.
 ## Troubleshooting
 
 For operational response flows and evidence to capture, see the
-[Operator runbook](operator-runbook.md).
+[Operator runbook](../operations/operator-runbook.md).
 
 If sync does not happen:
 
@@ -458,10 +290,5 @@ If sync does not happen:
 - inspect `status/<path>`;
 - verify the association is enabled and the destination is not disabled;
 - verify remote names are not already owned by another association.
-
-If AWS custom endpoints fail validation:
-
-- use no `endpoint_url` for normal AWS endpoints;
-- use `endpoint_policy=local` only for local development endpoints;
-- use `endpoint_policy=private` only for approved HTTPS private endpoints;
-- do not put credentials or userinfo in endpoint URLs.
+- use the relevant provider guide for provider-specific validation and naming
+  rules.

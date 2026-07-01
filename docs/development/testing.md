@@ -1,7 +1,5 @@
 # Testing And Hardening
 
-Status: draft
-Date: 2026-07-01
 
 This document defines the hardening test lanes for the secret sync plugin. The
 goal is to keep evidence clear: unit tests prove local contracts, model tests

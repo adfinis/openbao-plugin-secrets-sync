@@ -1,7 +1,5 @@
 # Provider Contract
 
-Status: draft
-Date: 2026-06-30
 
 ## Purpose
 

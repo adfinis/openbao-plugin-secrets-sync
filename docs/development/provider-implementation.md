@@ -1,7 +1,5 @@
 # Provider Implementation Guide
 
-Status: draft
-Date: 2026-07-01
 
 This guide explains the practical workflow for adding or reviewing a destination
 provider. The normative interface and safety rules remain in
@@ -191,9 +189,8 @@ prove.
 
 When adding or materially changing a provider, update:
 
-- [User guide](user-guide.md) for operator commands and examples;
-- [Operator runbook](operator-runbook.md) for failure response details;
+- [User guide](../guides/user-guide.md) for operator commands and examples;
+- [Operator runbook](../operations/operator-runbook.md) for failure response details;
 - [Provider contract](provider-contract.md) for provider-specific guarantees;
 - [Testing and hardening](testing.md) for new conformance or e2e lanes;
-- [Implementation plan](implementation-plan.md) for current status and gaps;
 - the relevant e2e workflow README when a local or manual test path exists.

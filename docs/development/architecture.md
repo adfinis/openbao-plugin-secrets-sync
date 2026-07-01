@@ -1,7 +1,5 @@
 # Architecture
 
-Status: draft
-Date: 2026-06-30
 
 ## Plugin Boundary
 
@@ -20,6 +18,20 @@ drop-in implementation of `/sys/sync`.
 The plugin should use `ServeMultiplex` so a single plugin binary can serve
 multiple mounts. All per-mount state remains scoped by backend UUID, mount
 identity, and OpenBao storage.
+
+### Future cross-plugin communication
+
+OpenBao has an early
+[cross-plugin communication RFC](https://gist.github.com/cipherboy/eb2dfa598615ac5c510c534ca383d3ba)
+that proposes hook-driven and internal request paths between plugins. If that
+API becomes stable, Secret Sync could use it as an optional source-ingest path
+from other OpenBao secret engines.
+
+The current architecture must not depend on that RFC. Secret Sync should keep
+owning its source data, outbox, provider interface, reconcile model, and
+confused-deputy controls inside its own mount. A future integration should add
+cross-plugin source adapters at the boundary, and should not use localhost API
+clients, manually managed tokens, or network loopback calls between plugins.
 
 ## Component Model
 

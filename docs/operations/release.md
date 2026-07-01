@@ -1,7 +1,5 @@
 # Release Engineering
 
-Status: draft
-Date: 2026-07-01
 
 This document describes the current release baseline for
 `openbao-plugin-secrets-sync`. The project is still early-stage, so this is a

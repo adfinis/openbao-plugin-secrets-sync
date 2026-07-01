@@ -4,9 +4,6 @@
 for one-way synchronization from OpenBao-managed source data to external
 destinations.
 
-It is intentionally a mount-scoped OpenBao plugin, not a clone of Vault
-Enterprise Secret Sync and not a core `/sys/sync` feature.
-
 ## Status
 
 This repository is under active implementation. APIs, storage records, provider
@@ -24,12 +21,13 @@ Current implementation work includes:
   GitLab project variables;
 - local and self-contained e2e coverage for the main provider paths.
 
-## Start Here
+## Start here
 
-- Use the plugin locally: [docs/user-guide.md](docs/user-guide.md)
-- Operate and troubleshoot it: [docs/operator-runbook.md](docs/operator-runbook.md)
+- Use the plugin locally: [docs/guides/user-guide.md](docs/guides/user-guide.md)
+- Configure a destination provider: [docs/providers/README.md](docs/providers/README.md)
+- Operate and troubleshoot it: [docs/operations/operator-runbook.md](docs/operations/operator-runbook.md)
 - Understand the design: [docs/README.md](docs/README.md)
-- Add or review a provider: [docs/provider-implementation.md](docs/provider-implementation.md)
+- Add or review a provider: [docs/development/provider-implementation.md](docs/development/provider-implementation.md)
 
 ## Development
 

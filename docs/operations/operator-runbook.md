@@ -1,7 +1,5 @@
 # Operator Runbook
 
-Status: draft
-Date: 2026-07-01
 
 This runbook covers current operational workflows for the OpenBao Secret Sync
 plugin. It assumes the plugin is mounted at `secret-sync/`; adjust paths if the
