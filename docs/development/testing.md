@@ -180,12 +180,23 @@ Current destination policy coverage asserts that:
 
 Current queue hardening coverage asserts that:
 
+- concurrent source writes preserve monotonically increasing versions;
+- concurrent association writes reserve a remote name only once;
 - unexpired outbox claims are skipped by manual drain and block operator cancel;
+- dispatcher context cancellation leaves the claimed operation for lease-based
+  recovery instead of marking terminal failure;
+- newer source writes supersede older inactive queued upserts for the same
+  association object;
+- older operations cannot overwrite newer per-object status records;
 - expired outbox claims are reclaimable and cleared after successful dispatch;
 - retryable provider failures clear claim metadata before moving to
   `retry_wait`;
 - periodic processing skips unsafe OpenBao replication states;
 - manual drain returns an operator-visible error on unsafe replication states.
+
+Current source lifecycle coverage asserts that current-version `delete/` and
+`destroy/` use the durable delete workflow, and current-version `undelete/`
+queues replacement upserts when a remote delete has completed.
 
 ## Hardening Order
 

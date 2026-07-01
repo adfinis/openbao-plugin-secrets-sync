@@ -235,15 +235,24 @@ If transactions are not available, use a recoverable state:
 
 1. acquire per-path write lock;
 2. validate CAS and compute next version;
-3. write version record;
-4. write `enqueue_intent/<path>/<version>` with expected associations;
-5. create outbox records;
-6. mark enqueue intent complete;
-7. update metadata current version;
-8. release lock.
+3. compute expected outbox records and stale inactive upserts they supersede;
+4. reserve queue capacity after accounting for superseded work;
+5. write `enqueue_intent/<path>/<version>` with expected associations;
+6. write version record;
+7. cancel superseded queued upsert records;
+8. create outbox records;
+9. mark enqueue intent complete;
+10. update metadata current version;
+11. release lock.
 
 The reconciler must scan incomplete enqueue intents and committed versions to
 recreate missing outbox records. This makes crash recovery explicit.
+
+Source metadata writes, source version mutations, and association lifecycle
+mutations use the same source-path lock. Association writes also lock the
+destination-name reservation identity so concurrent association creation cannot
+reserve the same remote object twice. Queue capacity checks and outbox
+replacement writes are serialized across enqueue paths.
 
 ## Operation State Machine
 
@@ -274,12 +283,14 @@ without exposing source payload data. The path exists for deterministic tests,
 operator-controlled catch-up, and break-glass workflows; normal progress should
 come from the periodic function.
 
-Source delete uses the same durable outbox model. Deleting the latest local
-version cancels queued upsert work for that version. Associations with
-`delete_mode=delete` enqueue provider delete operations; other delete modes
-leave the remote object untouched. Delete enqueue intent recovery is
-type-aware: upsert intents recover only while the source version is live,
-delete intents recover only after the source version is deleted.
+Source delete uses the same durable outbox model. Deleting, soft-deleting, or
+destroying the current local version cancels queued upsert work for that
+version. Associations with `delete_mode=delete` enqueue provider delete
+operations; other delete modes leave the remote object untouched. Undeleting
+the current version enqueues replacement upserts for enabled associations.
+Delete enqueue intent recovery is type-aware: upsert intents recover only while
+the source version is live, delete intents recover only after the source version
+is deleted.
 
 Claims include owner, expiry, and attempt number. In-memory locks are only an
 optimization. Correctness comes from durable claims, idempotency keys, and
@@ -296,8 +307,11 @@ Allowed strategies:
 - allow newer versions to supersede older pending operations before dispatch;
 - provider compares desired source version metadata before upserting.
 
-The MVP should prefer superseding stale pending operations before dispatch and
-provider-side version checks where supported.
+The current implementation supersedes older inactive pending upserts before
+dispatch and keeps provider-side version checks where supported. Active claims
+are allowed to finish or expire because provider mutation may already be in
+flight; status writes are guarded by source version so older operations cannot
+overwrite newer object status.
 
 ## Queue Capacity And Backpressure
 

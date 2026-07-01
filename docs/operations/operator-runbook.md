@@ -106,6 +106,18 @@ bao write secret-sync/associations/app/db/plan \
 Association create and plan responses also include a `defaults` object so the
 implicit shape is visible in CLI and API output.
 
+When updating an existing association, omitted optional fields keep the stored
+association values when the source path and destination identify a single
+existing association. This prevents partial updates from changing granularity,
+name template, delete mode, or enabled state by accident. Use the read output
+above when you need to make the update shape explicit.
+
+Current-version source lifecycle endpoints participate in sync. `DELETE
+data/<path>`, `delete/<path>`, and `destroy/<path>` cancel stale queued upserts
+and enqueue remote deletes for associations with `delete_mode=delete`.
+`undelete/<path>` on the current version queues replacement upserts for enabled
+associations.
+
 Read existing associations:
 
 ```sh

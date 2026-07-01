@@ -137,6 +137,11 @@ destination needs a different remote name, payload shape, or delete behavior.
 Create and plan responses include a `defaults` object beside the effective
 values so these defaults are visible in CLI and API output.
 
+When updating an existing association, omitted optional fields keep the stored
+values if the source path and destination match exactly one association. A
+partial update such as changing only `delete_mode` will not change granularity,
+name template, format, or enabled state.
+
 For provider-specific association examples, supported granularities, and remote
 name constraints, see the [provider guides](../providers/README.md).
 
@@ -168,6 +173,11 @@ bao read secret-sync/queue
 Queue summaries include pending, retry-wait, terminal, and canceled counters.
 `oldest_age_seconds` reports the age of the oldest pending or retry-wait
 operation.
+
+Newer writes supersede older inactive queued upserts for the same association
+object. Current-version deletes and destroys cancel queued upserts and queue
+remote deletes when the association uses `delete_mode=delete`; undeleting the
+current version queues replacement upserts for enabled associations.
 
 Inspect, retry, or cancel one operation:
 

@@ -180,8 +180,10 @@ Current delete behavior:
 - association `delete_mode` defaults to `retain`;
 - remote delete is enqueued only for `delete_mode=delete`;
 - provider delete must prove ownership or return an `ownership` error;
-- local source delete cancels queued upserts for the deleted version before any
-  remote delete is processed.
+- deleting, soft-deleting, or destroying the current local source version
+  cancels queued upserts for that version before any remote delete is processed;
+- undeleting the current local source version queues replacement upserts for
+  enabled associations.
 
 ## Audit Model
 
