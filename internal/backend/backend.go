@@ -86,9 +86,24 @@ func (b *secretSyncBackend) invalidate() {
 	defer b.cacheMu.Unlock()
 }
 
+func (b *secretSyncBackend) HandleRequest(ctx context.Context, req *logical.Request) (*logical.Response, error) {
+	if req != nil && req.Storage != nil && req.Operation != logical.HelpOperation {
+		if _, err := ensureRuntimeState(ctx, req.Storage); err != nil {
+			if isStorageSchemaCompatibilityError(err) {
+				return logical.ErrorResponse(err.Error()), nil
+			}
+			return nil, err
+		}
+	}
+	return b.Backend.HandleRequest(ctx, req)
+}
+
 func (b *secretSyncBackend) periodic(ctx context.Context, req *logical.Request) error {
 	if req == nil || req.Storage == nil {
 		return nil
+	}
+	if _, err := ensureRuntimeState(ctx, req.Storage); err != nil {
+		return err
 	}
 	cfg, err := readGlobalConfig(ctx, req.Storage)
 	if err != nil {

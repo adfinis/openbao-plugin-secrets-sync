@@ -61,6 +61,10 @@ func (b *secretSyncBackend) pathConfigRead(
 	req *logical.Request,
 	_ *framework.FieldData,
 ) (*logical.Response, error) {
+	state, err := ensureRuntimeState(ctx, req.Storage)
+	if err != nil {
+		return nil, err
+	}
 	cfg, err := readGlobalConfig(ctx, req.Storage)
 	if err != nil {
 		return nil, err
@@ -70,6 +74,10 @@ func (b *secretSyncBackend) pathConfigRead(
 		responseField("disabled", cfg.Disabled),
 		responseField("restore_guard", cfg.RestoreGuard),
 		responseField("restore_guard_acknowledged_time", cfg.RestoreGuardAcknowledgedTime),
+		responseField("restore_epoch", state.RestoreEpoch.Epoch),
+		responseField("plugin_instance_id", state.PluginInstance.ID),
+		responseField("storage_schema_version", state.Schema.Version),
+		responseField("storage_schema_min_compatible_version", state.Schema.MinCompatibleVersion),
 		responseField("queue_capacity", cfg.QueueCapacity),
 	)}, nil
 }
@@ -87,11 +95,18 @@ func (b *secretSyncBackend) pathConfigWrite(
 		cfg.Disabled = value.(bool)
 	}
 	if value, ok := data.GetOk("restore_guard"); ok {
+		previousRestoreGuard := cfg.RestoreGuard
 		cfg.RestoreGuard = value.(bool)
 		if cfg.RestoreGuard {
 			cfg.RestoreGuardAcknowledgedTime = ""
 		} else {
-			cfg.RestoreGuardAcknowledgedTime = nowUTC().Format(timeFormatRFC3339)
+			now := nowUTC().Format(timeFormatRFC3339)
+			cfg.RestoreGuardAcknowledgedTime = now
+			if previousRestoreGuard {
+				if _, err := rotateRestoreEpoch(ctx, req.Storage, now); err != nil {
+					return nil, err
+				}
+			}
 		}
 	}
 	if value, ok := data.GetOk("queue_capacity"); ok {
@@ -117,11 +132,21 @@ func (b *secretSyncBackend) pathConfigRestoreGuardAcknowledgeWrite(
 	req *logical.Request,
 	_ *framework.FieldData,
 ) (*logical.Response, error) {
+	state, err := ensureRuntimeState(ctx, req.Storage)
+	if err != nil {
+		return nil, err
+	}
 	cfg, err := readGlobalConfig(ctx, req.Storage)
 	if err != nil {
 		return nil, err
 	}
 	now := nowUTC().Format(timeFormatRFC3339)
+	if cfg.RestoreGuard {
+		state.RestoreEpoch, err = rotateRestoreEpoch(ctx, req.Storage, now)
+		if err != nil {
+			return nil, err
+		}
+	}
 	cfg.RestoreGuard = false
 	cfg.RestoreGuardAcknowledgedTime = now
 	cfg.UpdatedTime = now
@@ -133,6 +158,10 @@ func (b *secretSyncBackend) pathConfigRestoreGuardAcknowledgeWrite(
 		responseField("disabled", cfg.Disabled),
 		responseField("restore_guard", cfg.RestoreGuard),
 		responseField("restore_guard_acknowledged_time", cfg.RestoreGuardAcknowledgedTime),
+		responseField("restore_epoch", state.RestoreEpoch.Epoch),
+		responseField("plugin_instance_id", state.PluginInstance.ID),
+		responseField("storage_schema_version", state.Schema.Version),
+		responseField("storage_schema_min_compatible_version", state.Schema.MinCompatibleVersion),
 		responseField("queue_capacity", cfg.QueueCapacity),
 	)}, nil
 }

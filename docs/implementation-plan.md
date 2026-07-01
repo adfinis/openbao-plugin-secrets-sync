@@ -29,6 +29,9 @@ Implemented backend slices now include:
 - manual per-path reconcile plan/apply using provider read-state;
 - automatic retry for `rate_limit` and `unavailable` provider errors with a
   bounded retry budget;
+- persisted storage schema, plugin instance identity, and restore epoch records
+  with request-time schema compatibility checks and restore-epoch rotation on
+  restore guard acknowledgement;
 - OpenTelemetry metric API instrumentation for queue depth, dispatch,
   provider requests, reconcile results, and restore guard state;
 - status records with payload hashes and no secret payload disclosure;
@@ -289,7 +292,10 @@ Tasks:
 - Add rate limiting.
 - Add exporter/runtime integration once the OpenBao plugin telemetry boundary
   is clear.
-- Expand structured redaction tests.
+- Expand structured redaction tests beyond API responses into logs, metrics,
+  and provider diagnostics.
+- Include plugin instance identity and restore epoch in provider ownership
+  metadata where provider metadata surfaces allow it.
 - Add fault injection tests for transient destination failure.
 - Add e2e tests for plugin restart and OpenBao restart.
 - Add restore and clone simulation tests.

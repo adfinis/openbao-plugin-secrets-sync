@@ -86,16 +86,20 @@ locks/<lock-name>
 
 ### Schema And Identity
 
-`schema/version` records the storage schema understood by the plugin binary. If
-an incompatible schema is detected, the plugin must fail closed with a clear
-operator error.
+`schema/version` records the storage schema understood by the plugin binary. The
+backend initializes this record on first storage-backed request. If the stored
+schema requires a newer incompatible plugin, request handling and periodic
+processing fail closed with a clear operator error before source or remote
+mutation.
 
-`identity/plugin-instance` is generated once per mount unless explicitly set by
-an operator. It should be included in ownership metadata where providers allow
-it. This helps distinguish two OpenBao mounts using the same remote destination.
+`identity/plugin-instance` is generated once per mount and exposed through
+`config` reads. It should be included in ownership metadata where providers
+allow it. This helps distinguish two OpenBao mounts using the same remote
+destination.
 
-`identity/restore-epoch` changes when an operator acknowledges a restore or
-clone event. Remote ownership metadata should include the epoch when supported.
+`identity/restore-epoch` is generated once per mount and rotates when an active
+restore guard is acknowledged. Remote ownership metadata should include the
+epoch when supported.
 
 ### Secret Version Record
 

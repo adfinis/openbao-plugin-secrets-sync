@@ -203,7 +203,8 @@ The plugin needs a safe mode:
 - `reconcile/<path>/plan` and `reconcile/<path>` before pushing restored data
   to destinations;
 - explicit operator acknowledgement to resume sync;
-- restore epoch included in future ownership metadata where possible.
+- persisted restore epoch rotated on acknowledgement and included in future
+  ownership metadata where possible.
 
 Operators should be able to choose how to handle existing outbox operations
 after restore:

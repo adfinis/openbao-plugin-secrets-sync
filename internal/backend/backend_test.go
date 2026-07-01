@@ -47,6 +47,18 @@ func TestConfigDefaults(t *testing.T) {
 	if got := resp.Data["restore_guard_acknowledged_time"]; got != "" {
 		t.Fatalf("restore_guard_acknowledged_time = %v, want empty", got)
 	}
+	if got := resp.Data["storage_schema_version"]; got != currentStorageSchema {
+		t.Fatalf("storage_schema_version = %v, want %d", got, currentStorageSchema)
+	}
+	if got := resp.Data["storage_schema_min_compatible_version"]; got != minSupportedStorageSchema {
+		t.Fatalf("storage_schema_min_compatible_version = %v, want %d", got, minSupportedStorageSchema)
+	}
+	if got, ok := resp.Data["plugin_instance_id"].(string); !ok || !strings.HasPrefix(got, "inst-") {
+		t.Fatalf("plugin_instance_id = %v, want inst-*", resp.Data["plugin_instance_id"])
+	}
+	if got, ok := resp.Data["restore_epoch"].(string); !ok || !strings.HasPrefix(got, "epoch-") {
+		t.Fatalf("restore_epoch = %v, want epoch-*", resp.Data["restore_epoch"])
+	}
 }
 
 func TestConfigWriteMergesDefaultsAndValidatesQueueCapacity(t *testing.T) {
@@ -81,6 +93,10 @@ func TestConfigRestoreGuardAcknowledge(t *testing.T) {
 	b := Backend(&logical.BackendConfig{})
 	storage := &logical.InmemStorage{}
 
+	initialResp := handleRequest(t, b, storage, logical.ReadOperation, configPath, nil)
+	assertNoErrorResponse(t, initialResp)
+	initialEpoch := initialResp.Data["restore_epoch"].(string)
+
 	ackResp := handleRequest(t, b, storage, logical.UpdateOperation, "config/restore-guard/acknowledge", nil)
 	assertNoErrorResponse(t, ackResp)
 	if got := ackResp.Data["restore_guard"]; got != false {
@@ -88,6 +104,10 @@ func TestConfigRestoreGuardAcknowledge(t *testing.T) {
 	}
 	if got := ackResp.Data["restore_guard_acknowledged_time"]; got == "" {
 		t.Fatal("restore_guard_acknowledged_time must be set")
+	}
+	ackEpoch := ackResp.Data["restore_epoch"].(string)
+	if ackEpoch == "" || ackEpoch == initialEpoch {
+		t.Fatalf("restore_epoch after acknowledgement = %q, want new epoch distinct from %q", ackEpoch, initialEpoch)
 	}
 
 	readResp := handleRequest(t, b, storage, logical.ReadOperation, configPath, nil)
@@ -97,6 +117,15 @@ func TestConfigRestoreGuardAcknowledge(t *testing.T) {
 	}
 	if got := readResp.Data["restore_guard_acknowledged_time"]; got != ackResp.Data["restore_guard_acknowledged_time"] {
 		t.Fatalf("read acknowledged time = %v, want %v", got, ackResp.Data["restore_guard_acknowledged_time"])
+	}
+	if got := readResp.Data["restore_epoch"]; got != ackEpoch {
+		t.Fatalf("read restore_epoch = %v, want %s", got, ackEpoch)
+	}
+
+	repeatedAckResp := handleRequest(t, b, storage, logical.UpdateOperation, "config/restore-guard/acknowledge", nil)
+	assertNoErrorResponse(t, repeatedAckResp)
+	if got := repeatedAckResp.Data["restore_epoch"]; got != ackEpoch {
+		t.Fatalf("repeated acknowledgement restore_epoch = %v, want unchanged %s", got, ackEpoch)
 	}
 
 	rearmResp := handleRequest(t, b, storage, logical.UpdateOperation, configPath, map[string]interface{}{
@@ -112,6 +141,48 @@ func TestConfigRestoreGuardAcknowledge(t *testing.T) {
 	}
 	if got := readResp.Data["restore_guard_acknowledged_time"]; got != "" {
 		t.Fatalf("rearmed acknowledged time = %v, want empty", got)
+	}
+}
+
+func TestIncompatibleStorageSchemaFailsClosed(t *testing.T) {
+	b := Backend(&logical.BackendConfig{})
+	storage := &logical.InmemStorage{}
+	entry, err := logical.StorageEntryJSON(storageSchemaKey, storageSchemaRecord{
+		Version:              currentStorageSchema + 1,
+		MinCompatibleVersion: currentStorageSchema + 1,
+		CreatedTime:          "2026-07-01T00:00:00Z",
+		UpdatedTime:          "2026-07-01T00:00:00Z",
+	})
+	if err != nil {
+		t.Fatalf("encode schema: %v", err)
+	}
+	if err := storage.Put(context.Background(), entry); err != nil {
+		t.Fatalf("write schema: %v", err)
+	}
+
+	resp, err := b.HandleRequest(context.Background(), &logical.Request{
+		Operation: logical.UpdateOperation,
+		Path:      "data/app/db",
+		Storage:   storage,
+		Data: map[string]interface{}{
+			"data": map[string]interface{}{"password": "secret"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("write with incompatible schema returned backend error: %v", err)
+	}
+	if resp == nil || !resp.IsError() {
+		t.Fatalf("write with incompatible schema response = %#v, want logical error", resp)
+	}
+	if !strings.Contains(resp.Error().Error(), "incompatible storage schema") {
+		t.Fatalf("schema error = %q, want incompatible storage schema", resp.Error().Error())
+	}
+	entry, err = storage.Get(context.Background(), metadataStorageKey("app/db"))
+	if err != nil {
+		t.Fatalf("read metadata: %v", err)
+	}
+	if entry != nil {
+		t.Fatal("source metadata must not be written when schema is incompatible")
 	}
 }
 

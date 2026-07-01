@@ -11,6 +11,9 @@ import (
 )
 
 const (
+	storageSchemaKey           = "schema/version"
+	pluginInstanceKey          = "identity/plugin-instance"
+	restoreEpochKey            = "identity/restore-epoch"
 	metadataStoragePrefix      = "metadata/"
 	versionStoragePrefix       = "data/"
 	enqueueIntentStoragePrefix = "enqueue_intent/"
@@ -41,9 +44,29 @@ const (
 	deleteModeRetain           = "retain"
 	deleteModeDelete           = "delete"
 	deleteModeOrphan           = "orphan"
+	currentStorageSchema       = 1
+	minSupportedStorageSchema  = 1
 )
 
 type secretPayload map[string]interface{} //nolint:forbidigo // OpenBao SDK TypeMap uses map[string]interface{}.
+
+type storageSchemaRecord struct {
+	Version              int    `json:"version"`
+	MinCompatibleVersion int    `json:"min_compatible_version"`
+	CreatedTime          string `json:"created_time"`
+	UpdatedTime          string `json:"updated_time"`
+}
+
+type pluginInstanceRecord struct {
+	ID          string `json:"id"`
+	CreatedTime string `json:"created_time"`
+}
+
+type restoreEpochRecord struct {
+	Epoch       string `json:"epoch"`
+	CreatedTime string `json:"created_time"`
+	UpdatedTime string `json:"updated_time"`
+}
 
 type versionRecord struct {
 	Version      int           `json:"version"`
