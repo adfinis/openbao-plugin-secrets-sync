@@ -120,6 +120,14 @@ plugin behavior. Examples:
 - non-local HTTP destinations require explicit insecure opt-in;
 - provider errors map to stable classes without leaking secret values.
 
+Current backend security-boundary coverage asserts that:
+
+- AWS and GitLab sensitive destination fields are stored separately from public
+  destination metadata and redacted on read;
+- source payload canaries do not appear in association plan/create responses,
+  queue summaries, queue operation reads, drain responses, status responses,
+  or reconcile plan/apply responses.
+
 ## Hardening Order
 
 Hardening should proceed in this order:
