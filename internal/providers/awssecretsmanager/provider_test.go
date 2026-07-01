@@ -2,6 +2,9 @@ package awssecretsmanager
 
 import (
 	"context"
+	"errors"
+	"net/http"
+	"net/netip"
 	"strconv"
 	"testing"
 	"time"
@@ -205,6 +208,84 @@ func TestValidateDestinationConfig(t *testing.T) {
 			}
 			assertProviderErrorClass(t, err, tt.errorClass)
 		})
+	}
+}
+
+func TestValidatePrivateEndpointResolution(t *testing.T) {
+	tests := []struct {
+		name       string
+		options    awsDestinationOptions
+		resolve    endpointResolver
+		errorClass providers.ErrorClass
+	}{
+		{
+			name: "private hostname resolves to routable address",
+			options: awsDestinationOptions{
+				endpointURL:    "https://vpce-1234567890abcdef.secretsmanager.eu-central-1.vpce.amazonaws.com",
+				endpointPolicy: EndpointPolicyPrivate,
+			},
+			resolve: func(context.Context, string, string) ([]netip.Addr, error) {
+				return []netip.Addr{netip.MustParseAddr("10.0.0.5")}, nil
+			},
+		},
+		{
+			name: "private hostname rejects loopback resolution",
+			options: awsDestinationOptions{
+				endpointURL:    "https://vpce-1234567890abcdef.secretsmanager.eu-central-1.vpce.amazonaws.com",
+				endpointPolicy: EndpointPolicyPrivate,
+			},
+			resolve: func(context.Context, string, string) ([]netip.Addr, error) {
+				return []netip.Addr{netip.MustParseAddr("127.0.0.1")}, nil
+			},
+			errorClass: providers.ErrorClassValidation,
+		},
+		{
+			name: "private hostname DNS failure is unavailable",
+			options: awsDestinationOptions{
+				endpointURL:    "https://vpce-1234567890abcdef.secretsmanager.eu-central-1.vpce.amazonaws.com",
+				endpointPolicy: EndpointPolicyPrivate,
+			},
+			resolve: func(context.Context, string, string) ([]netip.Addr, error) {
+				return nil, errors.New("lookup failed")
+			},
+			errorClass: providers.ErrorClassUnavailable,
+		},
+		{
+			name: "local policy skips DNS guard",
+			options: awsDestinationOptions{
+				endpointURL:    testEndpointURL,
+				endpointPolicy: EndpointPolicyLocal,
+			},
+			resolve: func(context.Context, string, string) ([]netip.Addr, error) {
+				return []netip.Addr{netip.MustParseAddr("127.0.0.1")}, nil
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := validateEndpointResolution(context.Background(), tt.options, tt.resolve)
+			if tt.errorClass == "" {
+				if err != nil {
+					t.Fatalf("validate endpoint resolution: %v", err)
+				}
+				return
+			}
+			assertProviderErrorClass(t, err, tt.errorClass)
+		})
+	}
+}
+
+func TestDefaultAWSHTTPClientIsBoundedAndProxyFree(t *testing.T) {
+	client := defaultAWSHTTPClient()
+	if client.Timeout != defaultHTTPTimeout {
+		t.Fatalf("timeout = %s, want %s", client.Timeout, defaultHTTPTimeout)
+	}
+	transport, ok := client.Transport.(*http.Transport)
+	if !ok {
+		t.Fatalf("transport = %T, want *http.Transport", client.Transport)
+	}
+	if transport.Proxy != nil {
+		t.Fatal("default AWS HTTP client must not use ambient proxy configuration")
 	}
 }
 

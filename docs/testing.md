@@ -116,8 +116,16 @@ plugin behavior. Examples:
 
 - no secret values in status, plan, logs, or metrics;
 - sensitive destination fields stored separately and redacted on read;
+- destination policy constraints reject disallowed source path prefixes and
+  resolved remote-name prefixes before provider mutation;
 - custom endpoints require explicit policy;
+- AWS private custom endpoints reject unsafe DNS answers at client creation
+  time;
+- AWS and GitLab provider-owned HTTP clients use bounded timeouts and do not
+  inherit ambient proxy configuration;
 - non-local HTTP destinations require explicit insecure opt-in;
+- GitLab provider HTTP client tests cover timeout configuration, redirect
+  refusal, and bounded response reads;
 - provider errors map to stable classes without leaking secret values.
 
 Current backend security-boundary coverage asserts that:
@@ -127,6 +135,14 @@ Current backend security-boundary coverage asserts that:
 - source payload canaries do not appear in association plan/create responses,
   queue summaries, queue operation reads, drain responses, status responses,
   or reconcile plan/apply responses.
+
+Current destination policy coverage asserts that:
+
+- destination prefix constraints are normalized and visible on read;
+- association create and plan reject disallowed source paths and resolved
+  remote names;
+- queued dispatch rechecks destination policy and blocks remote mutation if a
+  destination policy is tightened after enqueue.
 
 Current queue hardening coverage asserts that:
 

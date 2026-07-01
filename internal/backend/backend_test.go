@@ -218,6 +218,39 @@ func TestDestinationLifecycle(t *testing.T) {
 	}
 }
 
+func TestDestinationPolicyPrefixesNormalizeAndRead(t *testing.T) {
+	b := Backend(&logical.BackendConfig{})
+	storage := &logical.InmemStorage{}
+
+	writeResp := handleRequest(
+		t,
+		b,
+		storage,
+		logical.UpdateOperation,
+		"destinations/fake/restricted",
+		map[string]interface{}{
+			destinationAllowedSourcePathPrefixesField:   "team/api, app ,team/api",
+			destinationAllowedResolvedNamePrefixesField: "prod/app/, team/api",
+		},
+	)
+	if writeResp != nil && writeResp.IsError() {
+		t.Fatalf("unexpected destination write error: %v", writeResp.Error())
+	}
+
+	readResp := handleRequest(t, b, storage, logical.ReadOperation, "destinations/fake/restricted", nil)
+	assertNoErrorResponse(t, readResp)
+	sourcePrefixes, ok := readResp.Data["allowed_source_path_prefixes"].([]string)
+	if !ok {
+		t.Fatalf("allowed_source_path_prefixes = %T, want []string", readResp.Data["allowed_source_path_prefixes"])
+	}
+	assertStringSlice(t, sourcePrefixes, []string{"app", "team/api"})
+	namePrefixes, ok := readResp.Data["allowed_resolved_name_prefixes"].([]string)
+	if !ok {
+		t.Fatalf("allowed_resolved_name_prefixes = %T, want []string", readResp.Data["allowed_resolved_name_prefixes"])
+	}
+	assertStringSlice(t, namePrefixes, []string{"prod/app/", "team/api"})
+}
+
 func TestAWSDestinationConfigLifecycle(t *testing.T) {
 	b := Backend(&logical.BackendConfig{})
 	storage := &logical.InmemStorage{}
@@ -1361,6 +1394,167 @@ func TestAssociationRequiresSyncableMetadata(t *testing.T) {
 		"format":           defaultAssociationFormat,
 	})
 	assertNoErrorResponse(t, allowedResp)
+}
+
+func TestAssociationDestinationPolicyConstraints(t *testing.T) {
+	b := Backend(&logical.BackendConfig{})
+	storage := &logical.InmemStorage{}
+
+	writeAppDBSecret(t, b, storage, "initial")
+	markAppDBSyncable(t, b, storage)
+	writeResp := handleRequest(
+		t,
+		b,
+		storage,
+		logical.UpdateOperation,
+		"destinations/fake/restricted",
+		map[string]interface{}{
+			destinationAllowedSourcePathPrefixesField:   "team/",
+			destinationAllowedResolvedNamePrefixesField: "prod/app/",
+		},
+	)
+	if writeResp != nil && writeResp.IsError() {
+		t.Fatalf("unexpected destination write error: %v", writeResp.Error())
+	}
+
+	sourceBlockedResp := handleRequest(
+		t,
+		b,
+		storage,
+		logical.UpdateOperation,
+		"associations/app/db",
+		map[string]interface{}{
+			"destination_type": providerTypeFake,
+			"destination_name": "restricted",
+			"resolved_name":    "prod/app/db",
+			"granularity":      syncObjectIDSecretPath,
+			"format":           defaultAssociationFormat,
+		},
+	)
+	if sourceBlockedResp == nil || !sourceBlockedResp.IsError() {
+		t.Fatalf("source policy response = %#v, want error", sourceBlockedResp)
+	}
+	if !strings.Contains(sourceBlockedResp.Error().Error(), "does not allow source path") {
+		t.Fatalf("source policy error = %q", sourceBlockedResp.Error().Error())
+	}
+
+	updateResp := handleRequest(
+		t,
+		b,
+		storage,
+		logical.UpdateOperation,
+		"destinations/fake/restricted",
+		map[string]interface{}{
+			destinationAllowedSourcePathPrefixesField:   "app",
+			destinationAllowedResolvedNamePrefixesField: "prod/app/",
+		},
+	)
+	if updateResp != nil && updateResp.IsError() {
+		t.Fatalf("unexpected destination update error: %v", updateResp.Error())
+	}
+	nameBlockedPlan := handleRequest(
+		t,
+		b,
+		storage,
+		logical.UpdateOperation,
+		"associations/app/db/plan",
+		map[string]interface{}{
+			"destination_type": providerTypeFake,
+			"destination_name": "restricted",
+			"resolved_name":    "prod/other/db",
+			"granularity":      syncObjectIDSecretPath,
+			"format":           defaultAssociationFormat,
+		},
+	)
+	assertNoErrorResponse(t, nameBlockedPlan)
+	if got := nameBlockedPlan.Data["source_eligible"]; got != true {
+		t.Fatalf("name policy source_eligible = %v, want true", got)
+	}
+	if got := nameBlockedPlan.Data["action"]; got != providers.PlanActionBlocked {
+		t.Fatalf("name policy action = %v, want %s", got, providers.PlanActionBlocked)
+	}
+	if got := nameBlockedPlan.Data["error_class"]; got != string(providers.ErrorClassValidation) {
+		t.Fatalf("name policy error_class = %v, want %s", got, providers.ErrorClassValidation)
+	}
+	if !strings.Contains(nameBlockedPlan.Data["message"].(string), "does not allow resolved name") {
+		t.Fatalf("name policy message = %q", nameBlockedPlan.Data["message"])
+	}
+
+	nameBlockedWrite := handleRequest(
+		t,
+		b,
+		storage,
+		logical.UpdateOperation,
+		"associations/app/db",
+		map[string]interface{}{
+			"destination_type": providerTypeFake,
+			"destination_name": "restricted",
+			"resolved_name":    "prod/other/db",
+			"granularity":      syncObjectIDSecretPath,
+			"format":           defaultAssociationFormat,
+		},
+	)
+	if nameBlockedWrite == nil || !nameBlockedWrite.IsError() {
+		t.Fatalf("name policy write response = %#v, want error", nameBlockedWrite)
+	}
+
+	allowedResp := handleRequest(t, b, storage, logical.UpdateOperation, "associations/app/db", map[string]interface{}{
+		"destination_type": providerTypeFake,
+		"destination_name": "restricted",
+		"resolved_name":    "prod/app/db",
+		"granularity":      syncObjectIDSecretPath,
+		"format":           defaultAssociationFormat,
+	})
+	assertNoErrorResponse(t, allowedResp)
+}
+
+func TestDispatchHonorsTightenedDestinationPolicy(t *testing.T) {
+	b := Backend(&logical.BackendConfig{})
+	storage := &logical.InmemStorage{}
+
+	writeAppDBSecret(t, b, storage, "initial")
+	markAppDBSyncable(t, b, storage)
+	writeResp := handleRequest(
+		t,
+		b,
+		storage,
+		logical.UpdateOperation,
+		"destinations/fake/restricted",
+		map[string]interface{}{
+			destinationAllowedSourcePathPrefixesField:   "app",
+			destinationAllowedResolvedNamePrefixesField: "prod/app/",
+		},
+	)
+	if writeResp != nil && writeResp.IsError() {
+		t.Fatalf("unexpected destination write error: %v", writeResp.Error())
+	}
+	associationResp := handleRequest(t, b, storage, logical.UpdateOperation, "associations/app/db", map[string]interface{}{
+		"destination_type": providerTypeFake,
+		"destination_name": "restricted",
+		"resolved_name":    "prod/app/db",
+		"granularity":      syncObjectIDSecretPath,
+		"format":           defaultAssociationFormat,
+	})
+	operationID := operationIDsFromResponse(t, associationResp)[0]
+
+	tightenResp := handleRequest(
+		t,
+		b,
+		storage,
+		logical.UpdateOperation,
+		"destinations/fake/restricted",
+		map[string]interface{}{
+			destinationAllowedSourcePathPrefixesField:   "app",
+			destinationAllowedResolvedNamePrefixesField: "other/",
+		},
+	)
+	if tightenResp != nil && tightenResp.IsError() {
+		t.Fatalf("unexpected destination tighten error: %v", tightenResp.Error())
+	}
+	runPeriodicAllowed(t, b, storage, "periodic after destination policy tightened")
+	assertOutboxOperation(t, storage, operationID, 1, outboxStateFailedTerminal)
+	assertStatusObjectErrorClass(t, b, storage, providers.ErrorClassValidation)
+	assertStatusObjectState(t, b, storage, domain.SyncStateValidationError)
 }
 
 func TestAssociationPlan(t *testing.T) {

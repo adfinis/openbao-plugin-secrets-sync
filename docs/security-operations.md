@@ -62,7 +62,8 @@ Source eligibility can be proven through:
 Destination authority can be proven through:
 
 - destination path policy;
-- mount-level destination allowlist;
+- destination-level source path prefix constraints;
+- destination-level resolved remote-name prefix constraints;
 - association-level provider constraints;
 - optional required metadata such as team, environment, or owner.
 
@@ -74,19 +75,26 @@ dispatch, and must not expose source payload data in responses.
 
 ## Confused-Deputy Controls
 
-The plugin should support:
+Current controls:
 
 - `custom_metadata.syncable=true` before enabled association activation;
-- destination allowlist per mount;
-- maximum destinations per secret;
-- maximum secret size;
-- forbidden path patterns;
+- destination-level allowed source path prefixes;
+- destination-level allowed resolved remote-name prefixes;
 - required ownership metadata;
 - plan output that clearly shows remote object names and destination scope.
 
+Still planned:
+
+- maximum destinations per secret;
+- maximum secret size;
+- broader forbidden path patterns beyond normalized OpenBao source path
+  validation.
+
 Delegated app owners should not be able to use a broad platform destination to
-write arbitrary remote names. Name templates and allowed prefixes should be
-constrained per destination or per association policy.
+write arbitrary remote names. Destination records can constrain source paths and
+resolved remote-name prefixes. These constraints are checked during association
+plan, association activation, manual sync, enable, and queued dispatch, so a
+destination policy tightened after enqueue still blocks remote mutation.
 
 ## Source Secret Protection
 
@@ -129,15 +137,18 @@ validated:
 - `endpoint_policy=private` requires `https` and rejects direct loopback,
   link-local, multicast, and unspecified addresses;
 - default AWS endpoints remain preferred for production;
-- DNS resolution still needs to be checked at connection time, not only at
-  config time;
+- AWS private custom endpoints are rechecked at client creation time and DNS
+  answers resolving to loopback, link-local, multicast, or unspecified
+  addresses are rejected;
 - optional explicit allowlists are still required for hardened private endpoint
   deployments;
-- redirects disabled or constrained;
-- proxy behavior explicit in destination config.
+- AWS and GitLab provider-owned HTTP clients do not inherit ambient proxy
+  configuration;
+- GitLab provider redirects are disabled by the default provider HTTP client.
 
 Provider clients should use context timeouts and must not allow unbounded
-response bodies.
+response bodies. AWS and GitLab providers use bounded default HTTP clients;
+GitLab provider requests also use bounded response-body reads.
 
 ## Ownership And Collision Controls
 

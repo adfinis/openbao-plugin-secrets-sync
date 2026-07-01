@@ -342,6 +342,73 @@ func TestHTTPClientProjectVariableRequests(t *testing.T) {
 	}
 }
 
+func TestDefaultClientFactoryUsesHardenedHTTPClient(t *testing.T) {
+	client, err := defaultClientFactory(context.Background(), defaultDestinationConfig())
+	if err != nil {
+		t.Fatalf("default client factory: %v", err)
+	}
+	httpClient, ok := client.(httpProjectVariableClient)
+	if !ok {
+		t.Fatalf("client type = %T, want httpProjectVariableClient", client)
+	}
+	if httpClient.client == nil {
+		t.Fatal("http client must be set")
+	}
+	if httpClient.client.Timeout != defaultHTTPTimeout {
+		t.Fatalf("timeout = %s, want %s", httpClient.client.Timeout, defaultHTTPTimeout)
+	}
+	if httpClient.client.CheckRedirect == nil {
+		t.Fatal("redirect policy must be set")
+	}
+	transport, ok := httpClient.client.Transport.(*http.Transport)
+	if !ok {
+		t.Fatalf("transport = %T, want *http.Transport", httpClient.client.Transport)
+	}
+	if transport.Proxy != nil {
+		t.Fatal("default GitLab HTTP client must not use ambient proxy configuration")
+	}
+}
+
+func TestHTTPClientDoesNotFollowRedirects(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, "/redirected", http.StatusFound)
+	}))
+	defer server.Close()
+
+	options := defaultOptions()
+	options.baseURL = server.URL
+	client := httpProjectVariableClient{client: defaultGitLabHTTPClient()}
+	err := client.GetProject(context.Background(), options)
+	var httpErr gitlabHTTPError
+	if !errors.As(err, &httpErr) {
+		t.Fatalf("error = %T %[1]v, want gitlabHTTPError", err)
+	}
+	if httpErr.statusCode != http.StatusFound {
+		t.Fatalf("status = %d, want %d", httpErr.statusCode, http.StatusFound)
+	}
+}
+
+func TestHTTPClientLimitsResponseBody(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"key":"`))
+		_, _ = w.Write([]byte(strings.Repeat("x", gitlabResponseMaxBytes)))
+		_, _ = w.Write([]byte(`"}`))
+	}))
+	defer server.Close()
+
+	options := defaultOptions()
+	options.baseURL = server.URL
+	client := httpProjectVariableClient{client: defaultGitLabHTTPClient()}
+	_, err := client.GetVariable(context.Background(), options, testResolvedName)
+	if err == nil {
+		t.Fatal("expected limited response decode error")
+	}
+	if got := classifyGitLabError(err); got != providers.ErrorClassUnavailable {
+		t.Fatalf("error class = %s, want %s", got, providers.ErrorClassUnavailable)
+	}
+}
+
 func defaultDestinationConfig() providers.DestinationConfig {
 	return providers.DestinationConfig{
 		Name: testDestinationName,

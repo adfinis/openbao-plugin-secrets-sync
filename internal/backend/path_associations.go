@@ -310,6 +310,9 @@ func (b *secretSyncBackend) pathAssociationWrite(
 	if err := validateAssociationActivation(record, *metadata); err != nil {
 		return logical.ErrorResponse(err.Error()), nil
 	}
+	if err := validateAssociationDestination(ctx, req.Storage, record); err != nil {
+		return logical.ErrorResponse(err.Error()), nil
+	}
 	existing, err := getAssociation(ctx, req.Storage, path, record.ID)
 	if err != nil {
 		return nil, err
@@ -387,6 +390,10 @@ func (b *secretSyncBackend) pathAssociationPlan(
 			sourceEligible,
 		)
 	}
+	preflightErr := eligibilityErr
+	if preflightErr == nil {
+		preflightErr = validateAssociationDestinationPolicy(*destination, record, version.Data)
+	}
 	return b.pathAssociationSecretPathPlan(
 		ctx,
 		req.Storage,
@@ -396,7 +403,8 @@ func (b *secretSyncBackend) pathAssociationPlan(
 		*destination,
 		provider,
 		runtimeIdentity,
-		eligibilityErr,
+		sourceEligible,
+		preflightErr,
 	)
 }
 
@@ -409,7 +417,8 @@ func (b *secretSyncBackend) pathAssociationSecretPathPlan(
 	destination destinationRecord,
 	provider providers.Provider,
 	runtimeIdentity providers.RuntimeIdentity,
-	eligibilityErr error,
+	sourceEligible bool,
+	preflightErr error,
 ) (*logical.Response, error) {
 	preparedPayload, err := buildCanonicalPayloadForObject(
 		record.Format,
@@ -420,15 +429,15 @@ func (b *secretSyncBackend) pathAssociationSecretPathPlan(
 	if err != nil {
 		return logical.ErrorResponse("source payload encoding failed"), nil
 	}
-	if eligibilityErr != nil {
+	if preflightErr != nil {
 		return &logical.Response{Data: associationPlanResponse(
 			record,
 			metadata.CurrentVersion,
 			preparedPayload,
-			false,
+			sourceEligible,
 			providers.PlanResult{
 				Action:     providers.PlanActionBlocked,
-				Message:    eligibilityErr.Error(),
+				Message:    preflightErr.Error(),
 				ErrorClass: providers.ErrorClassValidation,
 			},
 		)}, nil
@@ -438,7 +447,7 @@ func (b *secretSyncBackend) pathAssociationSecretPathPlan(
 			record,
 			metadata.CurrentVersion,
 			preparedPayload,
-			true,
+			sourceEligible,
 			providers.PlanResult{
 				Action:     providers.PlanActionBlocked,
 				Message:    limitErr.Error(),
@@ -465,7 +474,7 @@ func (b *secretSyncBackend) pathAssociationSecretPathPlan(
 			record,
 			metadata.CurrentVersion,
 			preparedPayload,
-			true,
+			sourceEligible,
 			providers.PlanResult{
 				Action:     providers.PlanActionBlocked,
 				Message:    providerErr.Error(),
@@ -480,7 +489,7 @@ func (b *secretSyncBackend) pathAssociationSecretPathPlan(
 		record,
 		metadata.CurrentVersion,
 		preparedPayload,
-		true,
+		sourceEligible,
 		*plan,
 	)}, nil
 }
@@ -560,6 +569,7 @@ func (b *secretSyncBackend) pathAssociationSecretKeyPlan(
 		object, err := b.planSecretKeyObject(
 			ctx,
 			record,
+			destination,
 			resolvedDestinationConfig,
 			provider,
 			runtimeIdentity,
@@ -584,6 +594,7 @@ func (b *secretSyncBackend) pathAssociationSecretKeyPlan(
 func (b *secretSyncBackend) planSecretKeyObject(
 	ctx context.Context,
 	record associationRecord,
+	destinationRecord destinationRecord,
 	destination providers.DestinationConfig,
 	provider providers.Provider,
 	runtimeIdentity providers.RuntimeIdentity,
@@ -615,6 +626,17 @@ func (b *secretSyncBackend) planSecretKeyObject(
 		object.Action = providers.PlanActionBlocked
 		object.ErrorClass = providers.ErrorClassValidation
 		object.Message = "source is not eligible"
+		return object, nil
+	}
+	if policyErr := validateDestinationPolicyForObject(
+		destinationRecord,
+		record,
+		objectID,
+		resolvedName,
+	); policyErr != nil {
+		object.Action = providers.PlanActionBlocked
+		object.ErrorClass = providers.ErrorClassValidation
+		object.Message = policyErr.Error()
 		return object, nil
 	}
 	if limitErr := enforceProviderPayloadLimit(provider.Capabilities(), payload); limitErr != nil {
@@ -848,7 +870,100 @@ func validateAssociationDestination(ctx context.Context, storage logical.Storage
 	if destination.Disabled {
 		return fmt.Errorf("destination %s is disabled", record.DestinationRef)
 	}
+	metadata, err := getMetadata(ctx, storage, record.Path)
+	if err != nil {
+		return err
+	}
+	if metadata == nil || metadata.CurrentVersion == 0 {
+		return fmt.Errorf("source path does not exist")
+	}
+	version, err := getVersion(ctx, storage, record.Path, metadata.CurrentVersion)
+	if err != nil {
+		return err
+	}
+	if version == nil || version.Destroyed || version.DeletionTime != "" {
+		return fmt.Errorf("current source version is unavailable")
+	}
+	if err := validateAssociationDestinationPolicy(*destination, record, version.Data); err != nil {
+		return err
+	}
 	return nil
+}
+
+func validateAssociationDestinationPolicy(
+	destination destinationRecord,
+	record associationRecord,
+	data secretPayload,
+) error {
+	if !sourcePathAllowed(record.Path, destination.AllowedSourcePathPrefixes) {
+		return fmt.Errorf(
+			"destination %s does not allow source path %q",
+			record.DestinationRef,
+			record.Path,
+		)
+	}
+	objectIDs, err := associationObjectIDs(record, data)
+	if err != nil {
+		return err
+	}
+	for _, objectID := range objectIDs {
+		resolvedName, err := associationResolvedNameForObject(record, objectID)
+		if err != nil {
+			return err
+		}
+		if err := validateDestinationPolicyForObject(destination, record, objectID, resolvedName); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func validateDestinationPolicyForObject(
+	destination destinationRecord,
+	record associationRecord,
+	objectID string,
+	resolvedName string,
+) error {
+	if !sourcePathAllowed(record.Path, destination.AllowedSourcePathPrefixes) {
+		return fmt.Errorf(
+			"destination %s does not allow source path %q",
+			record.DestinationRef,
+			record.Path,
+		)
+	}
+	if !resolvedNameAllowed(resolvedName, destination.AllowedResolvedNamePrefixes) {
+		return fmt.Errorf(
+			"destination %s does not allow resolved name %q for object %q",
+			record.DestinationRef,
+			resolvedName,
+			objectID,
+		)
+	}
+	return nil
+}
+
+func sourcePathAllowed(path string, prefixes []string) bool {
+	if len(prefixes) == 0 {
+		return true
+	}
+	for _, prefix := range prefixes {
+		if path == prefix || strings.HasPrefix(path, prefix+"/") {
+			return true
+		}
+	}
+	return false
+}
+
+func resolvedNameAllowed(name string, prefixes []string) bool {
+	if len(prefixes) == 0 {
+		return true
+	}
+	for _, prefix := range prefixes {
+		if strings.HasPrefix(name, prefix) {
+			return true
+		}
+	}
+	return false
 }
 
 func enqueueAssociationCurrentVersion(

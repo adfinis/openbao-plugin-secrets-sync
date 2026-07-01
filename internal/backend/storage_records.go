@@ -94,13 +94,15 @@ type metadataRecord struct {
 }
 
 type destinationRecord struct {
-	Type        string            `json:"type"`
-	Name        string            `json:"name"`
-	Description string            `json:"description"`
-	Disabled    bool              `json:"disabled"`
-	Config      map[string]string `json:"config"`
-	CreatedTime string            `json:"created_time"`
-	UpdatedTime string            `json:"updated_time"`
+	Type                        string            `json:"type"`
+	Name                        string            `json:"name"`
+	Description                 string            `json:"description"`
+	Disabled                    bool              `json:"disabled"`
+	Config                      map[string]string `json:"config"`
+	AllowedSourcePathPrefixes   []string          `json:"allowed_source_path_prefixes,omitempty"`
+	AllowedResolvedNamePrefixes []string          `json:"allowed_resolved_name_prefixes,omitempty"`
+	CreatedTime                 string            `json:"created_time"`
+	UpdatedTime                 string            `json:"updated_time"`
 }
 
 type destinationSensitiveRecord struct {

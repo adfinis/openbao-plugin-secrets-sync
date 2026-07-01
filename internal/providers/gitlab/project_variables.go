@@ -14,6 +14,7 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/adfinis/openbao-secret-sync/internal/providers"
 )
@@ -53,6 +54,8 @@ const (
 	variableValueMaxBytes       = 10000
 	variableKeyMaxBytes         = 255
 	variableDescriptionMaxBytes = 255
+	defaultHTTPTimeout          = 30 * time.Second
+	gitlabResponseMaxBytes      = 1024 * 1024
 
 	metadataManagedBy        = "openbao-secret-sync"
 	metadataManagedByCompact = "1"
@@ -276,7 +279,22 @@ func (p Provider) clientAndOptions(
 }
 
 func defaultClientFactory(_ context.Context, _ providers.DestinationConfig) (projectVariableClient, error) {
-	return httpProjectVariableClient{client: http.DefaultClient}, nil
+	return httpProjectVariableClient{client: defaultGitLabHTTPClient()}, nil
+}
+
+func defaultGitLabHTTPClient() *http.Client {
+	transport, _ := http.DefaultTransport.(*http.Transport)
+	if transport != nil {
+		transport = transport.Clone()
+		transport.Proxy = nil
+	}
+	return &http.Client{
+		Timeout:   defaultHTTPTimeout,
+		Transport: transport,
+		CheckRedirect: func(*http.Request, []*http.Request) error {
+			return http.ErrUseLastResponse
+		},
+	}
 }
 
 type gitlabDestinationOptions struct {
@@ -810,7 +828,7 @@ func (c httpProjectVariableClient) newRequest(
 func (c httpProjectVariableClient) do(req *http.Request, output interface{}) error {
 	client := c.client
 	if client == nil {
-		client = http.DefaultClient
+		client = defaultGitLabHTTPClient()
 	}
 	resp, err := client.Do(req) //nolint:gosec // GitLab base_url is operator configured and validated.
 	if err != nil {
@@ -820,14 +838,14 @@ func (c httpProjectVariableClient) do(req *http.Request, output interface{}) err
 		_ = resp.Body.Close()
 	}()
 	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
-		_, _ = io.Copy(io.Discard, resp.Body)
+		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, gitlabResponseMaxBytes))
 		return gitlabHTTPError{statusCode: resp.StatusCode}
 	}
 	if output == nil {
-		_, _ = io.Copy(io.Discard, resp.Body)
+		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, gitlabResponseMaxBytes))
 		return nil
 	}
-	decoder := json.NewDecoder(resp.Body)
+	decoder := json.NewDecoder(io.LimitReader(resp.Body, gitlabResponseMaxBytes))
 	if err := decoder.Decode(output); err != nil {
 		return gitlabRequestError{err: err}
 	}

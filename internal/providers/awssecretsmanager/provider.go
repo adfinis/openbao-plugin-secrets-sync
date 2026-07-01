@@ -6,10 +6,13 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
+	"net"
+	"net/http"
 	"net/netip"
 	"net/url"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/adfinis/openbao-secret-sync/internal/providers"
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -64,6 +67,8 @@ const (
 	secretValueMaxBytes = 65536
 
 	defaultDeleteRecoveryWindowDays = 7
+	defaultHTTPTimeout              = 30 * time.Second
+	endpointResolutionTimeout       = 5 * time.Second
 
 	tagManaged        = "openbao-sync"
 	tagAssociationID  = "openbao-sync-association"
@@ -74,6 +79,8 @@ const (
 	tagPluginInstance = "openbao-sync-plugin-instance"
 	tagRestoreEpoch   = "openbao-sync-restore-epoch"
 )
+
+type endpointResolver func(context.Context, string, string) ([]netip.Addr, error)
 
 type secretsManagerClient interface {
 	DescribeSecret(
@@ -322,6 +329,9 @@ func defaultClientFactory(
 	if err != nil {
 		return nil, err
 	}
+	if err := validateEndpointResolution(ctx, options, net.DefaultResolver.LookupNetIP); err != nil {
+		return nil, err
+	}
 	loadOptions := []func(*awsconfig.LoadOptions) error{}
 	if options.region != "" {
 		loadOptions = append(loadOptions, awsconfig.WithRegion(options.region))
@@ -330,6 +340,7 @@ func defaultClientFactory(
 	if err != nil {
 		return nil, err
 	}
+	cfg.HTTPClient = defaultAWSHTTPClient()
 	if options.authMode == AuthModeAssumeRole {
 		stsClient := sts.NewFromConfig(cfg)
 		assumeRoleProvider := stscreds.NewAssumeRoleProvider(
@@ -353,6 +364,18 @@ func defaultClientFactory(
 		})
 	}
 	return secretsmanager.NewFromConfig(cfg, clientOptions...), nil
+}
+
+func defaultAWSHTTPClient() *http.Client {
+	transport, _ := http.DefaultTransport.(*http.Transport)
+	if transport != nil {
+		transport = transport.Clone()
+		transport.Proxy = nil
+	}
+	return &http.Client{
+		Timeout:   defaultHTTPTimeout,
+		Transport: transport,
+	}
 }
 
 type awsDestinationOptions struct {
@@ -459,6 +482,58 @@ func validateEndpointURL(rawEndpoint string, endpointPolicy string) error {
 	default:
 		return validationError("aws-sm endpoint_policy must be local or private")
 	}
+}
+
+func validateEndpointResolution(
+	ctx context.Context,
+	options awsDestinationOptions,
+	resolver endpointResolver,
+) error {
+	if options.endpointURL == "" || options.endpointPolicy != EndpointPolicyPrivate {
+		return nil
+	}
+	if resolver == nil {
+		resolver = net.DefaultResolver.LookupNetIP
+	}
+	parsedEndpoint, err := url.Parse(options.endpointURL)
+	if err != nil {
+		return validationError("aws-sm endpoint_url must be a valid URL")
+	}
+	host := normalizeEndpointHost(parsedEndpoint.Hostname())
+	if host == "" {
+		return validationError("aws-sm endpoint_url must include a host")
+	}
+	if addr, ok := parseEndpointAddr(host); ok {
+		if isUnsafeEndpointAddr(addr) {
+			return validationError(
+				"aws-sm private endpoint_url DNS must not resolve to loopback, link-local, multicast, or unspecified addresses",
+			)
+		}
+		return nil
+	}
+	resolveCtx, cancel := context.WithTimeout(ctx, endpointResolutionTimeout)
+	defer cancel()
+	addrs, err := resolver(resolveCtx, "ip", host)
+	if err != nil {
+		return &providers.Error{
+			Class:   providers.ErrorClassUnavailable,
+			Message: "aws-sm private endpoint_url DNS lookup failed",
+		}
+	}
+	if len(addrs) == 0 {
+		return &providers.Error{
+			Class:   providers.ErrorClassUnavailable,
+			Message: "aws-sm private endpoint_url DNS lookup returned no addresses",
+		}
+	}
+	for _, addr := range addrs {
+		if isUnsafeEndpointAddr(addr) {
+			return validationError(
+				"aws-sm private endpoint_url DNS must not resolve to loopback, link-local, multicast, or unspecified addresses",
+			)
+		}
+	}
+	return nil
 }
 
 func validateLocalEndpointURL(scheme string, host string) error {

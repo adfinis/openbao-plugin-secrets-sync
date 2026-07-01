@@ -195,6 +195,21 @@ func (b *secretSyncBackend) processUpsert(
 		b.recordOperationFailure(ctx, record, failure.class)
 		return markOperationFailed(ctx, storage, record, *failure, now)
 	}
+	if err := validateDestinationPolicyForObject(
+		*upsertContext.destination,
+		*upsertContext.association,
+		record.ObjectID,
+		resolvedName,
+	); err != nil {
+		failure := operationFailure{
+			class:         providers.ErrorClassValidation,
+			message:       err.Error(),
+			resolvedName:  resolvedName,
+			payloadSHA256: preparedPayload.SHA256,
+		}
+		b.recordOperationFailure(ctx, record, failure.class)
+		return markOperationFailed(ctx, storage, record, failure, now)
+	}
 
 	resolvedDestinationConfig, err := destinationConfig(ctx, storage, *upsertContext.destination)
 	if err != nil {
@@ -280,6 +295,20 @@ func (b *secretSyncBackend) processDelete(
 	if failure != nil {
 		b.recordOperationFailure(ctx, record, failure.class)
 		return markOperationFailed(ctx, storage, record, *failure, now)
+	}
+	if err := validateDestinationPolicyForObject(
+		*deleteContext.destination,
+		*deleteContext.association,
+		record.ObjectID,
+		resolvedName,
+	); err != nil {
+		failure := operationFailure{
+			class:        providers.ErrorClassValidation,
+			message:      err.Error(),
+			resolvedName: resolvedName,
+		}
+		b.recordOperationFailure(ctx, record, failure.class)
+		return markOperationFailed(ctx, storage, record, failure, now)
 	}
 	resolvedDestinationConfig, err := destinationConfig(ctx, storage, *deleteContext.destination)
 	if err != nil {

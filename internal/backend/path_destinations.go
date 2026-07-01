@@ -2,6 +2,7 @@ package backend
 
 import (
 	"context"
+	"fmt"
 	"sort"
 	"strings"
 
@@ -11,6 +12,11 @@ import (
 	"github.com/adfinis/openbao-secret-sync/internal/providers/kubernetessecrets"
 	"github.com/openbao/openbao/sdk/v2/framework"
 	"github.com/openbao/openbao/sdk/v2/logical"
+)
+
+const (
+	destinationAllowedSourcePathPrefixesField   = "allowed_source_path_prefixes"
+	destinationAllowedResolvedNamePrefixesField = "allowed_resolved_name_prefixes"
 )
 
 var destinationConfigFieldKeys = []string{
@@ -123,6 +129,16 @@ func destinationRequestFields() map[string]*framework.FieldSchema {
 	fields["disabled"] = &framework.FieldSchema{
 		Type:        framework.TypeBool,
 		Description: "Disable dispatch for associations using this destination.",
+	}
+	fields[destinationAllowedSourcePathPrefixesField] = &framework.FieldSchema{
+		Type: framework.TypeCommaStringSlice,
+		Description: "Optional comma-separated source path prefixes allowed to use this destination. " +
+			"Empty allows any source path.",
+	}
+	fields[destinationAllowedResolvedNamePrefixesField] = &framework.FieldSchema{
+		Type: framework.TypeCommaStringSlice,
+		Description: "Optional comma-separated resolved remote name prefixes allowed for this destination. " +
+			"Empty allows any resolved name.",
 	}
 	fields[awssecretsmanager.ConfigKeyRegion] = &framework.FieldSchema{
 		Type:        framework.TypeString,
@@ -273,14 +289,24 @@ func (b *secretSyncBackend) pathDestinationWrite(
 	sensitiveConfig := destinationSensitiveConfigFromFieldData(existingSensitive, data)
 	migrateSensitiveConfigFromDestination(existing, data, sensitiveConfig)
 	removeSensitiveConfigKeys(config)
+	allowedSourcePrefixes, err := destinationSourcePathPrefixesFromFieldData(existing, data)
+	if err != nil {
+		return logical.ErrorResponse(err.Error()), nil
+	}
+	allowedNamePrefixes, err := destinationResolvedNamePrefixesFromFieldData(existing, data)
+	if err != nil {
+		return logical.ErrorResponse(err.Error()), nil
+	}
 	record := destinationRecord{
-		Type:        destinationType,
-		Name:        name,
-		Description: data.Get("description").(string),
-		Disabled:    data.Get("disabled").(bool),
-		Config:      config,
-		CreatedTime: now,
-		UpdatedTime: now,
+		Type:                        destinationType,
+		Name:                        name,
+		Description:                 data.Get("description").(string),
+		Disabled:                    data.Get("disabled").(bool),
+		Config:                      config,
+		AllowedSourcePathPrefixes:   allowedSourcePrefixes,
+		AllowedResolvedNamePrefixes: allowedNamePrefixes,
+		CreatedTime:                 now,
+		UpdatedTime:                 now,
 	}
 	if existing != nil {
 		record.CreatedTime = existing.CreatedTime
@@ -477,6 +503,8 @@ func destinationResponse(
 		responseField("name", record.Name),
 		responseField("description", record.Description),
 		responseField("disabled", record.Disabled),
+		responseField("allowed_source_path_prefixes", copyStringSlice(record.AllowedSourcePathPrefixes)),
+		responseField("allowed_resolved_name_prefixes", copyStringSlice(record.AllowedResolvedNamePrefixes)),
 		responseField("config", destinationConfigResponse(record.Config)),
 		responseField("created_time", record.CreatedTime),
 		responseField("updated_time", record.UpdatedTime),
@@ -559,6 +587,91 @@ func destinationSensitiveConfigFromFieldData(
 	return config
 }
 
+func destinationSourcePathPrefixesFromFieldData(
+	existing *destinationRecord,
+	data *framework.FieldData,
+) ([]string, error) {
+	if prefixes, ok, err := stringSliceFromFieldData(data, destinationAllowedSourcePathPrefixesField); ok || err != nil {
+		if err != nil {
+			return nil, err
+		}
+		return normalizeSourcePathPrefixes(prefixes)
+	}
+	if existing == nil {
+		return nil, nil
+	}
+	return copyStringSlice(existing.AllowedSourcePathPrefixes), nil
+}
+
+func destinationResolvedNamePrefixesFromFieldData(
+	existing *destinationRecord,
+	data *framework.FieldData,
+) ([]string, error) {
+	if prefixes, ok, err := stringSliceFromFieldData(data, destinationAllowedResolvedNamePrefixesField); ok || err != nil {
+		if err != nil {
+			return nil, err
+		}
+		return normalizeResolvedNamePrefixes(prefixes)
+	}
+	if existing == nil {
+		return nil, nil
+	}
+	return copyStringSlice(existing.AllowedResolvedNamePrefixes), nil
+}
+
+func stringSliceFromFieldData(data *framework.FieldData, key string) ([]string, bool, error) {
+	value, ok := data.GetOk(key)
+	if !ok {
+		return nil, false, nil
+	}
+	switch typed := value.(type) {
+	case []string:
+		return typed, true, nil
+	case []interface{}:
+		values := make([]string, 0, len(typed))
+		for _, item := range typed {
+			stringValue, ok := item.(string)
+			if !ok {
+				return nil, true, fmt.Errorf("%s must contain only strings", key)
+			}
+			values = append(values, stringValue)
+		}
+		return values, true, nil
+	case string:
+		return strings.Split(typed, ","), true, nil
+	default:
+		return nil, true, fmt.Errorf("%s must be a string list", key)
+	}
+}
+
+func normalizeSourcePathPrefixes(prefixes []string) ([]string, error) {
+	normalized := make([]string, 0, len(prefixes))
+	for _, prefix := range prefixes {
+		prefix = strings.TrimSpace(prefix)
+		if prefix == "" {
+			continue
+		}
+		path, err := normalizeSourcePath(prefix)
+		if err != nil {
+			return nil, fmt.Errorf("%s contains invalid prefix %q: %w", destinationAllowedSourcePathPrefixesField, prefix, err)
+		}
+		normalized = append(normalized, path)
+	}
+	return uniqueSortedStrings(normalized), nil
+}
+
+func normalizeResolvedNamePrefixes(prefixes []string) ([]string, error) {
+	normalized := make([]string, 0, len(prefixes))
+	for _, prefix := range prefixes {
+		prefix = strings.TrimLeft(strings.TrimSpace(prefix), "/")
+		if prefix == "" {
+			continue
+		}
+		normalized = append(normalized, prefix)
+	}
+	return uniqueSortedStrings(normalized), nil
+}
+
 func removeSensitiveConfigKeys(config map[string]string) {
 	for _, key := range destinationSensitiveConfigFieldKeys {
 		delete(config, key)
@@ -627,6 +740,32 @@ func copyStringMap(input map[string]string) map[string]string {
 	output := make(map[string]string, len(input))
 	for key, value := range input {
 		output[key] = value
+	}
+	return output
+}
+
+func copyStringSlice(input []string) []string {
+	if len(input) == 0 {
+		return nil
+	}
+	output := make([]string, len(input))
+	copy(output, input)
+	return output
+}
+
+func uniqueSortedStrings(input []string) []string {
+	if len(input) == 0 {
+		return nil
+	}
+	sort.Strings(input)
+	output := input[:0]
+	var last string
+	for index, value := range input {
+		if index > 0 && value == last {
+			continue
+		}
+		output = append(output, value)
+		last = value
 	}
 	return output
 }

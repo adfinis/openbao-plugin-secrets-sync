@@ -17,6 +17,7 @@ The core backend owns:
 - OpenBao request handling and policy surface;
 - source storage and metadata;
 - association validation and lifecycle;
+- destination-level source path and resolved-name prefix constraints;
 - payload construction and payload hashing;
 - durable queueing and retry decisions;
 - status, reconcile, and observability records;
@@ -93,6 +94,10 @@ Validation should reject:
 
 Prefer workload identity, default SDK chains with explicit opt-in, or
 short-lived federation over static keys.
+
+HTTP providers should use bounded clients: request timeout, constrained or
+disabled redirects, bounded response-body reads, and explicit validation for
+custom or insecure endpoints.
 
 ## Plan, Upsert, Delete, Read-State
 

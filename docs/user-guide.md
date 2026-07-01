@@ -115,6 +115,25 @@ bao write -force secret-sync/destinations/aws-sm/prod/validate
 bao read secret-sync/destinations/aws-sm/prod/health
 ```
 
+## Constrain Destination Use
+
+Destinations can restrict which source paths and remote object names may use
+them. These fields are useful when delegated app owners can create
+associations but should only sync their own path and remote prefix:
+
+```sh
+bao write secret-sync/destinations/aws-sm/prod \
+  region=eu-central-1 \
+  auth_mode=default \
+  allowed_source_path_prefixes=apps/team-a,shared/team-a \
+  allowed_resolved_name_prefixes=openbao-secret-sync/team-a/
+```
+
+`allowed_source_path_prefixes` uses OpenBao source path segment boundaries:
+`apps/team-a` allows `apps/team-a/db` but not `apps/team-alpha/db`.
+`allowed_resolved_name_prefixes` is a literal remote-name prefix. Keep a
+trailing `/` when you want a folder-like boundary.
+
 ## Configure Kubernetes Secrets
 
 Use in-cluster auth when OpenBao runs in the target Kubernetes cluster:

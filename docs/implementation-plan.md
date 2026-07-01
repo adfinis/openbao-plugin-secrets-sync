@@ -11,6 +11,9 @@ Implemented backend slices now include:
   undelete, destroy, and metadata deletion guards;
 - destination registry with redacted reads, validation, health, and a fake
   provider;
+- destination policy constraints for allowed source path prefixes and allowed
+  resolved remote-name prefixes, enforced at association plan, activation, and
+  dispatch time;
 - provider-agnostic dispatch through the provider registry;
 - provider conformance harness with fake, AWS Secrets Manager, Kubernetes
   Secrets, and GitLab project variable coverage;
@@ -55,8 +58,9 @@ Implemented backend slices now include:
   registration.
 - GitLab project variable provider with type, capabilities, validation,
   standard HTTP client boundary, mocked plan/upsert/delete/read-state/health
-  behavior, HTTP error classification, ownership metadata in variable
-  descriptions, seal-wrapped API token config, and backend registration.
+  behavior, HTTP error classification, bounded default HTTP client behavior
+  without ambient proxy use, ownership metadata in variable descriptions,
+  seal-wrapped API token config, and backend registration.
 - self-contained OpenBao plus LocalStack e2e coverage for plugin registration,
   mounting, AWS destination configuration, queue drain, create, update, delete,
   ownership tags, and status transitions.
@@ -91,6 +95,7 @@ Implemented backend slices now include:
   and metadata read.
 - CAS support for writes.
 - Destination registry with redacted reads.
+- Destination-level source path and resolved-name prefix constraints.
 - Association registry with source eligibility checks.
 - Provider capability model.
 - Fake provider for local and integration testing.
@@ -214,6 +219,8 @@ Exit criteria:
 - destination credentials are redacted on read;
 - invalid templates fail at association creation;
 - name collisions are rejected or require explicit operator resolution;
+- destination allowlists prevent delegated associations and queued dispatch
+  from using disallowed source paths or resolved remote-name prefixes;
 - enabled associations cannot bypass source eligibility;
 - disabled associations do not enqueue new work and cancel queued work when
   disabled;
@@ -232,6 +239,11 @@ Completed foundation:
 - Destination config supports `region`, `endpoint_url` with explicit
   `endpoint_policy`, `auth_mode=default`, and `auth_mode=assume_role` with
   `role_arn`, seal-wrapped `external_id`, and `session_name`.
+- Private AWS custom endpoints are checked again at client creation time so
+  DNS answers that resolve to loopback, link-local, multicast, or unspecified
+  addresses are rejected before the AWS SDK client is created.
+- The AWS SDK client constructed by the provider uses a bounded HTTP client and
+  does not inherit ambient proxy configuration.
 - Sensitive destination fields are split from non-sensitive destination
   metadata, stored under the seal-wrapped destination secret prefix, and
   redacted on reads.
@@ -260,8 +272,7 @@ Remaining tasks:
 
 - Keep static AWS keys and session tokens unsupported until their auth path,
   rotation semantics, and tests are explicit.
-- Add DNS-time endpoint checks and optional allowlists for production private
-  endpoint deployments.
+- Add optional allowlists for production private endpoint deployments.
 - Broaden LocalStack coverage for auth variants and AWS failure paths after
   sensitive destination config storage exists.
 - Extend opt-in real AWS e2e coverage as provider auth modes and reconcile
