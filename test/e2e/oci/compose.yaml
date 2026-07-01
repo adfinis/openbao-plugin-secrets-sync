@@ -1,6 +1,6 @@
 services:
   registry:
-    image: registry:2
+    image: registry:3
     environment:
       REGISTRY_HTTP_ADDR: 0.0.0.0:5000
       REGISTRY_HTTP_TLS_CERTIFICATE: /certs/registry.crt
