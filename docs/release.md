@@ -25,6 +25,7 @@ Published artifacts use this naming shape:
 openbao-plugin-secrets-sync_<version>_linux_amd64
 openbao-plugin-secrets-sync_<version>_linux_arm64
 checksums.txt
+checksums.txt.bundle
 ```
 
 The release workflow attaches these artifacts to the matching GitHub Release.
@@ -72,6 +73,11 @@ The workflow:
 - builds release binaries with deterministic build metadata derived from the
   tagged commit;
 - generates and verifies `checksums.txt`;
+- signs `checksums.txt` with a keyless cosign signature bundle;
+- creates GitHub build-provenance attestations for `checksums.txt` and the
+  release binaries on public repositories;
+- verifies checksum signatures and public-repository artifact attestations
+  before upload;
 - uploads the files as workflow artifacts;
 - uploads the files to the matching GitHub Release without replacing
   conflicting existing assets;
@@ -83,6 +89,33 @@ Download the artifact for the target platform and `checksums.txt`, then verify:
 
 ```sh
 shasum -a 256 -c checksums.txt
+```
+
+Verify the checksum file signature with `cosign`:
+
+```sh
+VERSION=0.1.0-preview.1
+REPO=adfinis/openbao-secret-sync
+WORKFLOW_IDENTITY="https://github.com/${REPO}/.github/workflows/release.yml@refs/tags/${VERSION}"
+
+cosign verify-blob \
+  --new-bundle-format=true \
+  --bundle checksums.txt.bundle \
+  --certificate-identity "${WORKFLOW_IDENTITY}" \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+  checksums.txt
+```
+
+For public releases, verify the artifact provenance attestation against the
+release workflow identity:
+
+```sh
+gh attestation verify "./openbao-plugin-secrets-sync_${VERSION}_linux_amd64" \
+  --repo "${REPO}" \
+  --signer-workflow "${REPO}/.github/workflows/release.yml" \
+  --source-ref "refs/tags/${VERSION}" \
+  --cert-oidc-issuer https://token.actions.githubusercontent.com \
+  --deny-self-hosted-runners
 ```
 
 Install the binary into the OpenBao plugin directory under the command name used
@@ -116,8 +149,6 @@ The first release-engineering slice intentionally does not yet implement:
 - signed release tags;
 - release PR approval gates;
 - SBOM generation;
-- keyless checksum signatures;
-- provenance attestations;
 - byte-for-byte rebuild verification;
 - container image publishing.
 
