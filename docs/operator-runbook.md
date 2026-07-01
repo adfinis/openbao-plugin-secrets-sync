@@ -50,7 +50,7 @@ bao read secret-sync/destinations/<type>/<name>
 Validate static destination configuration:
 
 ```sh
-bao write -force secret-sync/destinations/<type>/<name>/validate
+bao read secret-sync/destinations/<type>/<name>/validate
 ```
 
 Check destination reachability and authorization:
@@ -68,13 +68,13 @@ network, IAM, token, RBAC, or provider availability issues.
 Confirm the source path is explicitly syncable:
 
 ```sh
-bao read secret-sync/metadata/app/db
+bao write -force secret-sync/sources/app/db/enable
 ```
 
-The current activation gate expects:
+To inspect the underlying metadata:
 
-```json
-{"custom_metadata":{"syncable":"true"}}
+```sh
+bao read secret-sync/metadata/app/db
 ```
 
 Read the current source version:
@@ -89,11 +89,10 @@ Plan the association before creating or changing it:
 bao write secret-sync/associations/app/db/plan \
   destination_type=<type> \
   destination_name=<name> \
-  resolved_name=<remote-name> \
-  granularity=secret-path \
-  format=json \
-  delete_mode=retain
+  resolved_name=<remote-name>
 ```
+
+`secret-path`, `json`, `retain`, and `enabled=true` are the defaults.
 
 Read existing associations:
 

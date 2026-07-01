@@ -145,6 +145,91 @@ func TestConfigRestoreGuardAcknowledge(t *testing.T) {
 	}
 }
 
+func TestSourceEnableMarksPathSyncable(t *testing.T) {
+	b := Backend(&logical.BackendConfig{})
+	storage := &logical.InmemStorage{}
+
+	metadataResp := handleRequest(t, b, storage, logical.UpdateOperation, "metadata/app/db", map[string]interface{}{
+		"custom_metadata": map[string]interface{}{
+			"owner": "team-a",
+		},
+	})
+	assertNoErrorResponse(t, metadataResp)
+
+	enableResp := handleRequest(t, b, storage, logical.UpdateOperation, "sources/app/db/enable", nil)
+	assertNoErrorResponse(t, enableResp)
+	if got := enableResp.Data["path"]; got != "app/db" {
+		t.Fatalf("source path = %v, want app/db", got)
+	}
+	if got := enableResp.Data["syncable"]; got != true {
+		t.Fatalf("syncable = %v, want true", got)
+	}
+	if got := enableResp.Data["changed"]; got != true {
+		t.Fatalf("changed = %v, want true", got)
+	}
+	metadata := enableResp.Data["metadata"].(map[string]interface{})
+	customMetadata := metadata["custom_metadata"].(map[string]string)
+	if got := customMetadata["owner"]; got != "team-a" {
+		t.Fatalf("custom_metadata.owner = %v, want team-a", got)
+	}
+	if got := customMetadata[sourceMetadataKeySyncable]; got != sourceMetadataValueTrue {
+		t.Fatalf("custom_metadata.syncable = %v, want true", got)
+	}
+
+	secondResp := handleRequest(t, b, storage, logical.UpdateOperation, "sources/app/db/enable", nil)
+	assertNoErrorResponse(t, secondResp)
+	if got := secondResp.Data["changed"]; got != false {
+		t.Fatalf("second changed = %v, want false", got)
+	}
+}
+
+func TestDestinationValidateSupportsRead(t *testing.T) {
+	b := Backend(&logical.BackendConfig{})
+	storage := &logical.InmemStorage{}
+	createFakeDestination(t, b, storage, "default")
+
+	resp := handleRequest(t, b, storage, logical.ReadOperation, "destinations/fake/default/validate", nil)
+	assertNoErrorResponse(t, resp)
+	if got := resp.Data["valid"]; got != true {
+		t.Fatalf("valid = %v, want true", got)
+	}
+}
+
+func TestAssociationCreateUsesSafeDefaults(t *testing.T) {
+	b := Backend(&logical.BackendConfig{})
+	storage := &logical.InmemStorage{}
+	createFakeDestination(t, b, storage, "default")
+	writeAppDBSecret(t, b, storage, "secret")
+
+	enableResp := handleRequest(t, b, storage, logical.UpdateOperation, "sources/app/db/enable", nil)
+	assertNoErrorResponse(t, enableResp)
+
+	resp := handleRequest(t, b, storage, logical.UpdateOperation, "associations/app/db", map[string]interface{}{
+		"destination_type": providerTypeFake,
+		"destination_name": "default",
+	})
+	assertNoErrorResponse(t, resp)
+	if got := resp.Data["resolved_name"]; got != "app/db" {
+		t.Fatalf("resolved_name = %v, want app/db", got)
+	}
+	if got := resp.Data["granularity"]; got != syncGranularitySecretPath {
+		t.Fatalf("granularity = %v, want %s", got, syncGranularitySecretPath)
+	}
+	if got := resp.Data["format"]; got != defaultAssociationFormat {
+		t.Fatalf("format = %v, want %s", got, defaultAssociationFormat)
+	}
+	if got := resp.Data["delete_mode"]; got != deleteModeRetain {
+		t.Fatalf("delete_mode = %v, want %s", got, deleteModeRetain)
+	}
+	if got := resp.Data["enabled"]; got != true {
+		t.Fatalf("enabled = %v, want true", got)
+	}
+	operationIDs := operationIDsFromResponse(t, resp)
+	if len(operationIDs) != 1 {
+		t.Fatalf("sync_operation_ids = %v, want one operation", operationIDs)
+	}
+}
+
 func TestIncompatibleStorageSchemaFailsClosed(t *testing.T) {
 	b := Backend(&logical.BackendConfig{})
 	storage := &logical.InmemStorage{}
@@ -884,8 +969,8 @@ func TestMetadataWriteEnforcesCASRequiredAndCustomMetadata(t *testing.T) {
 	metadataResp := handleRequest(t, b, storage, logical.UpdateOperation, "metadata/app/db", map[string]interface{}{
 		"cas_required": true,
 		"custom_metadata": map[string]interface{}{
-			"syncable": "true",
-			"owner":    "platform",
+			sourceMetadataKeySyncable: sourceMetadataValueTrue,
+			"owner":                   "platform",
 		},
 	})
 	assertNoErrorResponse(t, metadataResp)
@@ -893,7 +978,7 @@ func TestMetadataWriteEnforcesCASRequiredAndCustomMetadata(t *testing.T) {
 		t.Fatalf("cas_required = %v, want true", got)
 	}
 	customMetadata := metadataResp.Data["custom_metadata"].(map[string]string)
-	if got := customMetadata["syncable"]; got != "true" {
+	if got := customMetadata[sourceMetadataKeySyncable]; got != sourceMetadataValueTrue {
 		t.Fatalf("custom_metadata.syncable = %v, want true", got)
 	}
 
@@ -3166,7 +3251,7 @@ func markAppDBSyncable(t *testing.T, b logical.Backend, storage logical.Storage)
 	t.Helper()
 	resp := handleRequest(t, b, storage, logical.UpdateOperation, "metadata/app/db", map[string]interface{}{
 		"custom_metadata": map[string]interface{}{
-			"syncable": "true",
+			sourceMetadataKeySyncable: sourceMetadataValueTrue,
 		},
 	})
 	assertNoErrorResponse(t, resp)

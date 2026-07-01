@@ -44,6 +44,8 @@ const (
 	deleteModeRetain           = "retain"
 	deleteModeDelete           = "delete"
 	deleteModeOrphan           = "orphan"
+	sourceMetadataKeySyncable  = "syncable"
+	sourceMetadataValueTrue    = "true"
 	currentStorageSchema       = 1
 	minSupportedStorageSchema  = 1
 )

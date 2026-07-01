@@ -10,9 +10,10 @@ eligible source paths to configured external destinations.
 The current implementation supports:
 
 - KV-v2-like source storage under `data/*` and `metadata/*`;
-- source opt-in through `custom_metadata.syncable=true`;
-- destination config for the fake provider, AWS Secrets Manager, and
-  Kubernetes Secrets;
+- source opt-in through `sources/<path>/enable` or
+  `custom_metadata.syncable=true`;
+- destination config for the fake provider, AWS Secrets Manager, Kubernetes
+  Secrets, and GitLab project variables;
 - AWS SDK default auth and AWS assume-role auth;
 - Kubernetes in-cluster auth and kubeconfig auth;
 - asynchronous queue processing with manual `queue/drain`;
@@ -111,7 +112,7 @@ bao read secret-sync/destinations/aws-sm/prod
 Validate and check health:
 
 ```sh
-bao write -force secret-sync/destinations/aws-sm/prod/validate
+bao read secret-sync/destinations/aws-sm/prod/validate
 bao read secret-sync/destinations/aws-sm/prod/health
 ```
 
@@ -163,7 +164,7 @@ instead of `app/db`.
 Validate and check health:
 
 ```sh
-bao write -force secret-sync/destinations/k8s/apps/validate
+bao read secret-sync/destinations/k8s/apps/validate
 bao read secret-sync/destinations/k8s/apps/health
 ```
 
@@ -204,7 +205,7 @@ bao read secret-sync/destinations/gitlab/prod
 Validate and check health:
 
 ```sh
-bao write -force secret-sync/destinations/gitlab/prod/validate
+bao read secret-sync/destinations/gitlab/prod/validate
 bao read secret-sync/destinations/gitlab/prod/health
 ```
 
@@ -213,8 +214,7 @@ bao read secret-sync/destinations/gitlab/prod/health
 Mark a source path as syncable:
 
 ```sh
-bao write secret-sync/metadata/app/db \
-  @<(printf '%s' '{"custom_metadata":{"syncable":"true"}}')
+bao write -force secret-sync/sources/app/db/enable
 ```
 
 Write the source secret:
@@ -238,11 +238,7 @@ does not mutate remote state:
 ```sh
 bao write secret-sync/associations/app/db/plan \
   destination_type=aws-sm \
-  destination_name=prod \
-  resolved_name=openbao-secret-sync/app/db \
-  granularity=secret-path \
-  format=json \
-  delete_mode=delete
+  destination_name=prod
 ```
 
 Create the association:
@@ -250,12 +246,13 @@ Create the association:
 ```sh
 bao write secret-sync/associations/app/db \
   destination_type=aws-sm \
-  destination_name=prod \
-  resolved_name=openbao-secret-sync/app/db \
-  granularity=secret-path \
-  format=json \
-  delete_mode=delete
+  destination_name=prod
 ```
+
+The default association shape is `granularity=secret-path`, `format=json`,
+`delete_mode=retain`, `enabled=true`, and `name_template='{{ path }}'`. Set
+`resolved_name`, `name_template`, `format`, or `delete_mode` only when the
+destination needs a different remote name, payload shape, or delete behavior.
 
 For Kubernetes, use the `k8s` destination type and a Kubernetes-safe
 `resolved_name`:
@@ -264,10 +261,7 @@ For Kubernetes, use the `k8s` destination type and a Kubernetes-safe
 bao write secret-sync/associations/app/db \
   destination_type=k8s \
   destination_name=apps \
-  resolved_name=app-db \
-  granularity=secret-path \
-  format=json \
-  delete_mode=delete
+  resolved_name=app-db
 ```
 
 `secret-key` granularity creates one destination object per top-level source
@@ -279,9 +273,7 @@ bao write secret-sync/associations/app/db \
   destination_type=fake \
   destination_name=default \
   name_template='prod/{{ path }}/{{ key }}' \
-  granularity=secret-key \
-  format=json \
-  delete_mode=retain
+  granularity=secret-key
 ```
 
 For `json` format, each remote object receives canonical JSON containing only
@@ -451,8 +443,8 @@ For operational response flows and evidence to capture, see the
 
 If sync does not happen:
 
-- confirm `metadata/<path>` has `custom_metadata.syncable=true`;
-- run `destinations/<type>/<name>/validate`;
+- confirm the source has been enabled with `sources/<path>/enable`;
+- read `destinations/<type>/<name>/validate`;
 - run `destinations/<type>/<name>/health`;
 - inspect `queue` and the returned operation IDs;
 - inspect `status/<path>`;

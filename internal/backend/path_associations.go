@@ -1321,7 +1321,7 @@ func validateAssociationActivation(record associationRecord, metadata metadataRe
 }
 
 func validateSourceEligibility(metadata metadataRecord) error {
-	if metadata.CustomMetadata["syncable"] != "true" {
+	if metadata.CustomMetadata[sourceMetadataKeySyncable] != sourceMetadataValueTrue {
 		return fmt.Errorf("source path is not eligible for sync: custom_metadata.syncable must be true")
 	}
 	return nil

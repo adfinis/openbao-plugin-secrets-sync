@@ -17,6 +17,8 @@ Current implementation work includes:
 
 - KV-v2-like source storage in the plugin mount;
 - explicit source opt-in and association-based sync;
+- safe association defaults for JSON `secret-path` sync with retained remote
+  data on source delete unless overridden;
 - durable queued dispatch with status and reconcile surfaces;
 - provider packages for fake, AWS Secrets Manager, Kubernetes Secrets, and
   GitLab project variables;

@@ -72,6 +72,10 @@ func pathDestinations(b *secretSyncBackend) []*framework.Path {
 				framework.GenericNameRegex("name") + "/validate",
 			Fields: destinationIdentityFields(),
 			Operations: map[logical.Operation]framework.OperationHandler{
+				logical.ReadOperation: &framework.PathOperation{
+					Callback: b.pathDestinationValidate,
+					Summary:  "Validate a configured destination.",
+				},
 				logical.UpdateOperation: &framework.PathOperation{
 					Callback: b.pathDestinationValidate,
 					Summary:  "Validate a configured destination.",
