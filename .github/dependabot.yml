@@ -13,7 +13,7 @@ updates:
       - dependencies
       - go
     commit-message:
-      prefix: "chore(deps)"
+      prefix: chore
       include: scope
     groups:
       go-minor-patch:
@@ -42,7 +42,7 @@ updates:
       - dependencies
       - ci
     commit-message:
-      prefix: "chore(deps)"
+      prefix: chore
       include: scope
     groups:
       github-actions:
@@ -66,7 +66,7 @@ updates:
       - containers
       - e2e
     commit-message:
-      prefix: "chore(deps)"
+      prefix: chore
       include: scope
     groups:
       e2e-images:

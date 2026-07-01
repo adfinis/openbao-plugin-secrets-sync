@@ -158,7 +158,7 @@ e2e-oci-fixture: e2e-oci-image-archive ## Generate OCI e2e registry certificates
 	E2E_OCI_CERT_DIR="$(E2E_OCI_CERT_DIR)" \
 	E2E_OCI_CONFIG="$(E2E_OCI_CONFIG)" \
 	E2E_OCI_IMAGE_IN_BAO="$(E2E_OCI_IMAGE_IN_BAO)" \
-	"$(SHELL)" hack/e2e/prepare-oci-fixture.sh
+	./hack/e2e/prepare-oci-fixture.sh
 
 .PHONY: e2e-oci-up-staged
 e2e-oci-up-staged: e2e-oci-fixture

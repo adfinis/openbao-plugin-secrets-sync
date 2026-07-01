@@ -35,7 +35,7 @@ release-sboms: ## Generate SPDX SBOMs for release binaries.
 		GOOS="$$goos" \
 		GOARCH="$$goarch" \
 		SOURCE_DATE_EPOCH="$${SOURCE_DATE_EPOCH:-$$(git show -s --format=%ct HEAD 2>/dev/null || date +%s)}" \
-		"$(SHELL)" hack/ci/generate-go-binary-sbom.sh; \
+		./hack/ci/generate-go-binary-sbom.sh; \
 	done
 
 .PHONY: oci-plugin-image
