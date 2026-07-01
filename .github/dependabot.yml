@@ -1,0 +1,79 @@
+version: 2
+
+updates:
+  - package-ecosystem: gomod
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+      time: "04:00"
+      timezone: Europe/Amsterdam
+    open-pull-requests-limit: 5
+    labels:
+      - dependencies
+      - go
+    commit-message:
+      prefix: "chore(deps)"
+      include: scope
+    groups:
+      go-minor-patch:
+        patterns:
+          - "*"
+        update-types:
+          - minor
+          - patch
+    ignore:
+      - dependency-name: github.com/openbao/openbao/api/v2
+        versions:
+          - ">= 2.6.0"
+      - dependency-name: github.com/openbao/openbao/sdk/v2
+        versions:
+          - ">= 2.6.0"
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+      time: "04:30"
+      timezone: Europe/Amsterdam
+    open-pull-requests-limit: 3
+    labels:
+      - dependencies
+      - ci
+    commit-message:
+      prefix: "chore(deps)"
+      include: scope
+    groups:
+      github-actions:
+        patterns:
+          - "*"
+
+  - package-ecosystem: docker-compose
+    directories:
+      - /test/e2e/aws
+      - /test/e2e/gitlab
+      - /test/e2e/localstack
+      - /test/e2e/oci
+    schedule:
+      interval: weekly
+      day: monday
+      time: "05:00"
+      timezone: Europe/Amsterdam
+    open-pull-requests-limit: 4
+    labels:
+      - dependencies
+      - containers
+      - e2e
+    commit-message:
+      prefix: "chore(deps)"
+      include: scope
+    groups:
+      e2e-images:
+        patterns:
+          - "*"
+        group-by: dependency-name
+    ignore:
+      # Keep LocalStack pinned intentionally. Newer images need an explicit
+      # licensing review before the self-contained e2e fixtures move.
+      - dependency-name: localstack/localstack
