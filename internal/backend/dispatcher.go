@@ -232,6 +232,9 @@ func (b *secretSyncBackend) processUpsert(
 		AssociationID: record.AssociationID,
 		ObjectID:      record.ObjectID,
 	})
+	if isDispatchContextCanceled(ctx, err) {
+		return err
+	}
 	b.recordProviderRequest(
 		ctx,
 		upsertContext.provider.Type(),
@@ -328,6 +331,9 @@ func (b *secretSyncBackend) processDelete(
 		AssociationID: record.AssociationID,
 		ObjectID:      record.ObjectID,
 	})
+	if isDispatchContextCanceled(ctx, err) {
+		return err
+	}
 	b.recordProviderRequest(
 		ctx,
 		deleteContext.provider.Type(),
@@ -586,6 +592,17 @@ func providerErrorClass(err error) providers.ErrorClass {
 		return providerError.Class
 	}
 	return providers.ErrorClassInternal
+}
+
+func isDispatchContextCanceled(ctx context.Context, err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, context.Canceled) {
+		return true
+	}
+	ctxErr := ctx.Err()
+	return ctxErr != nil && errors.Is(err, ctxErr)
 }
 
 type operationFailure struct {

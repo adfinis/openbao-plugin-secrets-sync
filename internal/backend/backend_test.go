@@ -2,6 +2,7 @@ package backend
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"sync"
@@ -2506,6 +2507,43 @@ func TestPeriodicRetriesTransientProviderErrors(t *testing.T) {
 	operation = assertOutboxOperation(t, storage, operationID, 1, outboxStateFailedTerminal)
 	if got := operation.Attempts; got != maxAutomaticRetryAttempts {
 		t.Fatalf("attempts = %d, want %d", got, maxAutomaticRetryAttempts)
+	}
+}
+
+func TestPeriodicLeavesClaimedOperationOnDispatchContextCancellation(t *testing.T) {
+	b := Backend(&logical.BackendConfig{})
+	storage := &logical.InmemStorage{}
+
+	writeAppDBSecret(t, b, storage, "initial")
+	createFakeDestination(t, b, storage, "default")
+	associationResp := createFakeAssociationWithResolvedName(t, b, storage, "prod/context-canceled/app/db")
+	operationID := operationIDsFromResponse(t, associationResp)[0]
+
+	acknowledgeRestoreGuard(t, b, storage)
+	err := b.periodic(context.Background(), &logical.Request{Storage: storage})
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("periodic error = %v, want context.Canceled", err)
+	}
+
+	operation := assertOutboxOperation(t, storage, operationID, 1, outboxStatePending)
+	if got := operation.Attempts; got != 0 {
+		t.Fatalf("attempts = %d, want 0", got)
+	}
+	if operation.ClaimOwner == "" {
+		t.Fatal("claim owner must remain set")
+	}
+	if operation.ClaimExpiresTime == "" {
+		t.Fatal("claim expiry must remain set")
+	}
+	if got := operation.ClaimAttempt; got != 1 {
+		t.Fatalf("claim attempt = %d, want 1", got)
+	}
+	status, err := getStatus(context.Background(), storage, "app/db", associationIDFromResponse(t, associationResp), syncObjectIDSecretPath)
+	if err != nil {
+		t.Fatalf("read status: %v", err)
+	}
+	if status != nil {
+		t.Fatalf("status = %#v, want nil", status)
 	}
 }
 

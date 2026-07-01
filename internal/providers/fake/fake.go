@@ -141,6 +141,8 @@ func (Provider) Health(_ context.Context, cfg providers.DestinationConfig) (*pro
 
 func fakeMutationError(resolvedName string) error {
 	switch {
+	case strings.Contains(resolvedName, "context-canceled"):
+		return context.Canceled
 	case strings.Contains(resolvedName, "validation"):
 		return &providers.Error{Class: providers.ErrorClassValidation, Message: "fake validation failure"}
 	case strings.Contains(resolvedName, "authn"):
