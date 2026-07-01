@@ -8,6 +8,9 @@ binary in its plugin directory, registers and mounts the plugin, configures an
 `aws-sm` destination that points at LocalStack, then verifies create, update,
 delete, ownership tags, queue drain, and status transitions.
 
+The OCI distribution variant in `../oci` runs the same assertions after OpenBao
+downloads and auto-registers the plugin from a disposable local TLS registry.
+
 ## Run
 
 ```sh

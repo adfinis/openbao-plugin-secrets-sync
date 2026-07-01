@@ -14,6 +14,9 @@ SBOM_GLOB="${SBOM_GLOB:-dist/release/sbom-*.spdx.json}"
 REPRODUCIBILITY_REPORT_PATH="${REPRODUCIBILITY_REPORT_PATH:-dist/release/reproducibility-report.md}"
 BINARY_NAME="${BINARY_NAME:-openbao-plugin-secrets-sync}"
 PLUGIN_VERSION="${PLUGIN_VERSION:-v${VERSION}}"
+OCI_IMAGE_REF="${OCI_IMAGE_REF:-}"
+OCI_IMAGE_DIGEST="${OCI_IMAGE_DIGEST:-}"
+OCI_IMAGE_PLATFORMS="${OCI_IMAGE_PLATFORMS:-}"
 RELEASE_SOURCE_REF="${RELEASE_SOURCE_REF:-refs/tags/${VERSION}}"
 RELEASE_WORKFLOW="${RELEASE_WORKFLOW:-${REPO}/.github/workflows/release.yml}"
 ATTESTATIONS_AVAILABLE="${ATTESTATIONS_AVAILABLE:-true}"
@@ -28,6 +31,9 @@ go run ./hack/tools/provenance_index \
   -plugin-version "${PLUGIN_VERSION}" \
   -source-date-epoch "${SOURCE_DATE_EPOCH}" \
   -binary-name "${BINARY_NAME}" \
+  -oci-image-ref "${OCI_IMAGE_REF}" \
+  -oci-image-digest "${OCI_IMAGE_DIGEST}" \
+  -oci-image-platforms "${OCI_IMAGE_PLATFORMS}" \
   -release-source-ref "${RELEASE_SOURCE_REF}" \
   -release-workflow "${RELEASE_WORKFLOW}" \
   -checksums-path "${CHECKSUMS_PATH}" \

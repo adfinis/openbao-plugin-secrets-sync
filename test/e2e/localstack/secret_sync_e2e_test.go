@@ -40,7 +40,13 @@ func TestOpenBaoPluginSyncsToLocalStackSecretsManager(t *testing.T) {
 
 	baoClient := newOpenBaoClient(t)
 	waitForOpenBao(t, ctx, baoClient)
-	registerPlugin(t, baoClient)
+	switch pluginRegistrationMode() {
+	case "manual":
+		registerPlugin(t, baoClient)
+	case "oci":
+	default:
+		t.Fatalf("unsupported E2E_PLUGIN_REGISTRATION %q", pluginRegistrationMode())
+	}
 	mountPlugin(t, baoClient)
 
 	awsClient := newSecretsManagerClient(t, ctx)
@@ -166,6 +172,10 @@ func mountPlugin(t *testing.T, client *api.Client) {
 
 func pluginVersion() string {
 	return env("E2E_PLUGIN_VERSION", "v0.0.0-dev")
+}
+
+func pluginRegistrationMode() string {
+	return env("E2E_PLUGIN_REGISTRATION", "manual")
 }
 
 func newSecretsManagerClient(t *testing.T, ctx context.Context) *secretsmanager.Client {

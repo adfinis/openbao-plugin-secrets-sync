@@ -31,6 +31,21 @@ license-report: go-licenses ## Generate dependency license report.
 .PHONY: security-ci
 security-ci: vulncheck license-check security-scan-fs ## Run vulnerability, license, and filesystem security scans.
 
+.PHONY: security-scan-image
+security-scan-image: ## Run Trivy image scan against OCI_IMAGE when installed.
+	@if command -v "$(TRIVY)" >/dev/null 2>&1; then \
+		"$(TRIVY)" image \
+			--scanners vuln,misconfig \
+			--severity HIGH,CRITICAL \
+			--ignore-unfixed \
+			--exit-code 1 \
+			--ignorefile .trivyignore \
+			--skip-version-check \
+			"$(OCI_IMAGE)"; \
+	else \
+		printf '%s\n' 'trivy not installed; skipping image security scan.'; \
+	fi
+
 .PHONY: security-scan-fs
 security-scan-fs: ## Run Trivy filesystem scan when installed.
 	@if command -v "$(TRIVY)" >/dev/null 2>&1; then \

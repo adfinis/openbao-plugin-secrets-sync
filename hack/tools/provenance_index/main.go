@@ -23,6 +23,9 @@ type config struct {
 	pluginVersion               string
 	sourceDateEpoch             int64
 	binaryName                  string
+	ociImageRef                 string
+	ociImageDigest              string
+	ociImagePlatforms           string
 	releaseSourceRef            string
 	releaseWorkflow             string
 	checksumsPath               string
@@ -100,8 +103,12 @@ type attestationInfo struct {
 }
 
 type ociPluginImageInfo struct {
-	Published bool   `json:"published"`
-	Note      string `json:"note"`
+	Published bool     `json:"published"`
+	Ref       string   `json:"ref,omitempty"`
+	Digest    string   `json:"digest,omitempty"`
+	Platforms []string `json:"platforms,omitempty"`
+	Binary    string   `json:"binary,omitempty"`
+	Note      string   `json:"note,omitempty"`
 }
 
 func main() {
@@ -135,6 +142,9 @@ func parseConfig() (config, error) {
 	flag.StringVar(&cfg.pluginVersion, "plugin-version", "", "OpenBao plugin catalog version")
 	flag.Int64Var(&cfg.sourceDateEpoch, "source-date-epoch", 0, "deterministic generated_at timestamp")
 	flag.StringVar(&cfg.binaryName, "binary-name", "openbao-plugin-secrets-sync", "plugin binary name")
+	flag.StringVar(&cfg.ociImageRef, "oci-image-ref", "", "OCI plugin image reference")
+	flag.StringVar(&cfg.ociImageDigest, "oci-image-digest", "", "OCI plugin image digest")
+	flag.StringVar(&cfg.ociImagePlatforms, "oci-image-platforms", "", "comma-separated OCI plugin image platforms")
 	flag.StringVar(&cfg.releaseSourceRef, "release-source-ref", "", "release source ref")
 	flag.StringVar(&cfg.releaseWorkflow, "release-workflow", "", "release workflow identity")
 	flag.StringVar(&cfg.checksumsPath, "checksums-path", "dist/release/checksums.txt", "checksums path")
@@ -246,11 +256,39 @@ func buildIndex(cfg config) (provenanceIndex, error) {
 			UnavailableReason: attestationUnavailableReason(cfg),
 			SignerWorkflow:    attestationSignerWorkflow(cfg),
 		},
-		OCIPluginImage: ociPluginImageInfo{
+		OCIPluginImage: ociPluginImage(cfg),
+	}, nil
+}
+
+func ociPluginImage(cfg config) ociPluginImageInfo {
+	if cfg.ociImageDigest == "" && cfg.ociImageRef == "" {
+		return ociPluginImageInfo{
 			Published: false,
 			Note:      "OCI plugin image publishing is not part of this release artifact set.",
-		},
-	}, nil
+		}
+	}
+	return ociPluginImageInfo{
+		Published: true,
+		Ref:       cfg.ociImageRef,
+		Digest:    cfg.ociImageDigest,
+		Platforms: splitCSV(cfg.ociImagePlatforms),
+		Binary:    cfg.binaryName,
+	}
+}
+
+func splitCSV(value string) []string {
+	if value == "" {
+		return nil
+	}
+	parts := strings.Split(value, ",")
+	out := make([]string, 0, len(parts))
+	for _, part := range parts {
+		part = strings.TrimSpace(part)
+		if part != "" {
+			out = append(out, part)
+		}
+	}
+	return out
 }
 
 func effectivePluginVersion(cfg config) string {

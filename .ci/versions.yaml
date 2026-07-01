@@ -25,6 +25,7 @@ toolchain:
     cosignInstaller: 6f9f17788090df1f26f669e9d70d6ae9567deba6
     createGithubAppToken: bcd2ba49218906704ab6c1aa796996da409d3eb1
     dependencyReview: 2031cfc080254a8a887f58cffee85186f0e49e48
+    dockerSetupBuildx: d7f5e7f509e45cec5c76c4d5afdd7de93d0b3df5
     releasePlease: 45996ed1f6d02564a971a2fa1b5860e934307cf7
     setupGo: 4b73464bb391d4059bd26b0524d20df3927bd417
     setupTrivy: 81e514348e19b6112ce2a7e3ecbafe19c1e1f567
@@ -48,7 +49,10 @@ artifacts:
   reproducibilityReport: reproducibility-report.md
   provenanceIndex: provenance-index.json
   ociPluginImage:
-    status: deferred
+    status: published
+    repositoryPattern: ghcr.io/${OWNER}/openbao-secret-sync
+    tagPattern: v${VERSION}
+    binaryPath: /openbao-plugin-secrets-sync
   checksumAlgorithm: sha256
   checksumFile: checksums.txt
   linuxTargets:

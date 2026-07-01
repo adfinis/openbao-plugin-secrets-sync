@@ -35,7 +35,17 @@ provenance-index.json
 ```
 
 The release workflow attaches these artifacts to the matching draft GitHub
-Release. The draft must already exist before artifacts are built.
+Release. The draft must already exist before artifacts are built. It also
+publishes a multi-platform OCI plugin distribution image to:
+
+```text
+ghcr.io/adfinis/openbao-secret-sync:v<version>
+```
+
+The OCI image is an extraction artifact for OpenBao, not a service container.
+It contains the static plugin binary at `/openbao-plugin-secrets-sync`.
+Release tags must not contain semver build metadata (`+...`) because the
+OpenBao OCI plugin version is used directly as the image tag.
 
 ## Local Artifact Build
 
@@ -53,6 +63,12 @@ Verify checksums:
 
 ```sh
 (cd dist/release && shasum -a 256 -c checksums.txt)
+```
+
+Build the local OCI plugin image from the release binaries:
+
+```sh
+VERSION=0.1.0-preview.1 make oci-plugin-image
 ```
 
 The build embeds version metadata through Go linker flags. Use a clean tree for
@@ -161,13 +177,19 @@ The workflow:
 - generates and verifies `checksums.txt`;
 - registers and mounts the built release binary in OpenBao and runs the
   self-contained LocalStack smoke test;
+- publishes a minimal multi-platform OCI plugin image to GHCR using the
+  `v`-prefixed OpenBao plugin version as the image tag;
+- scans, signs, and verifies the OCI plugin image by digest;
 - signs `checksums.txt` with a keyless cosign signature bundle;
 - creates GitHub build-provenance attestations for `checksums.txt` and the
   release binaries on public repositories;
-- verifies checksum signatures and public-repository artifact attestations
-  before upload;
+- creates a registry-pushed provenance attestation for the OCI plugin image on
+  public repositories;
+- verifies checksum signatures, public-repository artifact attestations, and
+  public-repository OCI image attestations before upload;
 - writes `provenance-index.json` with release identity, checksum evidence,
-  binary assets, SBOMs, reproducibility status, and attestation availability;
+  binary assets, SBOMs, reproducibility status, OCI image digest, and
+  attestation availability;
 - uploads the files as workflow artifacts;
 - uploads the files to the matching GitHub Release without replacing
   conflicting existing assets;
@@ -246,16 +268,69 @@ configuration. In that model OpenBao downloads an OCI image, extracts the
 plugin binary from the image root, verifies the extracted binary SHA-256, and
 runs the binary as a normal external plugin process.
 
-This project does not publish OCI plugin images yet. When added, OCI images
-should be an optional distribution path beside binary releases, use minimal
-static-binary images, be signed and attested by digest, and have their image
-digests recorded in `provenance-index.json`.
+The release workflow publishes the OCI plugin image as:
+
+```text
+ghcr.io/adfinis/openbao-secret-sync:v0.1.0-preview.1
+```
+
+Use the image digest from `provenance-index.json` for verification and
+deployment records:
+
+```sh
+jq -r '.oci_plugin_image.ref, .oci_plugin_image.digest' provenance-index.json
+```
+
+Verify the OCI image signature by digest:
+
+```sh
+IMAGE_NAME=ghcr.io/adfinis/openbao-secret-sync
+IMAGE_DIGEST=sha256:<digest-from-provenance-index>
+
+cosign verify \
+  --new-bundle-format=true \
+  --certificate-identity "${WORKFLOW_IDENTITY}" \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+  "${IMAGE_NAME}@${IMAGE_DIGEST}"
+```
+
+For public releases, verify the OCI image provenance attestation:
+
+```sh
+gh attestation verify "oci://${IMAGE_NAME}@${IMAGE_DIGEST}" \
+  --repo "${REPO}" \
+  --signer-workflow "${REPO}/.github/workflows/release.yml" \
+  --source-ref "refs/tags/${VERSION}" \
+  --cert-oidc-issuer https://token.actions.githubusercontent.com \
+  --deny-self-hosted-runners
+```
+
+Configure OpenBao to download and register the OCI plugin:
+
+```hcl
+plugin_directory = "/opt/openbao/plugins"
+plugin_auto_download = true
+plugin_auto_register = true
+plugin_download_behavior = "fail"
+plugin_download_max_size = 134217728 # 128 MiB, expressed as bytes.
+
+plugin "secret" "openbao-plugin-secrets-sync" {
+  image       = "ghcr.io/adfinis/openbao-secret-sync"
+  version     = "v0.1.0-preview.1"
+  binary_name = "openbao-plugin-secrets-sync"
+  sha256sum   = "<openbao_plugin_catalog_sha256 from provenance-index.json>"
+}
+```
+
+`sha256sum` is the checksum of the extracted plugin binary, not the OCI image
+digest. The binary checksum is recorded per platform in
+`provenance-index.json` under the matching release asset as
+`openbao_plugin_catalog_sha256`.
 
 ## Deferred Release Hardening
 
-The current release-engineering baseline intentionally does not yet implement:
-
-- OCI plugin image publishing.
-
-This should be added once the binary artifact workflow has run successfully and
-the repository release process is settled.
+The release workflow includes a self-contained OpenBao OCI-download e2e smoke
+test before publishing. Remaining release confidence still depends on the first
+real tag run in GitHub, because local tests cannot prove GHCR permissions,
+keyless signing, registry-pushed attestations, or GitHub Release upload
+behavior.

@@ -16,6 +16,7 @@ permissions:
   contents: write
   id-token: write
   attestations: write
+  packages: write
 
 concurrency:
   group: release-${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
@@ -41,8 +42,9 @@ jobs:
             version="${REF_NAME}"
             ref="refs/tags/${REF_NAME}"
           fi
-          if ! [[ "${version}" =~ ^[0-9]+\.[0-9]+\.[0-9]+([\-+].*)?$ ]]; then
-            echo "version must be a semver tag, got ${version}" >&2
+          if ! [[ "${version}" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
+            echo "version must be a semver tag without build metadata, got ${version}" >&2
+            echo "OCI image tags cannot contain '+', so release tags with semver build metadata are not supported." >&2
             exit 1
           fi
           {
@@ -73,6 +75,11 @@ jobs:
         uses: aquasecurity/setup-trivy@81e514348e19b6112ce2a7e3ecbafe19c1e1f567 # v0.3.1
         with:
           version: v0.69.3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@d7f5e7f509e45cec5c76c4d5afdd7de93d0b3df5 # v4.1.0
+        with:
+          version: v0.31.1
 
       - name: Run release source gates
         run: make lint-ci security-ci test test-race fuzz
@@ -167,10 +174,82 @@ jobs:
             VERSION="${{ steps.release.outputs.version }}" \
             E2E_PLUGIN_VERSION="v${{ steps.release.outputs.version }}"
 
+      - name: Run OpenBao OCI release smoke test
+        run: |
+          make test-e2e-oci-release-localstack \
+            VERSION="${{ steps.release.outputs.version }}" \
+            E2E_PLUGIN_VERSION="v${{ steps.release.outputs.version }}"
+
       - name: Install cosign
         uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
         with:
           cosign-release: v3.0.4
+
+      - name: Publish OCI plugin image
+        id: oci
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          VERSION: ${{ steps.release.outputs.version }}
+          COMMIT: ${{ steps.metadata.outputs.commit }}
+          BUILD_DATE: ${{ steps.metadata.outputs.build_date }}
+        run: |
+          set -euo pipefail
+          image_name="ghcr.io/${REPO}"
+          image_tag="v${VERSION}"
+          image_ref="${image_name}:${image_tag}"
+          platforms="linux/amd64,linux/arm64"
+
+          echo "${GITHUB_TOKEN}" | docker login ghcr.io -u "${GITHUB_ACTOR}" --password-stdin
+          make oci-plugin-image-push \
+            OCI_IMAGE="${image_ref}" \
+            OCI_IMAGE_PLATFORMS="${platforms}" \
+            OCI_IMAGE_METADATA=dist/oci-plugin-image-metadata.json \
+            OCI_IMAGE_SOURCE="https://github.com/${REPO}" \
+            VERSION="${VERSION}" \
+            COMMIT="${COMMIT}" \
+            BUILD_DATE="${BUILD_DATE}" \
+            DIRTY=false
+
+          digest="$(jq -r '."containerimage.digest" // empty' dist/oci-plugin-image-metadata.json)"
+          if [[ -z "${digest}" || "${digest}" == "null" ]]; then
+            echo "OCI image digest missing from buildx metadata." >&2
+            cat dist/oci-plugin-image-metadata.json >&2
+            exit 1
+          fi
+
+          {
+            echo "name=${image_name}"
+            echo "tag=${image_tag}"
+            echo "ref=${image_ref}"
+            echo "digest=${digest}"
+            echo "platforms=${platforms}"
+          } >> "${GITHUB_OUTPUT}"
+
+      - name: Scan OCI plugin image
+        run: make security-scan-image OCI_IMAGE="${{ steps.oci.outputs.name }}@${{ steps.oci.outputs.digest }}"
+
+      - name: Sign OCI plugin image
+        run: cosign sign --yes --new-bundle-format=true "${{ steps.oci.outputs.name }}@${{ steps.oci.outputs.digest }}"
+
+      - name: Verify OCI plugin image signature
+        env:
+          REPO: ${{ github.repository }}
+          VERSION: ${{ steps.release.outputs.version }}
+        run: |
+          cosign verify \
+            --new-bundle-format=true \
+            --certificate-identity "https://github.com/${REPO}/.github/workflows/release.yml@refs/tags/${VERSION}" \
+            --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
+            "${{ steps.oci.outputs.name }}@${{ steps.oci.outputs.digest }}" >/dev/null
+
+      - name: Attest OCI plugin image provenance
+        if: ${{ !github.event.repository.private }}
+        uses: actions/attest-build-provenance@a2bbfa25375fe432b6a289bc6b6cd05ecd0c4c32 # v4.1.0
+        with:
+          subject-name: ${{ steps.oci.outputs.name }}
+          subject-digest: ${{ steps.oci.outputs.digest }}
+          push-to-registry: true
 
       - name: Attest checksums provenance
         if: ${{ !github.event.repository.private }}
@@ -188,7 +267,7 @@ jobs:
         if: ${{ github.event.repository.private }}
         run: |
           cat >> "${GITHUB_STEP_SUMMARY}" <<'EOF'
-          GitHub release artifact attestations were skipped because this is a private repository dry run. Public release tags must run with attestations enabled.
+          GitHub release artifact and OCI image attestations were skipped because this is a private repository dry run. Public release tags must run with attestations enabled.
           EOF
 
       - name: Sign release checksums
@@ -219,6 +298,16 @@ jobs:
           VERSION: ${{ steps.release.outputs.version }}
         run: bash hack/ci/verify-release-artifact-attestations.sh
 
+      - name: Verify OCI plugin image attestation
+        if: ${{ !github.event.repository.private }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          VERSION: ${{ steps.release.outputs.version }}
+          OCI_IMAGE_NAME: ${{ steps.oci.outputs.name }}
+          OCI_IMAGE_DIGEST: ${{ steps.oci.outputs.digest }}
+        run: bash hack/ci/verify-oci-image-attestation.sh
+
       - name: Generate provenance index
         env:
           REPO: ${{ github.repository }}
@@ -226,15 +315,18 @@ jobs:
           VERSION: ${{ steps.release.outputs.version }}
           PLUGIN_VERSION: v${{ steps.release.outputs.version }}
           SOURCE_DATE_EPOCH: ${{ steps.metadata.outputs.source_date_epoch }}
+          OCI_IMAGE_REF: ${{ steps.oci.outputs.ref }}
+          OCI_IMAGE_DIGEST: ${{ steps.oci.outputs.digest }}
+          OCI_IMAGE_PLATFORMS: ${{ steps.oci.outputs.platforms }}
           ATTESTATIONS_AVAILABLE: ${{ !github.event.repository.private }}
         run: |
           set -euo pipefail
           reason=""
           if [[ "${ATTESTATIONS_AVAILABLE}" != "true" ]]; then
-            reason="GitHub artifact attestations were skipped for a private repository dry run."
+            reason="GitHub artifact and OCI image attestations were skipped for a private repository dry run."
           fi
           ATTESTATIONS_UNAVAILABLE_REASON="${reason}" bash hack/ci/generate-provenance-index.sh
-          jq '.release, .checksums, .reproducibility, .attestations' \
+          jq '.release, .checksums, .reproducibility, .attestations, .oci_plugin_image' \
             dist/release/provenance-index.json >> "${GITHUB_STEP_SUMMARY}"
 
       - name: Upload workflow artifact

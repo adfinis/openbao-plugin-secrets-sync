@@ -38,6 +38,38 @@ release-sboms: ## Generate SPDX SBOMs for release binaries.
 		"$(SHELL)" hack/ci/generate-go-binary-sbom.sh; \
 	done
 
+.PHONY: oci-plugin-image
+oci-plugin-image: ## Build an OCI plugin distribution image from release binaries.
+	@set -eu; \
+	mkdir -p "$$(dirname "$(OCI_IMAGE_METADATA)")"; \
+	for platform in $$(printf '%s' "$(OCI_IMAGE_PLATFORMS)" | tr ',' ' '); do \
+		goos="$${platform%/*}"; \
+		goarch="$${platform#*/}"; \
+		artifact="$(DIST_DIR)/$(BINARY_NAME)_$(VERSION)_$${goos}_$${goarch}"; \
+		if [ ! -f "$$artifact" ]; then \
+			printf 'release binary not found for OCI image: %s\n' "$$artifact" >&2; \
+			exit 1; \
+		fi; \
+	done; \
+	"$(DOCKER)" buildx build \
+		--platform "$(OCI_IMAGE_PLATFORMS)" \
+		--file Dockerfile.oci-plugin \
+		--build-arg DIST_DIR="$(DIST_DIR)" \
+		--build-arg BINARY_NAME="$(BINARY_NAME)" \
+		--build-arg VERSION="$(VERSION)" \
+		--build-arg PLUGIN_VERSION="$(PLUGIN_VERSION)" \
+		--build-arg COMMIT="$(COMMIT)" \
+		--build-arg BUILD_DATE="$(BUILD_DATE)" \
+		--build-arg SOURCE_URL="$(OCI_IMAGE_SOURCE)" \
+		--metadata-file "$(OCI_IMAGE_METADATA)" \
+		--tag "$(OCI_IMAGE)" \
+		$(OCI_IMAGE_OUTPUT) \
+		.
+
+.PHONY: oci-plugin-image-push
+oci-plugin-image-push: ## Build and push a multi-platform OCI plugin distribution image.
+	@$(MAKE) oci-plugin-image OCI_IMAGE_OUTPUT=--push
+
 .PHONY: checksums
 checksums: ## Generate release artifact checksums.
 	@set -eu; \

@@ -2,6 +2,7 @@
 
 !go.mod
 !go.sum
+!Dockerfile.oci-plugin
 
 !cmd/
 !cmd/**/
@@ -16,6 +17,14 @@
 !bin/
 !bin/e2e/
 !bin/e2e/openbao-plugin-secrets-sync
+
+!dist/
+!dist/release/
+!dist/release/openbao-plugin-secrets-sync_*
+!dist/e2e/
+!dist/e2e/oci/
+!dist/e2e/oci/release/
+!dist/e2e/oci/release/openbao-plugin-secrets-sync_*
 
 !test/
 !test/e2e/

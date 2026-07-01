@@ -43,6 +43,21 @@ E2E_GITLAB_ENVIRONMENT_SCOPE ?= production
 E2E_GITLAB_TOKEN ?= glpat-openbao-secret-sync-e2e-token-000000
 E2E_GITLAB_ROOT_PASSWORD ?= R8vQ2mT6pL9sX4zC7nY3
 E2E_GITLAB_CONFIRM ?=
+E2E_OCI_COMPOSE_FILE ?= test/e2e/oci/compose.yaml
+E2E_OCI_DIR ?= dist/e2e/oci
+E2E_OCI_DIST_DIR ?= $(E2E_OCI_DIR)/release
+E2E_OCI_VERSION ?= $(patsubst v%,%,$(E2E_PLUGIN_VERSION))
+E2E_OCI_RELEASE_PLUGIN_BIN ?= $(E2E_OCI_DIST_DIR)/$(BINARY_NAME)_$(E2E_OCI_VERSION)_linux_$(E2E_GOARCH)
+E2E_OCI_ARCHIVE ?= $(E2E_OCI_DIR)/openbao-secret-sync.tar
+E2E_OCI_LOCAL_IMAGE ?= openbao-secret-sync-e2e-oci:$(E2E_PLUGIN_VERSION)
+E2E_OCI_CERT_DIR ?= $(E2E_OCI_DIR)/certs
+E2E_OCI_CONFIG ?= $(E2E_OCI_DIR)/openbao.hcl
+E2E_OCI_OPENBAO_PORT ?= 18204
+E2E_OCI_OPENBAO_ADDR ?= http://127.0.0.1:$(E2E_OCI_OPENBAO_PORT)
+E2E_OCI_REGISTRY_PORT ?= 15000
+E2E_OCI_REPOSITORY ?= openbao-secret-sync
+E2E_OCI_IMAGE_IN_BAO ?= registry:5000/$(E2E_OCI_REPOSITORY)
+E2E_OCI_PUSH_REF ?= 127.0.0.1:$(E2E_OCI_REGISTRY_PORT)/$(E2E_OCI_REPOSITORY):$(E2E_PLUGIN_VERSION)
 
 .PHONY: e2e-build-plugin
 e2e-build-plugin: ## Build the Linux plugin binary used by the OpenBao e2e container.
@@ -96,6 +111,138 @@ test-e2e-release-localstack: e2e-stage-release-plugin ## Run LocalStack e2e agai
 	E2E_PLUGIN_PATH="$(E2E_PLUGIN_BIN)" \
 	E2E_PLUGIN_VERSION="$(E2E_PLUGIN_VERSION)" \
 	"$(GO)" test -tags=e2e ./test/e2e/localstack -count=1 -v
+
+.PHONY: e2e-oci-build-plugin
+e2e-oci-build-plugin: ## Build the Linux plugin binary used by the OCI e2e image.
+	@mkdir -p "$(E2E_OCI_DIST_DIR)"
+	@CGO_ENABLED=0 GOOS=linux GOARCH="$(E2E_GOARCH)" "$(GO)" build $(GO_BUILD_FLAGS) -ldflags "$(E2E_LDFLAGS)" -o "$(E2E_OCI_RELEASE_PLUGIN_BIN)" ./cmd/openbao-plugin-secrets-sync
+	@chmod 0755 "$(E2E_OCI_RELEASE_PLUGIN_BIN)"
+
+.PHONY: e2e-oci-stage-release-plugin
+e2e-oci-stage-release-plugin: ## Stage a prebuilt release binary for OCI e2e testing.
+	@if [ ! -f "$(E2E_RELEASE_PLUGIN_BIN)" ]; then \
+		printf 'release plugin binary not found: %s\n' "$(E2E_RELEASE_PLUGIN_BIN)" >&2; \
+		exit 1; \
+	fi
+	@mkdir -p "$(E2E_OCI_DIST_DIR)"
+	@cp "$(E2E_RELEASE_PLUGIN_BIN)" "$(E2E_OCI_RELEASE_PLUGIN_BIN)"
+	@chmod 0755 "$(E2E_OCI_RELEASE_PLUGIN_BIN)"
+
+.PHONY: e2e-oci-image-archive
+e2e-oci-image-archive: ## Build a Docker archive for the local OCI plugin registry.
+	@if [ ! -f "$(E2E_OCI_RELEASE_PLUGIN_BIN)" ]; then \
+		printf 'OCI e2e plugin binary not found: %s\n' "$(E2E_OCI_RELEASE_PLUGIN_BIN)" >&2; \
+		exit 1; \
+	fi
+	@mkdir -p "$(E2E_OCI_DIR)"
+	@$(DOCKER) build \
+		--platform "linux/$(E2E_GOARCH)" \
+		--file Dockerfile.oci-plugin \
+		--build-arg DIST_DIR="$(E2E_OCI_DIST_DIR)" \
+		--build-arg BINARY_NAME="$(BINARY_NAME)" \
+		--build-arg VERSION="$(E2E_OCI_VERSION)" \
+		--build-arg PLUGIN_VERSION="$(E2E_PLUGIN_VERSION)" \
+		--build-arg COMMIT="$(COMMIT)" \
+		--build-arg BUILD_DATE="$(BUILD_DATE)" \
+		--build-arg SOURCE_URL="$(OCI_IMAGE_SOURCE)" \
+		--tag "$(E2E_OCI_LOCAL_IMAGE)" \
+		.
+	@$(DOCKER) save --output "$(E2E_OCI_ARCHIVE)" "$(E2E_OCI_LOCAL_IMAGE)"
+
+.PHONY: e2e-oci-fixture
+e2e-oci-fixture: e2e-oci-image-archive ## Generate OCI e2e registry certificates and OpenBao config.
+	@BINARY_PATH="$(E2E_OCI_RELEASE_PLUGIN_BIN)" \
+	BINARY_NAME="$(BINARY_NAME)" \
+	PLUGIN_VERSION="$(E2E_PLUGIN_VERSION)" \
+	E2E_OCI_DIR="$(E2E_OCI_DIR)" \
+	E2E_OCI_CERT_DIR="$(E2E_OCI_CERT_DIR)" \
+	E2E_OCI_CONFIG="$(E2E_OCI_CONFIG)" \
+	E2E_OCI_IMAGE_IN_BAO="$(E2E_OCI_IMAGE_IN_BAO)" \
+	"$(SHELL)" hack/e2e/prepare-oci-fixture.sh
+
+.PHONY: e2e-oci-up-staged
+e2e-oci-up-staged: e2e-oci-fixture
+	@set -eu; \
+	E2E_OPENBAO_IMAGE="$(E2E_OPENBAO_IMAGE)" \
+	E2E_OCI_REGISTRY_PORT="$(E2E_OCI_REGISTRY_PORT)" \
+	E2E_OCI_OPENBAO_PORT="$(E2E_OCI_OPENBAO_PORT)" \
+	E2E_LOCALSTACK_PORT="$(E2E_LOCALSTACK_PORT)" \
+	$(DOCKER_COMPOSE) -f "$(E2E_OCI_COMPOSE_FILE)" up -d --wait registry localstack; \
+	"$(GO)" run ./hack/tools/oci_archive_push \
+		-archive "$(E2E_OCI_ARCHIVE)" \
+		-ref "$(E2E_OCI_PUSH_REF)" \
+		-ca "$(E2E_OCI_CERT_DIR)/ca.crt"; \
+	E2E_OPENBAO_IMAGE="$(E2E_OPENBAO_IMAGE)" \
+	E2E_OCI_REGISTRY_PORT="$(E2E_OCI_REGISTRY_PORT)" \
+	E2E_OCI_OPENBAO_PORT="$(E2E_OCI_OPENBAO_PORT)" \
+	E2E_LOCALSTACK_PORT="$(E2E_LOCALSTACK_PORT)" \
+	$(DOCKER_COMPOSE) -f "$(E2E_OCI_COMPOSE_FILE)" up -d --wait openbao
+
+.PHONY: e2e-oci-up
+e2e-oci-up: e2e-oci-build-plugin e2e-oci-up-staged ## Start the OCI plugin distribution e2e stack.
+
+.PHONY: e2e-oci-down
+e2e-oci-down: ## Stop the OCI plugin distribution e2e stack.
+	@E2E_OPENBAO_IMAGE="$(E2E_OPENBAO_IMAGE)" \
+	E2E_OCI_REGISTRY_PORT="$(E2E_OCI_REGISTRY_PORT)" \
+	E2E_OCI_OPENBAO_PORT="$(E2E_OCI_OPENBAO_PORT)" \
+	E2E_LOCALSTACK_PORT="$(E2E_LOCALSTACK_PORT)" \
+	$(DOCKER_COMPOSE) -f "$(E2E_OCI_COMPOSE_FILE)" down -v --remove-orphans
+
+.PHONY: test-e2e-oci-localstack
+test-e2e-oci-localstack: ## Run self-contained OCI plugin download plus LocalStack e2e tests.
+	@set -eu; \
+	cleanup() { \
+		status="$$?"; \
+		if [ "$$status" -ne 0 ]; then \
+			E2E_OPENBAO_IMAGE="$(E2E_OPENBAO_IMAGE)" \
+			E2E_OCI_REGISTRY_PORT="$(E2E_OCI_REGISTRY_PORT)" \
+			E2E_OCI_OPENBAO_PORT="$(E2E_OCI_OPENBAO_PORT)" \
+			E2E_LOCALSTACK_PORT="$(E2E_LOCALSTACK_PORT)" \
+			$(DOCKER_COMPOSE) -f "$(E2E_OCI_COMPOSE_FILE)" logs --no-color openbao registry localstack || true; \
+		fi; \
+		$(MAKE) e2e-oci-down >/dev/null 2>&1 || true; \
+		exit "$$status"; \
+	}; \
+	trap cleanup EXIT; \
+	$(MAKE) e2e-oci-up; \
+	AWS_ACCESS_KEY_ID=test \
+	AWS_SECRET_ACCESS_KEY=test \
+	AWS_REGION=us-east-1 \
+	AWS_DEFAULT_REGION=us-east-1 \
+	E2E_OPENBAO_ADDR="$(E2E_OCI_OPENBAO_ADDR)" \
+	E2E_LOCALSTACK_ENDPOINT="$(E2E_LOCALSTACK_ENDPOINT)" \
+	E2E_PLUGIN_REGISTRATION=oci \
+	E2E_PLUGIN_VERSION="$(E2E_PLUGIN_VERSION)" \
+	"$(GO)" test -tags=e2e ./test/e2e/localstack -run TestOpenBaoPluginSyncsToLocalStackSecretsManager -count=1 -v
+
+.PHONY: test-e2e-oci-release-localstack
+test-e2e-oci-release-localstack: ## Run OCI plugin e2e against a prebuilt release binary.
+	@set -eu; \
+	cleanup() { \
+		status="$$?"; \
+		if [ "$$status" -ne 0 ]; then \
+			E2E_OPENBAO_IMAGE="$(E2E_OPENBAO_IMAGE)" \
+			E2E_OCI_REGISTRY_PORT="$(E2E_OCI_REGISTRY_PORT)" \
+			E2E_OCI_OPENBAO_PORT="$(E2E_OCI_OPENBAO_PORT)" \
+			E2E_LOCALSTACK_PORT="$(E2E_LOCALSTACK_PORT)" \
+			$(DOCKER_COMPOSE) -f "$(E2E_OCI_COMPOSE_FILE)" logs --no-color openbao registry localstack || true; \
+		fi; \
+		$(MAKE) e2e-oci-down >/dev/null 2>&1 || true; \
+		exit "$$status"; \
+	}; \
+	trap cleanup EXIT; \
+	$(MAKE) e2e-oci-stage-release-plugin; \
+	$(MAKE) e2e-oci-up-staged; \
+	AWS_ACCESS_KEY_ID=test \
+	AWS_SECRET_ACCESS_KEY=test \
+	AWS_REGION=us-east-1 \
+	AWS_DEFAULT_REGION=us-east-1 \
+	E2E_OPENBAO_ADDR="$(E2E_OCI_OPENBAO_ADDR)" \
+	E2E_LOCALSTACK_ENDPOINT="$(E2E_LOCALSTACK_ENDPOINT)" \
+	E2E_PLUGIN_REGISTRATION=oci \
+	E2E_PLUGIN_VERSION="$(E2E_PLUGIN_VERSION)" \
+	"$(GO)" test -tags=e2e ./test/e2e/localstack -run TestOpenBaoPluginSyncsToLocalStackSecretsManager -count=1 -v
 
 .PHONY: e2e-kind-image
 e2e-kind-image: e2e-build-plugin ## Build the OpenBao image used by kind e2e tests.

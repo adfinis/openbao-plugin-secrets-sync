@@ -111,7 +111,10 @@ Current self-contained e2e coverage:
 
 - LocalStack-backed AWS Secrets Manager;
 - kind-backed Kubernetes Secrets;
-- Dockerized GitLab CE project variables.
+- Dockerized GitLab CE project variables;
+- OCI plugin distribution through a disposable TLS registry, OpenBao
+  declarative plugin download, OpenBao declarative plugin registration, and the
+  LocalStack-backed AWS Secrets Manager flow.
 
 Manual real-provider e2e tests prove cloud-specific IAM and API behavior, but
 must stay explicit and sandbox-scoped.
@@ -126,6 +129,8 @@ Documented provider validation paths:
 - GitLab project variables: Dockerized GitLab CE path in
   `test/e2e/gitlab/README.md`. A real GitLab project fixture remains opt-in
   future work.
+- OCI plugin distribution: disposable TLS registry path in
+  `test/e2e/oci/README.md`.
 
 ### Security Checks
 

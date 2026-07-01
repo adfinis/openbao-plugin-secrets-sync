@@ -1,0 +1,32 @@
+ARG DIST_DIR=dist/release
+ARG BINARY_NAME=openbao-plugin-secrets-sync
+ARG VERSION=0.0.0-dev
+ARG TARGETOS
+ARG TARGETARCH
+
+FROM scratch
+
+ARG DIST_DIR
+ARG BINARY_NAME
+ARG VERSION
+ARG PLUGIN_VERSION=v0.0.0-dev
+ARG COMMIT=unknown
+ARG BUILD_DATE=unknown
+ARG SOURCE_URL=https://github.com/adfinis/openbao-secret-sync
+ARG TARGETOS
+ARG TARGETARCH
+
+LABEL org.opencontainers.image.title="OpenBao Secret Sync Plugin"
+LABEL org.opencontainers.image.description="OCI distribution image for the OpenBao secret sync plugin binary"
+LABEL org.opencontainers.image.source="${SOURCE_URL}"
+LABEL org.opencontainers.image.revision="${COMMIT}"
+LABEL org.opencontainers.image.created="${BUILD_DATE}"
+LABEL org.opencontainers.image.version="${PLUGIN_VERSION}"
+LABEL org.opencontainers.image.vendor="Adfinis"
+LABEL org.opencontainers.image.licenses="MPL-2.0"
+
+COPY ${DIST_DIR}/${BINARY_NAME}_${VERSION}_${TARGETOS}_${TARGETARCH} /openbao-plugin-secrets-sync
+
+USER 65532:65532
+
+ENTRYPOINT ["/openbao-plugin-secrets-sync"]

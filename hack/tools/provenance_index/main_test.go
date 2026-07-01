@@ -46,6 +46,9 @@ func TestBuildIndex(t *testing.T) {
 		pluginVersion:             "v0.1.0",
 		sourceDateEpoch:           1_704_067_200,
 		binaryName:                "openbao-plugin-secrets-sync",
+		ociImageRef:               "ghcr.io/adfinis/openbao-secret-sync:v0.1.0",
+		ociImageDigest:            "sha256:0123456789abcdef",
+		ociImagePlatforms:         "linux/amd64,linux/arm64",
 		releaseWorkflow:           "adfinis/openbao-secret-sync/.github/workflows/release.yml",
 		checksumsPath:             checksumsPath,
 		checksumsBundlePath:       bundlePath,
@@ -67,7 +70,10 @@ func TestBuildIndex(t *testing.T) {
 	assertEqual(t, "sbom length", len(idx.SBOMs), 1)
 	assertTrue(t, "reproducibility should be verified", idx.Reproducible.Verified)
 	assertTrue(t, "attestations should be available", idx.Attestations.Available)
-	assertFalse(t, "OCI plugin image should not be published", idx.OCIPluginImage.Published)
+	assertTrue(t, "OCI plugin image should be published", idx.OCIPluginImage.Published)
+	assertEqual(t, "OCI plugin image ref", idx.OCIPluginImage.Ref, "ghcr.io/adfinis/openbao-secret-sync:v0.1.0")
+	assertEqual(t, "OCI plugin image digest", idx.OCIPluginImage.Digest, "sha256:0123456789abcdef")
+	assertEqual(t, "OCI plugin image platform count", len(idx.OCIPluginImage.Platforms), 2)
 }
 
 func mustMkdir(t *testing.T, path string) {
@@ -94,13 +100,6 @@ func assertEqual[T comparable](t *testing.T, name string, actual T, expected T) 
 func assertTrue(t *testing.T, msg string, value bool) {
 	t.Helper()
 	if !value {
-		t.Fatal(msg)
-	}
-}
-
-func assertFalse(t *testing.T, msg string, value bool) {
-	t.Helper()
-	if value {
 		t.Fatal(msg)
 	}
 }
