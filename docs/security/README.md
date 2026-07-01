@@ -10,3 +10,4 @@ redaction policy, and operational safety controls.
 - [Operator runbook](../operations/operator-runbook.md)
 - [Provider contract](../development/provider-contract.md)
 - [Testing and hardening](../development/testing.md)
+- [Vulnerability reporting](../../SECURITY.md)

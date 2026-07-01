@@ -24,9 +24,20 @@ verify-fmt: ## Verify Go formatting without modifying files.
 		printf '%s\n' 'No Go files yet; skipping Go formatting verification.'; \
 	fi
 
-.PHONY: lint
-lint: docs-check versions-check verify-fmt semgrep-ci ## Run lightweight lint checks.
+.PHONY: vet
+vet: ## Run go vet.
 	@"$(GO)" vet ./...
+
+.PHONY: workflow-lint
+workflow-lint: ## Validate GitHub Actions workflows when actionlint is installed.
+	@if command -v "$(ACTIONLINT)" >/dev/null 2>&1; then \
+		"$(ACTIONLINT)" .github/workflows/*.yml; \
+	else \
+		printf '%s\n' 'actionlint not installed; skipping workflow lint.'; \
+	fi
+
+.PHONY: lint
+lint: docs-check versions-check verify-fmt workflow-lint semgrep-ci vet ## Run lint checks.
 	@if command -v "$(STATICCHECK)" >/dev/null 2>&1; then "$(STATICCHECK)" ./...; else printf '%s\n' 'staticcheck not installed; skipping staticcheck.'; fi
 	@if command -v "$(GOLANGCI_LINT)" >/dev/null 2>&1; then "$(GOLANGCI_LINT)" run; else printf '%s\n' 'golangci-lint not installed; skipping golangci-lint.'; fi
 

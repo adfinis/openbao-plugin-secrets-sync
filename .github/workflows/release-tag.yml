@@ -8,10 +8,9 @@ on:
       - 'CHANGELOG.md'
       - '.release-please-manifest.json'
       - 'release-notes/**'
-  workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
   pull-requests: read
 
 concurrency:
@@ -24,24 +23,44 @@ jobs:
     runs-on: ubuntu-24.04
     if: ${{ !github.event.repository.fork }}
     steps:
-      - name: Mint GitHub App token
-        id: app-token
-        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
-        with:
-          app-id: ${{ secrets.OPENBAO_SECRET_SYNC_RELEASE_TAG_APP_ID }}
-          private-key: ${{ secrets.OPENBAO_SECRET_SYNC_RELEASE_TAG_PRIVATE_KEY }}
-          owner: ${{ github.repository_owner }}
-          repositories: ${{ github.event.repository.name }}
-          permission-contents: write
+      - name: Check release tag secrets
+        id: release-tag-secrets
+        env:
+          OPENBAO_SECRET_SYNC_RELEASE_TAG_GPG_PRIVATE_KEY: ${{ secrets.OPENBAO_SECRET_SYNC_RELEASE_TAG_GPG_PRIVATE_KEY }}
+          OPENBAO_SECRET_SYNC_RELEASE_TAG_GPG_PASSPHRASE: ${{ secrets.OPENBAO_SECRET_SYNC_RELEASE_TAG_GPG_PASSPHRASE }}
+          OPENBAO_SECRET_SYNC_RELEASE_TAG_GPG_NAME: ${{ secrets.OPENBAO_SECRET_SYNC_RELEASE_TAG_GPG_NAME }}
+          OPENBAO_SECRET_SYNC_RELEASE_TAG_GPG_EMAIL: ${{ secrets.OPENBAO_SECRET_SYNC_RELEASE_TAG_GPG_EMAIL }}
+        run: |
+          set -euo pipefail
+
+          missing=()
+          for var in \
+            OPENBAO_SECRET_SYNC_RELEASE_TAG_GPG_PRIVATE_KEY \
+            OPENBAO_SECRET_SYNC_RELEASE_TAG_GPG_PASSPHRASE \
+            OPENBAO_SECRET_SYNC_RELEASE_TAG_GPG_NAME \
+            OPENBAO_SECRET_SYNC_RELEASE_TAG_GPG_EMAIL
+          do
+            if [[ -z "${!var}" ]]; then
+              missing+=("${var}")
+            fi
+          done
+
+          if (( ${#missing[@]} == 0 )); then
+            echo "configured=true" >> "${GITHUB_OUTPUT}"
+          else
+            echo "configured=false" >> "${GITHUB_OUTPUT}"
+            echo "::notice::release tag skipped because these required secrets are not configured: ${missing[*]}"
+          fi
 
       - name: Checkout
+        if: ${{ steps.release-tag-secrets.outputs.configured == 'true' }}
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           ref: ${{ github.ref_name }}
           fetch-depth: 0
-          token: ${{ steps.app-token.outputs.token }}
 
       - name: Import release tag signing key
+        if: ${{ steps.release-tag-secrets.outputs.configured == 'true' }}
         env:
           OPENBAO_SECRET_SYNC_RELEASE_TAG_GPG_PRIVATE_KEY: ${{ secrets.OPENBAO_SECRET_SYNC_RELEASE_TAG_GPG_PRIVATE_KEY }}
           OPENBAO_SECRET_SYNC_RELEASE_TAG_GPG_PASSPHRASE: ${{ secrets.OPENBAO_SECRET_SYNC_RELEASE_TAG_GPG_PASSPHRASE }}
@@ -92,9 +111,50 @@ jobs:
           } >> "${GITHUB_ENV}"
 
       - name: Create tag and draft release
+        if: ${{ steps.release-tag-secrets.outputs.configured == 'true' }}
         env:
           REPO: ${{ github.repository }}
           GH_READ_TOKEN: ${{ github.token }}
-          GH_WRITE_TOKEN: ${{ steps.app-token.outputs.token }}
+          GH_WRITE_TOKEN: ${{ github.token }}
           OPENBAO_SECRET_SYNC_RELEASE_TAG_GPG_PASSPHRASE: ${{ secrets.OPENBAO_SECRET_SYNC_RELEASE_TAG_GPG_PASSPHRASE }}
         run: bash hack/ci/create-release-tag-and-draft.sh
+
+      - name: Dispatch release artifact workflow
+        if: ${{ steps.release-tag-secrets.outputs.configured == 'true' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          version="$(jq -er '."."' .release-please-manifest.json)"
+          if ! [[ "${version}" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
+            echo "release version must be a semver tag without build metadata, got ${version}" >&2
+            exit 1
+          fi
+
+          release_is_draft="$(gh release view "${version}" --repo "${REPO}" --json isDraft --jq '.isDraft')"
+          if [[ "${release_is_draft}" != "true" ]]; then
+            echo "release ${version} is already published; skipping artifact dispatch"
+            exit 0
+          fi
+
+          tag_commit="$(git rev-list -n1 "${version}")"
+          payload="$(
+            jq -cn \
+              --arg tag "${version}" \
+              --arg commit "${tag_commit}" \
+              --arg source_repository "${REPO}" \
+              --arg source_run_id "${GITHUB_RUN_ID}" \
+              '{
+                event_type: "release-artifacts",
+                client_payload: {
+                  tag: $tag,
+                  commit: $commit,
+                  source_workflow: "release-tag",
+                  source_repository: $source_repository,
+                  source_run_id: $source_run_id
+                }
+              }'
+          )"
+
+          gh api "repos/${REPO}/dispatches" --method POST --input - <<<"${payload}"

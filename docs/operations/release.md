@@ -8,11 +8,11 @@ minimum artifact workflow rather than the final supply-chain posture.
 ## Current Release Shape
 
 Release Please manages changelog and version bumps through
-`.release-please-manifest.json` and `CHANGELOG.md`. It opens release PRs only;
-tag creation and draft GitHub Release creation are handled by the dedicated
-release-tag workflow.
+`.release-please-manifest.json` and `CHANGELOG.md`. It opens release PRs only.
+Signed tag creation, draft GitHub Release creation, and release artifact
+dispatch are handled by the dedicated release-tag workflow.
 
-Tag-triggered releases build Linux plugin binaries for:
+Dispatched release artifact runs build Linux plugin binaries for:
 
 ```text
 linux/amd64
@@ -32,9 +32,9 @@ checksums.txt.bundle
 provenance-index.json
 ```
 
-The release workflow attaches these artifacts to the matching draft GitHub
-Release. The draft must already exist before artifacts are built. It also
-publishes a multi-platform OCI plugin distribution image to:
+The release artifact workflow attaches these artifacts to the matching draft
+GitHub Release. The draft must already exist before artifacts are built. It
+also publishes a multi-platform OCI plugin distribution image to:
 
 ```text
 ghcr.io/adfinis/openbao-plugin-secrets-sync:v<version>
@@ -124,46 +124,58 @@ REPO=adfinis/openbao-plugin-secrets-sync OWNER=adfinis \
 The release process has three separate automation steps:
 
 1. `.github/workflows/release-please.yml` opens or updates the release PR using
-   a GitHub App token and `skip-github-release: true`.
+   the repository `GITHUB_TOKEN` and `skip-github-release: true`.
 2. `.github/workflows/release-pr-gate.yml` requires the `release:ready` label
    and approval from the user configured in the
    `OPENBAO_SECRET_SYNC_RELEASE_REQUIRED_APPROVER` repository variable.
 3. `.github/workflows/release-tag.yml` creates a signed annotated semver tag and
-   a draft GitHub Release from the merged release PR.
+   a draft GitHub Release from the merged release PR, then dispatches
+   `.github/workflows/release.yml` with a `repository_dispatch` event.
 
-The release PR app requires:
+Release Please commits are signed off through `release-please-config.json` with
+the `github-actions[bot]` identity. Release PR checks created by
+`GITHUB_TOKEN` can require manual approval in the GitHub UI before they run.
 
-```text
-OPENBAO_SECRET_SYNC_RELEASE_PR_APP_ID
-OPENBAO_SECRET_SYNC_RELEASE_PR_PRIVATE_KEY
-```
-
-The release tag app and signing key require:
+The release tag workflow requires the signing key secrets:
 
 ```text
-OPENBAO_SECRET_SYNC_RELEASE_TAG_APP_ID
-OPENBAO_SECRET_SYNC_RELEASE_TAG_PRIVATE_KEY
 OPENBAO_SECRET_SYNC_RELEASE_TAG_GPG_PRIVATE_KEY
 OPENBAO_SECRET_SYNC_RELEASE_TAG_GPG_PASSPHRASE
 OPENBAO_SECRET_SYNC_RELEASE_TAG_GPG_NAME
 OPENBAO_SECRET_SYNC_RELEASE_TAG_GPG_EMAIL
 ```
 
+Set these values as repository Actions secrets. No broad personal access token
+is required for the default release path.
+
+The current tag ruleset protects semver tags from update and deletion.
+Automated tag creation is performed by `GITHUB_TOKEN` in the release-tag
+workflow. If release automation moves to GitHub Apps later, restrict semver tag
+creation to the release tag app and keep the release PR and tag identities
+separate.
+
 ## Artifact Workflow
 
-The workflow in `.github/workflows/release.yml` runs on semver tags:
+The workflow in `.github/workflows/release.yml` runs on the internal
+`release-artifacts` repository dispatch event:
 
 ```text
-0.1.0
-0.1.0-preview.1
+repository_dispatch: release-artifacts
 ```
 
-It can also be run manually for an existing semver tag through
-`workflow_dispatch`.
+The release-tag workflow emits that dispatch only after it has created or
+refreshed the signed tag and matching draft GitHub Release.
+
+Manual artifact recovery is available through `workflow_dispatch` with a tag
+input, but the job waits for the protected `release-manual` environment before
+using release permissions. Configure that environment with required reviewers,
+protected branches only, and administrator bypass disabled.
 
 The workflow:
 
+- validates the dispatch source or protected manual approval;
 - checks out the tag;
+- requires an annotated tag with a PGP signature block;
 - runs release source gates: lint, vulnerability checks, license checks,
   filesystem scan, unit tests, race tests, and fuzz smoke tests;
 - requires the matching GitHub Release to already exist and be a draft;
@@ -206,7 +218,8 @@ Verify the checksum file signature with `cosign`:
 ```sh
 VERSION=0.1.0-preview.1
 REPO=adfinis/openbao-plugin-secrets-sync
-WORKFLOW_IDENTITY="https://github.com/${REPO}/.github/workflows/release.yml@refs/tags/${VERSION}"
+WORKFLOW_REF=refs/heads/main
+WORKFLOW_IDENTITY="https://github.com/${REPO}/.github/workflows/release.yml@${WORKFLOW_REF}"
 
 cosign verify-blob \
   --new-bundle-format=true \
@@ -223,7 +236,7 @@ release workflow identity:
 gh attestation verify "./openbao-plugin-secrets-sync_${VERSION}_linux_amd64" \
   --repo "${REPO}" \
   --signer-workflow "${REPO}/.github/workflows/release.yml" \
-  --source-ref "refs/tags/${VERSION}" \
+  --source-ref "${WORKFLOW_REF}" \
   --cert-oidc-issuer https://token.actions.githubusercontent.com \
   --deny-self-hosted-runners
 ```
@@ -298,7 +311,7 @@ For public releases, verify the OCI image provenance attestation:
 gh attestation verify "oci://${IMAGE_NAME}@${IMAGE_DIGEST}" \
   --repo "${REPO}" \
   --signer-workflow "${REPO}/.github/workflows/release.yml" \
-  --source-ref "refs/tags/${VERSION}" \
+  --source-ref "${WORKFLOW_REF}" \
   --cert-oidc-issuer https://token.actions.githubusercontent.com \
   --deny-self-hosted-runners
 ```

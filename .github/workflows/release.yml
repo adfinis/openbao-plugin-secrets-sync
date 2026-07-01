@@ -1,10 +1,9 @@
 name: Release
 
 on:
-  push:
-    tags:
-      - "[0-9]*.[0-9]*.[0-9]*"
-      - "[0-9]*.[0-9]*.[0-9]*-*"
+  repository_dispatch:
+    types:
+      - release-artifacts
   workflow_dispatch:
     inputs:
       tag:
@@ -19,28 +18,66 @@ permissions:
   packages: write
 
 concurrency:
-  group: release-${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+  group: release-${{ github.event_name == 'repository_dispatch' && github.event.client_payload.tag || inputs.tag }}
   cancel-in-progress: false
 
 jobs:
+  manual-approval:
+    name: Approve Manual Release Recovery
+    runs-on: ubuntu-24.04
+    if: ${{ github.event_name == 'workflow_dispatch' }}
+    environment:
+      name: release-manual
+    permissions: {}
+    steps:
+      - name: Confirm protected manual release recovery
+        run: echo "Manual release recovery approved for ${{ inputs.tag }}"
+
   artifacts:
     name: Build And Upload Plugin Artifacts
     runs-on: ubuntu-24.04
+    needs:
+      - manual-approval
+    if: ${{ always() && !cancelled() && !github.event.repository.fork && (github.event_name != 'workflow_dispatch' || needs.manual-approval.result == 'success') }}
     steps:
       - name: Resolve release ref
         id: release
         env:
           EVENT_NAME: ${{ github.event_name }}
           INPUT_TAG: ${{ inputs.tag }}
-          REF_NAME: ${{ github.ref_name }}
+          PAYLOAD_TAG: ${{ github.event.client_payload.tag }}
+          PAYLOAD_COMMIT: ${{ github.event.client_payload.commit }}
+          PAYLOAD_SOURCE_WORKFLOW: ${{ github.event.client_payload.source_workflow }}
+          PAYLOAD_SOURCE_REPOSITORY: ${{ github.event.client_payload.source_repository }}
+          ACTOR: ${{ github.actor }}
+          REPOSITORY: ${{ github.repository }}
         run: |
           set -euo pipefail
           if [[ "${EVENT_NAME}" == "workflow_dispatch" ]]; then
             version="${INPUT_TAG}"
-            ref="refs/tags/${INPUT_TAG}"
+            expected_commit=""
+          elif [[ "${EVENT_NAME}" == "repository_dispatch" ]]; then
+            if [[ "${ACTOR}" != "github-actions[bot]" ]]; then
+              echo "repository_dispatch releases must be triggered by github-actions[bot], got ${ACTOR}" >&2
+              exit 1
+            fi
+            if [[ "${PAYLOAD_SOURCE_WORKFLOW}" != "release-tag" ]]; then
+              echo "repository_dispatch source_workflow must be release-tag, got ${PAYLOAD_SOURCE_WORKFLOW}" >&2
+              exit 1
+            fi
+            if [[ "${PAYLOAD_SOURCE_REPOSITORY}" != "${REPOSITORY}" ]]; then
+              echo "repository_dispatch source_repository must be ${REPOSITORY}, got ${PAYLOAD_SOURCE_REPOSITORY}" >&2
+              exit 1
+            fi
+            if [[ -z "${PAYLOAD_TAG}" || -z "${PAYLOAD_COMMIT}" ]]; then
+              echo "repository_dispatch payload must include tag and commit" >&2
+              exit 1
+            fi
+            version="${PAYLOAD_TAG}"
+            expected_commit="${PAYLOAD_COMMIT}"
           else
-            version="${REF_NAME}"
-            ref="refs/tags/${REF_NAME}"
+            echo "unsupported release event ${EVENT_NAME}" >&2
+            exit 1
           fi
           if ! [[ "${version}" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
             echo "version must be a semver tag without build metadata, got ${version}" >&2
@@ -49,7 +86,8 @@ jobs:
           fi
           {
             echo "version=${version}"
-            echo "ref=${ref}"
+            echo "ref=refs/tags/${version}"
+            echo "expected_commit=${expected_commit}"
           } >> "${GITHUB_OUTPUT}"
 
       - name: Checkout
@@ -57,6 +95,30 @@ jobs:
         with:
           ref: ${{ steps.release.outputs.ref }}
           fetch-depth: 0
+
+      - name: Verify release tag
+        env:
+          VERSION: ${{ steps.release.outputs.version }}
+          EXPECTED_COMMIT: ${{ steps.release.outputs.expected_commit }}
+        run: |
+          set -euo pipefail
+          git fetch --force --tags origin "refs/tags/${VERSION}:refs/tags/${VERSION}"
+
+          if ! git rev-parse -q --verify "${VERSION}^{tag}" >/dev/null; then
+            echo "release tag ${VERSION} must be an annotated tag" >&2
+            exit 1
+          fi
+
+          if ! git cat-file tag "${VERSION}^{tag}" | grep -q "BEGIN PGP SIGNATURE"; then
+            echo "release tag ${VERSION} must include a PGP signature" >&2
+            exit 1
+          fi
+
+          tag_commit="$(git rev-list -n1 "${VERSION}")"
+          if [[ -n "${EXPECTED_COMMIT}" && "${tag_commit}" != "${EXPECTED_COMMIT}" ]]; then
+            echo "release tag ${VERSION} points at ${tag_commit}, expected ${EXPECTED_COMMIT}" >&2
+            exit 1
+          fi
 
       - name: Setup repo tools
         uses: ./.github/actions/setup-repo-tools
@@ -234,12 +296,11 @@ jobs:
 
       - name: Verify OCI plugin image signature
         env:
-          REPO: ${{ github.repository }}
-          VERSION: ${{ steps.release.outputs.version }}
+          WORKFLOW_REF: ${{ github.workflow_ref }}
         run: |
           cosign verify \
             --new-bundle-format=true \
-            --certificate-identity "https://github.com/${REPO}/.github/workflows/release.yml@refs/tags/${VERSION}" \
+            --certificate-identity "https://github.com/${WORKFLOW_REF}" \
             --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
             "${{ steps.oci.outputs.name }}@${{ steps.oci.outputs.digest }}" >/dev/null
 
@@ -280,13 +341,12 @@ jobs:
 
       - name: Verify release checksums signature
         env:
-          REPO: ${{ github.repository }}
-          VERSION: ${{ steps.release.outputs.version }}
+          WORKFLOW_REF: ${{ github.workflow_ref }}
         run: |
           cosign verify-blob \
             --new-bundle-format=true \
             --bundle dist/release/checksums.txt.bundle \
-            --certificate-identity "https://github.com/${REPO}/.github/workflows/release.yml@refs/tags/${VERSION}" \
+            --certificate-identity "https://github.com/${WORKFLOW_REF}" \
             --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
             dist/release/checksums.txt >/dev/null
 
@@ -296,6 +356,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           REPO: ${{ github.repository }}
           VERSION: ${{ steps.release.outputs.version }}
+          SOURCE_REF: ${{ github.ref }}
         run: bash hack/ci/verify-release-artifact-attestations.sh
 
       - name: Verify OCI plugin image attestation
@@ -306,6 +367,7 @@ jobs:
           VERSION: ${{ steps.release.outputs.version }}
           OCI_IMAGE_NAME: ${{ steps.oci.outputs.name }}
           OCI_IMAGE_DIGEST: ${{ steps.oci.outputs.digest }}
+          SOURCE_REF: ${{ github.ref }}
         run: bash hack/ci/verify-oci-image-attestation.sh
 
       - name: Generate provenance index
@@ -315,6 +377,7 @@ jobs:
           VERSION: ${{ steps.release.outputs.version }}
           PLUGIN_VERSION: v${{ steps.release.outputs.version }}
           SOURCE_DATE_EPOCH: ${{ steps.metadata.outputs.source_date_epoch }}
+          RELEASE_WORKFLOW: ${{ github.workflow_ref }}
           OCI_IMAGE_REF: ${{ steps.oci.outputs.ref }}
           OCI_IMAGE_DIGEST: ${{ steps.oci.outputs.digest }}
           OCI_IMAGE_PLATFORMS: ${{ steps.oci.outputs.platforms }}

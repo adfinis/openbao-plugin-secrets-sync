@@ -46,3 +46,9 @@ make test-e2e
 make test-e2e-kind
 E2E_GITLAB_CONFIRM=1 make test-e2e-gitlab
 ```
+
+## Contributing and security
+
+Use conventional commits with DCO sign-off for repository changes. See
+[CONTRIBUTING.md](CONTRIBUTING.md) for contribution guidance and
+[SECURITY.md](SECURITY.md) for vulnerability reporting.
