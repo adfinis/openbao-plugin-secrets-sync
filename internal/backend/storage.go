@@ -576,6 +576,13 @@ func isQueuedOutboxState(state string) bool {
 }
 
 func putStatus(ctx context.Context, storage logical.Storage, record statusRecord) error {
+	existing, err := getStatus(ctx, storage, record.Path, record.AssociationID, record.ObjectID)
+	if err != nil {
+		return err
+	}
+	if existing != nil && record.Version < existing.Version {
+		return nil
+	}
 	entry, err := logical.StorageEntryJSON(
 		statusStorageKey(record.Path, record.AssociationID, record.ObjectID),
 		record,

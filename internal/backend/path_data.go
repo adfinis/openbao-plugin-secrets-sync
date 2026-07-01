@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strconv"
+	"time"
 
 	"github.com/adfinis/openbao-plugin-secrets-sync/internal/domain"
 	"github.com/adfinis/openbao-plugin-secrets-sync/internal/outbox"
@@ -94,7 +95,8 @@ func (b *secretSyncBackend) pathDataWrite(
 	}
 
 	nextVersion := metadata.CurrentVersion + 1
-	now := nowUTC().Format(timeFormatRFC3339)
+	nowTime := nowUTC()
+	now := nowTime.Format(timeFormatRFC3339)
 	operations, operationIDs, err := newAssociationOutboxRecords(associations, nextVersion, payload, now)
 	if err != nil {
 		return logical.ErrorResponse(err.Error()), nil
@@ -103,7 +105,20 @@ func (b *secretSyncBackend) pathDataWrite(
 		b.enqueueMu.Lock()
 		defer b.enqueueMu.Unlock()
 	}
-	if err := ensureQueueCapacityFor(ctx, req.Storage, len(operations)); err != nil {
+	staleUpsertIDs, err := staleQueuedUpsertIDsForOperations(ctx, req.Storage, operations, nowTime)
+	if err != nil {
+		return nil, err
+	}
+	additionalOperations, err := additionalQueuedOperationCount(ctx, req.Storage, operations)
+	if err != nil {
+		return nil, err
+	}
+	if err := ensureQueueCapacityAfterReplacement(
+		ctx,
+		req.Storage,
+		additionalOperations,
+		len(staleUpsertIDs),
+	); err != nil {
 		return logical.ErrorResponse(err.Error()), nil
 	}
 	if err := putPendingEnqueueIntent(ctx, req.Storage, path, nextVersion, operations, now); err != nil {
@@ -111,6 +126,9 @@ func (b *secretSyncBackend) pathDataWrite(
 	}
 
 	if err := putSourceVersionRecord(ctx, req.Storage, path, nextVersion, payload, now); err != nil {
+		return nil, err
+	}
+	if err := cancelQueuedOutboxIDs(ctx, req.Storage, staleUpsertIDs, now); err != nil {
 		return nil, err
 	}
 	if err := putOutboxRecords(ctx, req.Storage, operations); err != nil {
@@ -524,6 +542,55 @@ func additionalQueuedOperationCount(
 		}
 	}
 	return count, nil
+}
+
+func staleQueuedUpsertIDsForOperations(
+	ctx context.Context,
+	storage logical.Storage,
+	operations []outboxRecord,
+	now time.Time,
+) ([]string, error) {
+	targetVersions := make(map[string]int, len(operations))
+	path := ""
+	for _, operation := range operations {
+		if operation.Type != outbox.OperationTypeUpsert {
+			continue
+		}
+		if path == "" {
+			path = operation.Path
+		}
+		targetVersions[outboxObjectKey(operation.AssociationID, operation.ObjectID)] = operation.Version
+	}
+	if len(targetVersions) == 0 || path == "" {
+		return nil, nil
+	}
+	ids, err := listQueuedOutboxIDsForPath(ctx, storage, path)
+	if err != nil {
+		return nil, err
+	}
+	staleIDs := []string{}
+	for _, id := range ids {
+		record, err := getOutbox(ctx, storage, id)
+		if err != nil {
+			return nil, err
+		}
+		if record == nil || record.Type != outbox.OperationTypeUpsert {
+			continue
+		}
+		if isOutboxClaimActive(*record, now) {
+			continue
+		}
+		targetVersion, ok := targetVersions[outboxObjectKey(record.AssociationID, record.ObjectID)]
+		if !ok || record.Version >= targetVersion {
+			continue
+		}
+		staleIDs = append(staleIDs, record.ID)
+	}
+	return staleIDs, nil
+}
+
+func outboxObjectKey(associationID string, objectID string) string {
+	return associationID + "\x00" + objectID
 }
 
 func putPendingEnqueueIntent(

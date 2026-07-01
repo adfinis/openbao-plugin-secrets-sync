@@ -2260,6 +2260,89 @@ func TestConcurrentAssociationWritesReserveResolvedNameOnce(t *testing.T) {
 	}
 }
 
+func TestDataWriteSupersedesStaleQueuedUpserts(t *testing.T) {
+	b := Backend(&logical.BackendConfig{})
+	storage := &logical.InmemStorage{}
+
+	writeAppDBSecret(t, b, storage, "initial")
+	createFakeDestination(t, b, storage, "default")
+	associationResp := createDefaultFakeAssociation(t, b, storage)
+	staleOperationID := operationIDsFromResponse(t, associationResp)[0]
+
+	rotatedResp := writeAppDBSecret(t, b, storage, "rotated")
+	rotatedMetadata := rotatedResp.Data["metadata"].(map[string]interface{})
+	rotatedOperationID := requireSingleOperationID(
+		t,
+		operationIDsFromMetadata(t, rotatedMetadata),
+		"rotated write",
+	)
+
+	assertOutboxOperation(t, storage, staleOperationID, 1, outboxStateCanceled)
+	assertOutboxOperation(t, storage, rotatedOperationID, 2, outboxStatePending)
+	assertQueueCount(t, b, storage, "pending", 1)
+	assertQueueCount(t, b, storage, "canceled", 1)
+}
+
+func TestStatusWriteIgnoresOlderOperationVersion(t *testing.T) {
+	storage := &logical.InmemStorage{}
+	associationID := "assoc-test"
+	if err := putStatus(context.Background(), storage, statusRecord{
+		Path:            "app/db",
+		Version:         2,
+		AssociationID:   associationID,
+		ObjectID:        syncObjectIDSecretPath,
+		DestinationRef:  "fake/default",
+		ResolvedName:    "prod/app/db",
+		State:           string(domain.SyncStateSynced),
+		LastOperationID: "op-new",
+		UpdatedTime:     nowUTC().Format(timeFormatRFC3339),
+	}); err != nil {
+		t.Fatalf("write current status: %v", err)
+	}
+
+	staleOperation := outboxRecord{
+		ID:             "op-stale",
+		Type:           outbox.OperationTypeUpsert,
+		Path:           "app/db",
+		Version:        1,
+		AssociationID:  associationID,
+		ObjectID:       syncObjectIDSecretPath,
+		DestinationRef: "fake/default",
+		State:          outboxStatePending,
+	}
+	if err := markOperationFailed(
+		context.Background(),
+		storage,
+		staleOperation,
+		operationFailure{
+			class:        providers.ErrorClassDrift,
+			message:      "stale remote drift",
+			resolvedName: "prod/app/db",
+		},
+		nowUTC(),
+	); err != nil {
+		t.Fatalf("mark stale operation failed: %v", err)
+	}
+
+	status, err := getStatus(context.Background(), storage, "app/db", associationID, syncObjectIDSecretPath)
+	if err != nil {
+		t.Fatalf("read status: %v", err)
+	}
+	if status == nil {
+		t.Fatal("status must exist")
+	}
+	if got := status.Version; got != 2 {
+		t.Fatalf("status version = %d, want 2", got)
+	}
+	if got := status.State; got != string(domain.SyncStateSynced) {
+		t.Fatalf("status state = %s, want %s", got, domain.SyncStateSynced)
+	}
+	if got := status.LastOperationID; got != "op-new" {
+		t.Fatalf("last operation = %s, want op-new", got)
+	}
+	assertOutboxOperation(t, storage, staleOperation.ID, 1, outboxStateFailedTerminal)
+}
+
 func TestQueueCapacityRejectsWriteBeforeVersionCommit(t *testing.T) {
 	b := Backend(&logical.BackendConfig{})
 	storage := &logical.InmemStorage{}
@@ -2270,7 +2353,44 @@ func TestQueueCapacityRejectsWriteBeforeVersionCommit(t *testing.T) {
 	})
 	writeAppDBSecret(t, b, storage, "initial")
 	createFakeDestination(t, b, storage, "default")
-	createDefaultFakeAssociation(t, b, storage)
+	markAppDBSyncable(t, b, storage)
+	associationResp := handleRequest(t, b, storage, logical.UpdateOperation, "associations/app/db", map[string]interface{}{
+		"destination_type": providerTypeFake,
+		"destination_name": "default",
+		"resolved_name":    "prod/app/db",
+		"granularity":      syncObjectIDSecretPath,
+		"format":           defaultAssociationFormat,
+		"enabled":          false,
+	})
+	assertNoErrorResponse(t, associationResp)
+	now := nowUTC().Format(timeFormatRFC3339)
+	if err := putOutbox(context.Background(), storage, outboxRecord{
+		ID:             "op-unrelated-1",
+		Type:           outbox.OperationTypeUpsert,
+		Path:           "other/db",
+		Version:        1,
+		AssociationID:  "assoc-unrelated",
+		ObjectID:       syncObjectIDSecretPath,
+		DestinationRef: "fake/default",
+		State:          outboxStatePending,
+		NotBefore:      now,
+		CreatedTime:    now,
+		UpdatedTime:    now,
+	}); err != nil {
+		t.Fatalf("write unrelated outbox operation: %v", err)
+	}
+	associationID := associationIDFromResponse(t, associationResp)
+	association, err := getAssociation(context.Background(), storage, "app/db", associationID)
+	if err != nil {
+		t.Fatalf("read association: %v", err)
+	}
+	if association == nil {
+		t.Fatal("association must exist")
+	}
+	association.Enabled = true
+	if err := putAssociation(context.Background(), storage, *association); err != nil {
+		t.Fatalf("enable association fixture: %v", err)
+	}
 
 	secondResp := handleRequest(t, b, storage, logical.UpdateOperation, "data/app/db", map[string]interface{}{
 		"data": map[string]interface{}{
