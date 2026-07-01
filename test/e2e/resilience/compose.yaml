@@ -21,14 +21,16 @@ services:
     command:
       - |
         set -eu
-        mkdir -p /openbao/data /openbao/seal
+        mkdir -p /openbao/data/node0 /openbao/data/node1 /openbao/data/node2 /openbao/seal
         cp /openbao/fixture/static-unseal.key /openbao/seal/static-unseal.key
         chown -R 100:1000 /openbao/data /openbao/seal
-        chmod 0750 /openbao/data /openbao/seal
+        chmod 0750 /openbao/data /openbao/data/node0 /openbao/data/node1 /openbao/data/node2 /openbao/seal
         chmod 0400 /openbao/seal/static-unseal.key
     volumes:
       - ../../../dist/e2e/resilience/static-unseal.key:/openbao/fixture/static-unseal.key:ro
-      - openbao-data:/openbao/data
+      - openbao-data-node0:/openbao/data/node0
+      - openbao-data-node1:/openbao/data/node1
+      - openbao-data-node2:/openbao/data/node2
       - openbao-seal:/openbao/seal
 
   openbao:
@@ -55,7 +57,73 @@ services:
       - ../../../bin/e2e:/openbao/plugins:ro
       - openbao-seal:/openbao/seal:ro
       - ./config/node0.hcl:/openbao/e2e-config/node0.hcl:ro
-      - openbao-data:/openbao/data
+      - openbao-data-node0:/openbao/data
+    healthcheck:
+      test: ["CMD-SHELL", "bao status -address=http://127.0.0.1:8200 >/dev/null 2>&1; code=$$?; [ \"$$code\" -eq 0 ] || [ \"$$code\" -eq 2 ]"]
+      interval: 2s
+      timeout: 5s
+      retries: 30
+
+  openbao-standby:
+    image: ${E2E_OPENBAO_IMAGE:-ghcr.io/openbao/openbao:2.5.5@sha256:6150c4a6b62067db6141c8da7a6a6b5763f4f47c315343d0c848b40fecdfd452}
+    cap_add:
+      - IPC_LOCK
+    depends_on:
+      localstack:
+        condition: service_healthy
+      openbao-fixture-dir:
+        condition: service_completed_successfully
+      openbao:
+        condition: service_healthy
+    environment:
+      AWS_ACCESS_KEY_ID: test
+      AWS_SECRET_ACCESS_KEY: test
+      AWS_REGION: us-east-1
+      AWS_DEFAULT_REGION: us-east-1
+      BAO_ADDR: http://127.0.0.1:8200
+    command:
+      - server
+      - -config=/openbao/e2e-config/node1.hcl
+    ports:
+      - "127.0.0.1:${E2E_RESILIENCE_OPENBAO_STANDBY_PORT:-18206}:8200"
+    volumes:
+      - ../../../bin/e2e:/openbao/plugins:ro
+      - openbao-seal:/openbao/seal:ro
+      - ./config/node1.hcl:/openbao/e2e-config/node1.hcl:ro
+      - openbao-data-node1:/openbao/data
+    healthcheck:
+      test: ["CMD-SHELL", "bao status -address=http://127.0.0.1:8200 >/dev/null 2>&1; code=$$?; [ \"$$code\" -eq 0 ] || [ \"$$code\" -eq 2 ]"]
+      interval: 2s
+      timeout: 5s
+      retries: 30
+
+  openbao-standby-2:
+    image: ${E2E_OPENBAO_IMAGE:-ghcr.io/openbao/openbao:2.5.5@sha256:6150c4a6b62067db6141c8da7a6a6b5763f4f47c315343d0c848b40fecdfd452}
+    cap_add:
+      - IPC_LOCK
+    depends_on:
+      localstack:
+        condition: service_healthy
+      openbao-fixture-dir:
+        condition: service_completed_successfully
+      openbao:
+        condition: service_healthy
+    environment:
+      AWS_ACCESS_KEY_ID: test
+      AWS_SECRET_ACCESS_KEY: test
+      AWS_REGION: us-east-1
+      AWS_DEFAULT_REGION: us-east-1
+      BAO_ADDR: http://127.0.0.1:8200
+    command:
+      - server
+      - -config=/openbao/e2e-config/node2.hcl
+    ports:
+      - "127.0.0.1:${E2E_RESILIENCE_OPENBAO_STANDBY_2_PORT:-18207}:8200"
+    volumes:
+      - ../../../bin/e2e:/openbao/plugins:ro
+      - openbao-seal:/openbao/seal:ro
+      - ./config/node2.hcl:/openbao/e2e-config/node2.hcl:ro
+      - openbao-data-node2:/openbao/data
     healthcheck:
       test: ["CMD-SHELL", "bao status -address=http://127.0.0.1:8200 >/dev/null 2>&1; code=$$?; [ \"$$code\" -eq 0 ] || [ \"$$code\" -eq 2 ]"]
       interval: 2s
@@ -63,5 +131,7 @@ services:
       retries: 30
 
 volumes:
-  openbao-data:
+  openbao-data-node0:
+  openbao-data-node1:
+  openbao-data-node2:
   openbao-seal:

@@ -2,14 +2,14 @@ ui = false
 log_level = "info"
 
 api_addr = "http://127.0.0.1:8200"
-cluster_addr = "http://openbao:8201"
+cluster_addr = "http://openbao-standby-2:8201"
 disable_standby_reads = false
 enable_response_header_raft_node_id = true
 plugin_directory = "/openbao/plugins"
 
 storage "raft" {
   path = "/openbao/data"
-  node_id = "openbao-node0"
+  node_id = "openbao-node2"
   performance_multiplier = 1
 
   retry_join {

@@ -111,7 +111,7 @@ jobs:
         run: make test-e2e
 
   resilience-e2e:
-    name: Restart Resilience E2E
+    name: OpenBao Lifecycle E2E
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
@@ -124,7 +124,7 @@ jobs:
           cache-tools: "false"
           bootstrap-tools: "false"
 
-      - name: Run restart resilience e2e
+      - name: Run OpenBao lifecycle e2e
         run: make test-e2e-resilience
 
   core:

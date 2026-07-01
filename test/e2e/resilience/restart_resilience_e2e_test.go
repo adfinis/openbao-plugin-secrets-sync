@@ -32,16 +32,24 @@ const (
 	localstackInBao  = "http://localstack:4566"
 	testPollInterval = 500 * time.Millisecond
 	testTimeout      = 30 * time.Second
+	raftNode0ID      = "openbao-node0"
+	raftNode1ID      = "openbao-node1"
+	raftNode2ID      = "openbao-node2"
 )
 
-func TestOpenBaoRestartPreservesSecretSyncQueue(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+func TestOpenBaoLifecyclePreservesSecretSyncState(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 
 	baoClient := newOpenBaoClient(t, "")
 	rootToken := initializeOpenBao(t, ctx, baoClient)
 	baoClient.SetToken(rootToken)
 	waitForOpenBaoReady(t, ctx, baoClient)
+	standbyClient := newOpenBaoStandbyClient(t, rootToken)
+	waitForOpenBaoReady(t, ctx, standbyClient)
+	standby2Client := newOpenBaoStandby2Client(t, rootToken)
+	waitForOpenBaoReady(t, ctx, standby2Client)
+	waitForRaftPeers(t, ctx, baoClient, raftNode0ID, raftNode1ID, raftNode2ID)
 
 	registerPlugin(t, baoClient)
 	mountPlugin(t, baoClient)
@@ -79,9 +87,20 @@ func TestOpenBaoRestartPreservesSecretSyncQueue(t *testing.T) {
 	assertStatus(t, baoClient, "PENDING")
 	assertRemoteMissing(t, ctx, awsClient, remoteName)
 
-	restartOpenBao(t, ctx)
+	waitForRaftLeader(t, ctx, baoClient, raftNode0ID)
+	stopOpenBao(t, ctx)
+	standbyClient = newOpenBaoStandbyClient(t, rootToken)
+	waitForOpenBaoReady(t, ctx, standbyClient)
+	assertConfig(t, standbyClient, true, false)
+	assertQueue(t, standbyClient, 1, 0)
+	assertStatus(t, standbyClient, "PENDING")
+	assertRemoteMissing(t, ctx, awsClient, remoteName)
+	startOpenBao(t, ctx)
 	baoClient = newOpenBaoClient(t, rootToken)
 	waitForOpenBaoReady(t, ctx, baoClient)
+	standby2Client = newOpenBaoStandby2Client(t, rootToken)
+	waitForOpenBaoReady(t, ctx, standby2Client)
+	waitForRaftPeers(t, ctx, baoClient, raftNode0ID, raftNode1ID, raftNode2ID)
 	assertConfig(t, baoClient, true, false)
 	assertQueue(t, baoClient, 1, 0)
 	assertStatus(t, baoClient, "PENDING")
@@ -93,14 +112,55 @@ func TestOpenBaoRestartPreservesSecretSyncQueue(t *testing.T) {
 	assertQueue(t, baoClient, 0, 0)
 	assertRemotePayload(t, ctx, awsClient, remoteName, "initial")
 	assertStatus(t, baoClient, "SYNCED")
+	assertStatus(t, standbyClient, "SYNCED")
 
 	restartOpenBao(t, ctx)
 	baoClient = newOpenBaoClient(t, rootToken)
 	waitForOpenBaoReady(t, ctx, baoClient)
+	standbyClient = newOpenBaoStandbyClient(t, rootToken)
+	waitForOpenBaoReady(t, ctx, standbyClient)
+	waitForRaftPeers(t, ctx, baoClient, raftNode0ID, raftNode1ID, raftNode2ID)
 	assertConfig(t, baoClient, false, false)
 	assertQueue(t, baoClient, 0, 0)
 	assertStatus(t, baoClient, "SYNCED")
 	assertRemotePayload(t, ctx, awsClient, remoteName, "initial")
+
+	restartOpenBaoStandby(t, ctx)
+	standbyClient = newOpenBaoStandbyClient(t, rootToken)
+	waitForOpenBaoReady(t, ctx, standbyClient)
+	waitForRaftPeers(t, ctx, baoClient, raftNode0ID, raftNode1ID, raftNode2ID)
+	assertStatus(t, standbyClient, "SYNCED")
+
+	write(t, baoClient, mountPath+"/config", map[string]interface{}{
+		"disabled": true,
+	})
+	writeSource(t, baoClient, "after-seal")
+	assertConfig(t, baoClient, true, false)
+	assertQueue(t, baoClient, 1, 0)
+	assertStatus(t, baoClient, "PENDING")
+	assertRemotePayload(t, ctx, awsClient, remoteName, "initial")
+
+	sealOpenBao(t, ctx, baoClient)
+	waitForOpenBaoSealed(t, ctx, baoClient)
+
+	restartOpenBao(t, ctx)
+	baoClient = newOpenBaoClient(t, rootToken)
+	waitForOpenBaoReady(t, ctx, baoClient)
+	standbyClient = newOpenBaoStandbyClient(t, rootToken)
+	waitForOpenBaoReady(t, ctx, standbyClient)
+	waitForRaftPeers(t, ctx, baoClient, raftNode0ID, raftNode1ID, raftNode2ID)
+	assertConfig(t, baoClient, true, false)
+	assertQueue(t, baoClient, 1, 0)
+	assertStatus(t, baoClient, "PENDING")
+
+	write(t, baoClient, mountPath+"/config", map[string]interface{}{
+		"disabled": false,
+	})
+	drainQueue(t, baoClient, 1)
+	assertQueue(t, baoClient, 0, 0)
+	assertRemotePayload(t, ctx, awsClient, remoteName, "after-seal")
+	assertStatus(t, baoClient, "SYNCED")
+	assertStatus(t, standbyClient, "SYNCED")
 }
 
 func initializeOpenBao(t *testing.T, ctx context.Context, client *api.Client) string {
@@ -135,8 +195,23 @@ func initializeOpenBao(t *testing.T, ctx context.Context, client *api.Client) st
 
 func newOpenBaoClient(t *testing.T, token string) *api.Client {
 	t.Helper()
+	return newOpenBaoClientAt(t, env("E2E_RESILIENCE_OPENBAO_ADDR", "http://127.0.0.1:18205"), token)
+}
+
+func newOpenBaoStandbyClient(t *testing.T, token string) *api.Client {
+	t.Helper()
+	return newOpenBaoClientAt(t, env("E2E_RESILIENCE_OPENBAO_STANDBY_ADDR", "http://127.0.0.1:18206"), token)
+}
+
+func newOpenBaoStandby2Client(t *testing.T, token string) *api.Client {
+	t.Helper()
+	return newOpenBaoClientAt(t, env("E2E_RESILIENCE_OPENBAO_STANDBY_2_ADDR", "http://127.0.0.1:18207"), token)
+}
+
+func newOpenBaoClientAt(t *testing.T, address string, token string) *api.Client {
+	t.Helper()
 	config := api.DefaultConfig()
-	config.Address = env("E2E_RESILIENCE_OPENBAO_ADDR", "http://127.0.0.1:18205")
+	config.Address = address
 	client, err := api.NewClient(config)
 	if err != nil {
 		t.Fatalf("create OpenBao client: %v", err)
@@ -159,6 +234,85 @@ func waitForOpenBaoReady(t *testing.T, ctx context.Context, client *api.Client) 
 		}
 		return nil
 	})
+}
+
+func waitForOpenBaoSealed(t *testing.T, ctx context.Context, client *api.Client) {
+	t.Helper()
+	waitFor(t, ctx, func() error {
+		status, err := client.Sys().SealStatusWithContext(ctx)
+		if err != nil {
+			return err
+		}
+		if !status.Initialized || !status.Sealed {
+			return fmt.Errorf("openbao not sealed: initialized=%v sealed=%v", status.Initialized, status.Sealed)
+		}
+		return nil
+	})
+}
+
+func waitForRaftPeers(t *testing.T, ctx context.Context, client *api.Client, expectedIDs ...string) {
+	t.Helper()
+	waitFor(t, ctx, func() error {
+		state, err := client.Sys().RaftAutopilotStateWithContext(ctx)
+		if err != nil {
+			return err
+		}
+		if state == nil {
+			return errors.New("raft autopilot state response is nil")
+		}
+
+		peers := make(map[string]struct{}, len(state.Servers)*2)
+		for key, server := range state.Servers {
+			peers[key] = struct{}{}
+			if server != nil {
+				peers[server.ID] = struct{}{}
+				peers[server.Name] = struct{}{}
+			}
+		}
+
+		var missing []string
+		for _, expectedID := range expectedIDs {
+			if _, ok := peers[expectedID]; !ok {
+				missing = append(missing, expectedID)
+			}
+		}
+		if len(missing) > 0 {
+			return fmt.Errorf("raft peers missing %v; got %v", missing, peers)
+		}
+		return nil
+	})
+}
+
+func waitForRaftLeader(t *testing.T, ctx context.Context, client *api.Client, expectedID string) {
+	t.Helper()
+	waitFor(t, ctx, func() error {
+		state, err := client.Sys().RaftAutopilotStateWithContext(ctx)
+		if err != nil {
+			return err
+		}
+		if state == nil {
+			return errors.New("raft autopilot state response is nil")
+		}
+
+		leaderAliases := map[string]struct{}{
+			state.Leader: {},
+		}
+		if server := state.Servers[state.Leader]; server != nil {
+			leaderAliases[server.ID] = struct{}{}
+			leaderAliases[server.Name] = struct{}{}
+		}
+		if _, ok := leaderAliases[expectedID]; !ok {
+			return fmt.Errorf("raft leader = %q, want %q", state.Leader, expectedID)
+		}
+		return nil
+	})
+}
+
+func sealOpenBao(t *testing.T, ctx context.Context, client *api.Client) {
+	t.Helper()
+	if err := client.Sys().SealWithContext(ctx); err != nil {
+		t.Fatalf("seal OpenBao: %v", err)
+	}
 }
 
 func registerPlugin(t *testing.T, client *api.Client) {
@@ -219,19 +373,39 @@ func newSecretsManagerClient(t *testing.T, ctx context.Context) *secretsmanager.
 
 func restartOpenBao(t *testing.T, ctx context.Context) {
 	t.Helper()
+	runOpenBaoServiceCommand(t, ctx, "restart", "openbao")
+}
+
+func restartOpenBaoStandby(t *testing.T, ctx context.Context) {
+	t.Helper()
+	runOpenBaoServiceCommand(t, ctx, "restart", "openbao-standby")
+}
+
+func stopOpenBao(t *testing.T, ctx context.Context) {
+	t.Helper()
+	runOpenBaoServiceCommand(t, ctx, "stop", "openbao")
+}
+
+func startOpenBao(t *testing.T, ctx context.Context) {
+	t.Helper()
+	runOpenBaoServiceCommand(t, ctx, "start", "openbao")
+}
+
+func runOpenBaoServiceCommand(t *testing.T, ctx context.Context, command string, service string) {
+	t.Helper()
 	composeCommand := strings.Fields(env("E2E_DOCKER_COMPOSE", "docker compose"))
 	if len(composeCommand) == 0 {
 		t.Fatal("E2E_DOCKER_COMPOSE resolved to an empty command")
 	}
 	args := append(composeCommand[1:],
 		"-f", env("E2E_RESILIENCE_COMPOSE_FILE", "compose.yaml"),
-		"restart", "openbao",
+		command, service,
 	)
 	cmd := exec.CommandContext(ctx, composeCommand[0], args...)
 	cmd.Env = os.Environ()
 	output, err := cmd.CombinedOutput()
 	if err != nil {
-		t.Fatalf("restart OpenBao container: %v\n%s", err, output)
+		t.Fatalf("%s %s container: %v\n%s", command, service, err, output)
 	}
 }
 
