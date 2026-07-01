@@ -368,11 +368,21 @@ provider-specific tests, but it locks down the common contract:
 - plan action mapping;
 - upsert and delete success results where implemented;
 - read-state behavior where implemented;
-- provider error-class mapping for retry and terminal failures.
+- provider error-class mapping for retry and terminal failures;
+- maturity matrix coverage for ownership loss, authentication failure,
+  throttling, payload limits, partial-success behavior, stale remote state, and
+  delete semantics.
 
 New providers may start with only type, capability, validation, health, and
 plan checks. Backend registration should wait until upsert, owned delete, and
 error classification are implemented for the provider.
+
+The maturity matrix treats partial success as an explicit provider property.
+Providers whose remote API writes payload and ownership metadata atomically
+should declare the atomic mode and keep lifecycle coverage for that mutation.
+Providers with multi-step writes must include a case where a later metadata or
+cleanup step fails after an earlier remote mutation and the provider returns a
+stable error class with no successful `SyncResult`.
 
 ## Provider MVP Choices
 
@@ -399,7 +409,7 @@ backend registration, destination config for SDK default auth and STS
 assume-role auth, seal-wrapped external ID handling, explicit custom endpoint
 policies, an SDK-backed client boundary, LocalStack e2e coverage, and mocked
 behavior tests for health, plan, upsert, owned delete, read-state, ownership
-checks, and AWS error classification.
+checks, AWS error classification, and the shared provider maturity matrix.
 
 Current granularity support: `secret-path` only. The provider advertises
 `SupportsSecretKey: false` until AWS naming, collision, and cleanup semantics
@@ -443,7 +453,8 @@ backend registration, destination config for namespace, in-cluster auth, and
 kubeconfig auth, a client-go-backed client boundary, Opaque Secret
 create/update/delete/read-state/health behavior, ownership labels and
 annotations, payload hash metadata, Kubernetes API error classification, and a
-provider conformance lifecycle test using the client-go fake client.
+provider conformance lifecycle and maturity test using the client-go fake
+client.
 
 Current granularity support: `secret-path` only. The core engine now expands
 `secret-key` associations for providers that opt in, but Kubernetes Secret
@@ -460,9 +471,10 @@ Current status: package has provider type `gitlab`, backend registration,
 project-level destination config, seal-wrapped API token storage, standard HTTP
 client boundary, provider conformance coverage, project variable plan/upsert,
 owned update, owned delete, read-state, health, and HTTP error classification.
-Self-contained Docker GitLab e2e coverage is opt-in because a full GitLab CE
-container is heavy. Real GitLab e2e coverage remains a later opt-in/manual
-fixture because it requires an external project and token.
+The provider passes the shared maturity matrix. Self-contained Docker GitLab
+e2e coverage is opt-in because a full GitLab CE container is heavy. Real GitLab
+e2e coverage remains a later opt-in/manual fixture because it requires an
+external project and token.
 
 Current granularity support: `secret-path` and `secret-key`. For CI/CD
 variables, `secret-key` with `format=raw` is the recommended shape. The

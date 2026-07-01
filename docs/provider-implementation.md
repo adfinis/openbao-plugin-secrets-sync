@@ -155,7 +155,10 @@ contract coverage. The conformance harness should cover:
 - health diagnostics;
 - plan action mapping;
 - create/update/delete/read-state lifecycle when implemented;
-- upsert and delete error classification.
+- upsert and delete error classification;
+- the provider maturity matrix for ownership loss, auth failure, throttling,
+  payload limits, partial-success behavior, stale remote state, and delete
+  semantics.
 
 Provider-specific tests should cover behavior the shared harness cannot know:
 
@@ -169,6 +172,12 @@ Provider-specific tests should cover behavior the shared harness cannot know:
 - collision and ownership-loss behavior;
 - delete semantics;
 - redaction of sensitive config fields.
+
+Partial success is provider-specific. Providers with atomic value+metadata
+mutations should declare that in the maturity matrix and keep lifecycle tests
+covering the atomic mutation. Providers with multi-step mutations must include
+a classified failure case where an earlier remote mutation can succeed but the
+overall provider call still returns no `SyncResult` and a stable error class.
 
 Backend tests should prove the provider is registered and that destination
 config flows through validation, health, plan, queue dispatch, delete, and

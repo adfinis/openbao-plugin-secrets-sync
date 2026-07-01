@@ -103,6 +103,7 @@ func TestProviderConformance(t *testing.T) {
 				Request: defaultReadStateRequest(testPayloadSHANew, 2),
 			},
 		},
+		Maturity: gitlabMaturityMatrix(),
 	})
 }
 
@@ -409,6 +410,106 @@ func TestHTTPClientLimitsResponseBody(t *testing.T) {
 	}
 }
 
+func gitlabMaturityMatrix() *providertest.MaturityMatrix {
+	return &providertest.MaturityMatrix{
+		OwnershipLoss: []providertest.MaturityCase{
+			{
+				Name:            "upsert-unowned-variable",
+				Provider:        Provider{client: gitlabClientWithVariable(unownedVariable())},
+				Operation:       providertest.OperationUpsert,
+				UpsertRequest:   defaultUpsertRequest(testPayloadSHANew, []byte("new"), 2),
+				ErrorClass:      providers.ErrorClassOwnership,
+				NoResultOnError: true,
+			},
+		},
+		AuthFailure: providertest.MaturityCase{
+			Name: "get-unauthorized",
+			Provider: Provider{client: gitlabClientWithError(
+				"get",
+				gitlabHTTPError{statusCode: http.StatusUnauthorized},
+			)},
+			Operation:       providertest.OperationUpsert,
+			UpsertRequest:   defaultUpsertRequest(testPayloadSHANew, []byte("new"), 2),
+			ErrorClass:      providers.ErrorClassAuthn,
+			NoResultOnError: true,
+		},
+		Throttling: providertest.MaturityCase{
+			Name: "create-rate-limited",
+			Provider: Provider{client: gitlabClientWithError(
+				"create",
+				gitlabHTTPError{statusCode: http.StatusTooManyRequests},
+			)},
+			Operation:       providertest.OperationUpsert,
+			UpsertRequest:   defaultUpsertRequest(testPayloadSHANew, []byte("new"), 2),
+			ErrorClass:      providers.ErrorClassRateLimit,
+			NoResultOnError: true,
+		},
+		PayloadLimit: providertest.MaturityCase{
+			Name:            "oversized-payload",
+			Provider:        Provider{client: newMemoryProjectVariableClient()},
+			Operation:       providertest.OperationUpsert,
+			UpsertRequest:   oversizedGitLabUpsertRequest(),
+			ErrorClass:      providers.ErrorClassCapacity,
+			NoResultOnError: true,
+		},
+		PartialSuccess: providertest.PartialSuccessCase{
+			Name: "single-variable-update",
+			Mode: providertest.PartialSuccessAtomic,
+			Case: providertest.MaturityCase{
+				Provider: Provider{client: gitlabClientWithVariable(ownedVariable(variableMetadata{
+					ManagedBy:     metadataManagedBy,
+					AssociationID: testAssociationID,
+					SourcePath:    testSourcePath,
+					ObjectID:      testObjectID,
+					SourceVersion: 1,
+					PayloadSHA256: testPayloadSHAOld,
+				}))},
+				Operation:     providertest.OperationUpsert,
+				UpsertRequest: defaultUpsertRequest(testPayloadSHANew, []byte("new"), 2),
+				RemoteVersion: testPayloadSHANew,
+			},
+		},
+		StaleRemoteState: providertest.MaturityCase{
+			Name: "newer-remote-source-version",
+			Provider: Provider{client: gitlabClientWithVariable(ownedVariable(variableMetadata{
+				ManagedBy:     metadataManagedBy,
+				AssociationID: testAssociationID,
+				SourcePath:    testSourcePath,
+				ObjectID:      testObjectID,
+				SourceVersion: 3,
+				PayloadSHA256: testPayloadSHAOld,
+			}))},
+			Operation:       providertest.OperationUpsert,
+			UpsertRequest:   defaultUpsertRequest(testPayloadSHANew, []byte("new"), 2),
+			ErrorClass:      providers.ErrorClassDrift,
+			NoResultOnError: true,
+		},
+		DeleteSemantics: []providertest.MaturityCase{
+			{
+				Name:          "missing-delete-is-idempotent",
+				Provider:      Provider{client: newMemoryProjectVariableClient()},
+				Operation:     providertest.OperationDelete,
+				DeleteRequest: defaultDeleteRequest(1),
+				RemoteVersion: "missing",
+			},
+			{
+				Name: "owned-delete-removes-variable",
+				Provider: Provider{client: gitlabClientWithVariable(ownedVariable(variableMetadata{
+					ManagedBy:     metadataManagedBy,
+					AssociationID: testAssociationID,
+					SourcePath:    testSourcePath,
+					ObjectID:      testObjectID,
+					SourceVersion: 1,
+					PayloadSHA256: testPayloadSHAOld,
+				}))},
+				Operation:     providertest.OperationDelete,
+				DeleteRequest: defaultDeleteRequest(1),
+				RemoteVersion: testPayloadSHAOld,
+			},
+		},
+	}
+}
+
 func defaultDestinationConfig() providers.DestinationConfig {
 	return providers.DestinationConfig{
 		Name: testDestinationName,
@@ -483,6 +584,12 @@ func defaultReadStateRequest(payloadSHA256 string, version int) providers.ReadSt
 	}
 }
 
+func oversizedGitLabUpsertRequest() providers.UpsertRequest {
+	request := defaultUpsertRequest(testPayloadSHANew, []byte("new"), 2)
+	request.Payload = make([]byte, variableValueMaxBytes+1)
+	return request
+}
+
 func defaultRuntimeIdentity() providers.RuntimeIdentity {
 	return providers.RuntimeIdentity{
 		PluginInstanceID: testPluginInstance,
@@ -502,6 +609,26 @@ func ownedVariable(metadata variableMetadata) *gitlabVariable {
 		EnvironmentScope: testEnvScope,
 		Description:      metadataDescription(metadata),
 	}
+}
+
+func unownedVariable() *gitlabVariable {
+	return &gitlabVariable{
+		Key:              testResolvedName,
+		EnvironmentScope: testEnvScope,
+		Description:      "created outside openbao-secret-sync",
+	}
+}
+
+func gitlabClientWithVariable(variable *gitlabVariable) *memoryProjectVariableClient {
+	client := newMemoryProjectVariableClient()
+	client.variables[variableStorageKey(variable.Key, variable.EnvironmentScope)] = variable
+	return client
+}
+
+func gitlabClientWithError(operation string, err error) *memoryProjectVariableClient {
+	client := newMemoryProjectVariableClient()
+	client.errors[operation] = err
+	return client
 }
 
 type memoryProjectVariableClient struct {

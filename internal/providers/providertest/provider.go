@@ -18,6 +18,7 @@ type Harness struct {
 	HealthCase           *HealthCase
 	PlanCases            []PlanCase
 	Lifecycle            *LifecycleCase
+	Maturity             *MaturityMatrix
 	UpsertSuccess        *UpsertCase
 	DeleteSuccess        *DeleteCase
 	ReadStateCase        *ReadStateCase
@@ -110,6 +111,62 @@ type DeleteErrorCase struct {
 	ErrorClass providers.ErrorClass
 }
 
+// Operation identifies a provider boundary operation exercised by maturity tests.
+type Operation string
+
+const (
+	OperationPlan      Operation = "plan"
+	OperationUpsert    Operation = "upsert"
+	OperationDelete    Operation = "delete"
+	OperationReadState Operation = "read-state"
+	OperationHealth    Operation = "health"
+)
+
+// PartialSuccessMode documents whether partial remote mutation is possible for a provider.
+type PartialSuccessMode string
+
+const (
+	// PartialSuccessAtomic means the provider API writes payload and metadata in one mutation.
+	PartialSuccessAtomic PartialSuccessMode = "atomic"
+	// PartialSuccessClassifiedFailure means a post-write failure is possible and must be classified.
+	PartialSuccessClassifiedFailure PartialSuccessMode = "classified_failure"
+)
+
+// MaturityMatrix describes required production-readiness behavior for real providers.
+type MaturityMatrix struct {
+	OwnershipLoss    []MaturityCase
+	AuthFailure      MaturityCase
+	Throttling       MaturityCase
+	PayloadLimit     MaturityCase
+	PartialSuccess   PartialSuccessCase
+	StaleRemoteState MaturityCase
+	DeleteSemantics  []MaturityCase
+}
+
+// MaturityCase validates one provider maturity behavior.
+type MaturityCase struct {
+	Name              string
+	Provider          providers.Provider
+	Operation         Operation
+	PlanRequest       providers.PlanRequest
+	UpsertRequest     providers.UpsertRequest
+	DeleteRequest     providers.DeleteRequest
+	ReadStateRequest  providers.ReadStateRequest
+	HealthDestination providers.DestinationConfig
+	PlanAction        string
+	ErrorClass        providers.ErrorClass
+	RemoteVersion     string
+	ReadState         *ReadStateCase
+	NoResultOnError   bool
+}
+
+// PartialSuccessCase validates or documents the provider's partial-mutation behavior.
+type PartialSuccessCase struct {
+	Name string
+	Mode PartialSuccessMode
+	Case MaturityCase
+}
+
 // Run executes the configured provider conformance checks.
 func Run(t *testing.T, harness Harness) {
 	t.Helper()
@@ -127,6 +184,9 @@ func Run(t *testing.T, harness Harness) {
 	}
 	if harness.Lifecycle != nil {
 		runLifecycleCheck(t, harness.Provider, *harness.Lifecycle)
+	}
+	if harness.Maturity != nil {
+		runMaturityMatrix(t, harness.Provider, *harness.Maturity)
 	}
 	if harness.UpsertSuccess != nil {
 		runUpsertSuccessCheck(t, harness.Provider, *harness.UpsertSuccess)
@@ -254,24 +314,7 @@ func runReadStateCheck(t *testing.T, provider providers.Provider, readStateCase 
 		if state == nil {
 			t.Fatal("remote state must not be nil")
 		}
-		if state.Exists != readStateCase.Exists {
-			t.Fatalf("remote state exists = %v, want %v", state.Exists, readStateCase.Exists)
-		}
-		if state.OwnershipKnown != readStateCase.OwnershipKnown {
-			t.Fatalf("remote state ownership known = %v, want %v", state.OwnershipKnown, readStateCase.OwnershipKnown)
-		}
-		if state.Owned != readStateCase.Owned {
-			t.Fatalf("remote state owned = %v, want %v", state.Owned, readStateCase.Owned)
-		}
-		if state.PayloadSHA256 != readStateCase.PayloadSHA256 {
-			t.Fatalf("remote state payload sha = %q, want %q", state.PayloadSHA256, readStateCase.PayloadSHA256)
-		}
-		if state.SourceVersion != readStateCase.SourceVersion {
-			t.Fatalf("remote state source version = %d, want %d", state.SourceVersion, readStateCase.SourceVersion)
-		}
-		if state.RemoteVersion != readStateCase.RemoteVersion {
-			t.Fatalf("remote state version = %q, want %q", state.RemoteVersion, readStateCase.RemoteVersion)
-		}
+		assertRemoteState(t, state, readStateCase)
 	})
 }
 
@@ -292,6 +335,188 @@ func runLifecycleCheck(t *testing.T, provider providers.Provider, lifecycleCase 
 		runDeleteSuccessCheck(t, provider, lifecycleCase.Delete)
 		runReadStateCheck(t, provider, lifecycleCase.StateAfterDelete)
 	})
+}
+
+func runMaturityMatrix(t *testing.T, provider providers.Provider, matrix MaturityMatrix) {
+	t.Helper()
+	t.Run("maturity", func(t *testing.T) {
+		runMaturityGroup(t, provider, "ownership-loss", matrix.OwnershipLoss)
+		runRequiredMaturityCase(t, provider, "auth-failure", matrix.AuthFailure)
+		runRequiredMaturityCase(t, provider, "throttling", matrix.Throttling)
+		runRequiredMaturityCase(t, provider, "payload-limit", matrix.PayloadLimit)
+		runPartialSuccessCase(t, provider, matrix.PartialSuccess)
+		runRequiredMaturityCase(t, provider, "stale-remote-state", matrix.StaleRemoteState)
+		runMaturityGroup(t, provider, "delete-semantics", matrix.DeleteSemantics)
+	})
+}
+
+func runMaturityGroup(
+	t *testing.T,
+	provider providers.Provider,
+	name string,
+	cases []MaturityCase,
+) {
+	t.Helper()
+	if len(cases) == 0 {
+		t.Fatalf("maturity/%s requires at least one case", name)
+	}
+	for _, maturityCase := range cases {
+		runRequiredMaturityCase(t, provider, name, maturityCase)
+	}
+}
+
+func runRequiredMaturityCase(
+	t *testing.T,
+	defaultProvider providers.Provider,
+	group string,
+	maturityCase MaturityCase,
+) {
+	t.Helper()
+	if maturityCase.Operation == "" {
+		t.Fatalf("maturity/%s requires an operation", group)
+	}
+	name := maturityCase.Name
+	if name == "" {
+		name = string(maturityCase.Operation)
+	}
+	t.Run(group+"/"+name, func(t *testing.T) {
+		runMaturityCase(t, defaultProvider, maturityCase)
+	})
+}
+
+func runPartialSuccessCase(
+	t *testing.T,
+	defaultProvider providers.Provider,
+	partialCase PartialSuccessCase,
+) {
+	t.Helper()
+	if partialCase.Mode == "" {
+		t.Fatal("maturity/partial-success requires a mode")
+	}
+	name := partialCase.Name
+	if name == "" {
+		name = string(partialCase.Mode)
+	}
+	t.Run("partial-success/"+name, func(t *testing.T) {
+		switch partialCase.Mode {
+		case PartialSuccessAtomic:
+			if partialCase.Case.Operation != "" {
+				runMaturityCase(t, defaultProvider, partialCase.Case)
+			}
+		case PartialSuccessClassifiedFailure:
+			if partialCase.Case.Operation == "" {
+				t.Fatal("classified partial-success requires an operation case")
+			}
+			runMaturityCase(t, defaultProvider, partialCase.Case)
+		default:
+			t.Fatalf("unknown partial-success mode %q", partialCase.Mode)
+		}
+	})
+}
+
+func runMaturityCase(
+	t *testing.T,
+	defaultProvider providers.Provider,
+	maturityCase MaturityCase,
+) {
+	t.Helper()
+	provider := maturityCase.Provider
+	if provider == nil {
+		provider = defaultProvider
+	}
+	switch maturityCase.Operation {
+	case OperationPlan:
+		runMaturityPlanCase(t, provider, maturityCase)
+	case OperationUpsert:
+		runMaturityUpsertCase(t, provider, maturityCase)
+	case OperationDelete:
+		runMaturityDeleteCase(t, provider, maturityCase)
+	case OperationReadState:
+		runMaturityReadStateCase(t, provider, maturityCase)
+	case OperationHealth:
+		runMaturityHealthCase(t, provider, maturityCase)
+	default:
+		t.Fatalf("unknown maturity operation %q", maturityCase.Operation)
+	}
+}
+
+func runMaturityPlanCase(
+	t *testing.T,
+	provider providers.Provider,
+	maturityCase MaturityCase,
+) {
+	t.Helper()
+	result, err := provider.Plan(context.Background(), maturityCase.PlanRequest)
+	if err != nil {
+		t.Fatalf("plan: %v", err)
+	}
+	if result == nil {
+		t.Fatal("plan result must not be nil")
+	}
+	if result.Action != maturityCase.PlanAction {
+		t.Fatalf("plan action = %s, want %s", result.Action, maturityCase.PlanAction)
+	}
+	if result.ErrorClass != maturityCase.ErrorClass {
+		t.Fatalf("plan error class = %s, want %s", result.ErrorClass, maturityCase.ErrorClass)
+	}
+}
+
+func runMaturityUpsertCase(
+	t *testing.T,
+	provider providers.Provider,
+	maturityCase MaturityCase,
+) {
+	t.Helper()
+	result, err := provider.Upsert(context.Background(), maturityCase.UpsertRequest)
+	assertMutationOutcome(t, result, err, maturityCase)
+}
+
+func runMaturityDeleteCase(
+	t *testing.T,
+	provider providers.Provider,
+	maturityCase MaturityCase,
+) {
+	t.Helper()
+	result, err := provider.Delete(context.Background(), maturityCase.DeleteRequest)
+	assertMutationOutcome(t, result, err, maturityCase)
+}
+
+func runMaturityReadStateCase(
+	t *testing.T,
+	provider providers.Provider,
+	maturityCase MaturityCase,
+) {
+	t.Helper()
+	state, err := provider.ReadState(context.Background(), maturityCase.ReadStateRequest)
+	if maturityCase.ErrorClass != "" {
+		assertProviderErrorClass(t, err, maturityCase.ErrorClass)
+		return
+	}
+	if err != nil {
+		t.Fatalf("read state: %v", err)
+	}
+	if maturityCase.ReadState == nil {
+		return
+	}
+	assertRemoteState(t, state, *maturityCase.ReadState)
+}
+
+func runMaturityHealthCase(
+	t *testing.T,
+	provider providers.Provider,
+	maturityCase MaturityCase,
+) {
+	t.Helper()
+	health, err := provider.Health(context.Background(), maturityCase.HealthDestination)
+	if err != nil {
+		t.Fatalf("health: %v", err)
+	}
+	if health == nil {
+		t.Fatal("health result must not be nil")
+	}
+	if health.ErrorClass != maturityCase.ErrorClass {
+		t.Fatalf("health error class = %s, want %s", health.ErrorClass, maturityCase.ErrorClass)
+	}
 }
 
 func runUpsertErrorCheck(t *testing.T, provider providers.Provider, errorCase UpsertErrorCase) {
@@ -370,5 +595,54 @@ func assertRemoteVersion(t *testing.T, result *providers.SyncResult, expected st
 	}
 	if result.RemoteVersion != expected {
 		t.Fatalf("remote version = %q, want %q", result.RemoteVersion, expected)
+	}
+}
+
+func assertMutationOutcome(
+	t *testing.T,
+	result *providers.SyncResult,
+	err error,
+	maturityCase MaturityCase,
+) {
+	t.Helper()
+	if maturityCase.ErrorClass != "" {
+		assertProviderErrorClass(t, err, maturityCase.ErrorClass)
+		if maturityCase.NoResultOnError && result != nil {
+			t.Fatalf("sync result = %#v, want nil on error", result)
+		}
+		return
+	}
+	if err != nil {
+		t.Fatalf("%s: %v", maturityCase.Operation, err)
+	}
+	assertRemoteVersion(t, result, maturityCase.RemoteVersion)
+}
+
+func assertRemoteState(
+	t *testing.T,
+	state *providers.RemoteState,
+	readStateCase ReadStateCase,
+) {
+	t.Helper()
+	if state == nil {
+		t.Fatal("remote state must not be nil")
+	}
+	if state.Exists != readStateCase.Exists {
+		t.Fatalf("remote state exists = %v, want %v", state.Exists, readStateCase.Exists)
+	}
+	if state.OwnershipKnown != readStateCase.OwnershipKnown {
+		t.Fatalf("remote state ownership known = %v, want %v", state.OwnershipKnown, readStateCase.OwnershipKnown)
+	}
+	if state.Owned != readStateCase.Owned {
+		t.Fatalf("remote state owned = %v, want %v", state.Owned, readStateCase.Owned)
+	}
+	if state.PayloadSHA256 != readStateCase.PayloadSHA256 {
+		t.Fatalf("remote state payload sha = %q, want %q", state.PayloadSHA256, readStateCase.PayloadSHA256)
+	}
+	if state.SourceVersion != readStateCase.SourceVersion {
+		t.Fatalf("remote state source version = %d, want %d", state.SourceVersion, readStateCase.SourceVersion)
+	}
+	if state.RemoteVersion != readStateCase.RemoteVersion {
+		t.Fatalf("remote state version = %q, want %q", state.RemoteVersion, readStateCase.RemoteVersion)
 	}
 }

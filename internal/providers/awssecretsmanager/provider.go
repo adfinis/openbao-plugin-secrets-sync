@@ -194,6 +194,9 @@ func (p Provider) Upsert(ctx context.Context, req providers.UpsertRequest) (*pro
 	if err != nil {
 		return nil, providerError(setupErrorClass(err))
 	}
+	if len(req.Payload) > secretValueMaxBytes {
+		return nil, providerError(providers.ErrorClassCapacity)
+	}
 	describe, err := client.DescribeSecret(ctx, &secretsmanager.DescribeSecretInput{
 		SecretId: aws.String(req.ResolvedName),
 	})

@@ -101,6 +101,7 @@ func TestProviderConformance(t *testing.T) {
 				Request: defaultReadStateRequest(testPayloadSHANew, 2),
 			},
 		},
+		Maturity: kubernetesMaturityMatrix(),
 	})
 }
 
@@ -507,6 +508,99 @@ func TestErrorClassification(t *testing.T) {
 			}
 		})
 	}
+}
+
+func kubernetesMaturityMatrix() *providertest.MaturityMatrix {
+	return &providertest.MaturityMatrix{
+		OwnershipLoss: []providertest.MaturityCase{
+			{
+				Name:            "upsert-unowned-secret",
+				Provider:        Provider{client: fake.NewSimpleClientset(unownedSecret())},
+				Operation:       providertest.OperationUpsert,
+				UpsertRequest:   defaultUpsertRequest(testPayloadSHANew, []byte(`{"password":"new"}`), 1),
+				ErrorClass:      providers.ErrorClassOwnership,
+				NoResultOnError: true,
+			},
+		},
+		AuthFailure: providertest.MaturityCase{
+			Name:            "get-unauthorized",
+			Provider:        Provider{client: clientWithGetError(apierrors.NewUnauthorized("bad token"))},
+			Operation:       providertest.OperationUpsert,
+			UpsertRequest:   defaultUpsertRequest(testPayloadSHANew, []byte(`{"password":"new"}`), 1),
+			ErrorClass:      providers.ErrorClassAuthn,
+			NoResultOnError: true,
+		},
+		Throttling: providertest.MaturityCase{
+			Name: "get-rate-limited",
+			Provider: Provider{client: clientWithGetError(
+				apierrors.NewTooManyRequests("slow down", 1),
+			)},
+			Operation:       providertest.OperationUpsert,
+			UpsertRequest:   defaultUpsertRequest(testPayloadSHANew, []byte(`{"password":"new"}`), 1),
+			ErrorClass:      providers.ErrorClassRateLimit,
+			NoResultOnError: true,
+		},
+		PayloadLimit: providertest.MaturityCase{
+			Name:            "oversized-payload",
+			Provider:        Provider{client: fake.NewSimpleClientset()},
+			Operation:       providertest.OperationUpsert,
+			UpsertRequest:   oversizedKubernetesUpsertRequest(),
+			ErrorClass:      providers.ErrorClassCapacity,
+			NoResultOnError: true,
+		},
+		PartialSuccess: providertest.PartialSuccessCase{
+			Name: "single-secret-update",
+			Mode: providertest.PartialSuccessAtomic,
+			Case: providertest.MaturityCase{
+				Provider: Provider{client: fake.NewSimpleClientset(
+					ownedSecret(testPayloadSHAOld, 1, []byte(`{"password":"old"}`)),
+				)},
+				Operation:     providertest.OperationUpsert,
+				UpsertRequest: defaultUpsertRequest(testPayloadSHANew, []byte(`{"password":"new"}`), 1),
+				RemoteVersion: "rv-1",
+			},
+		},
+		StaleRemoteState: providertest.MaturityCase{
+			Name: "newer-remote-source-version",
+			Provider: Provider{client: fake.NewSimpleClientset(
+				ownedSecret(testPayloadSHAOld, 2, []byte(`{"password":"old"}`)),
+			)},
+			Operation:       providertest.OperationUpsert,
+			UpsertRequest:   defaultUpsertRequest(testPayloadSHANew, []byte(`{"password":"new"}`), 1),
+			ErrorClass:      providers.ErrorClassDrift,
+			NoResultOnError: true,
+		},
+		DeleteSemantics: []providertest.MaturityCase{
+			{
+				Name:          "missing-delete-is-idempotent",
+				Provider:      Provider{client: fake.NewSimpleClientset()},
+				Operation:     providertest.OperationDelete,
+				DeleteRequest: defaultDeleteRequest(1),
+				RemoteVersion: "missing",
+			},
+			{
+				Name: "owned-delete-removes-secret",
+				Provider: Provider{client: fake.NewSimpleClientset(
+					ownedSecret(testPayloadSHAOld, 1, []byte(`{"password":"old"}`)),
+				)},
+				Operation:     providertest.OperationDelete,
+				DeleteRequest: defaultDeleteRequest(1),
+				RemoteVersion: "rv-1",
+			},
+		},
+	}
+}
+
+func clientWithGetError(err error) *fake.Clientset {
+	client := fake.NewSimpleClientset()
+	client.PrependReactor("get", "secrets", func(k8stesting.Action) (bool, runtime.Object, error) {
+		return true, nil, err
+	})
+	return client
+}
+
+func oversizedKubernetesUpsertRequest() providers.UpsertRequest {
+	return defaultUpsertRequest(testPayloadSHANew, make([]byte, secretMaxBytes+1), 1)
 }
 
 func defaultDestinationConfig() providers.DestinationConfig {

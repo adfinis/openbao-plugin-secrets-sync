@@ -235,6 +235,9 @@ Completed foundation:
 
 - AWS-specific mocked client cases exercise health, plan, upsert, delete,
   read-state, ownership rejection, and error classification.
+- AWS, Kubernetes, and GitLab providers now declare the same shared maturity
+  matrix for ownership loss, auth failure, throttling, payload limits,
+  partial-success behavior, stale remote state, and delete semantics.
 - SDK client boundary uses the AWS SDK default configuration chain.
 - Destination config supports `region`, `endpoint_url` with explicit
   `endpoint_policy`, `auth_mode=default`, and `auth_mode=assume_role` with
@@ -288,13 +291,27 @@ Exit criteria:
 
 ## Phase 4: Kubernetes Provider
 
-Tasks:
+Completed foundation:
 
-- Implement kubeconfig and in-cluster auth.
-- Implement namespace and name validation.
-- Implement Secret upsert, delete, read-state, and health.
-- Add labels and annotations for ownership.
-- Add envtest or kind-backed integration path.
+- Destination config supports namespace-scoped in-cluster auth and kubeconfig
+  auth.
+- Secret upsert, delete, read-state, and health are implemented behind the
+  provider interface.
+- Ownership labels, annotations, payload hash metadata, source version
+  metadata, and runtime identity metadata are written and read back.
+- Kubernetes API errors map to stable provider error classes.
+- The provider passes lifecycle and maturity conformance coverage with the
+  client-go fake client.
+- The kind-backed e2e path proves OpenBao plugin registration, destination
+  validation, health, create, update, reconcile/read-state, delete, ownership
+  labels, and RBAC denial handling against a real API server.
+
+Remaining tasks:
+
+- Add Kubernetes `secret-key` granularity after the name/data-key/cleanup model
+  is settled.
+- Extend opt-in manual validation guidance if production cluster validation
+  needs extra RBAC or namespace isolation examples.
 
 Exit criteria:
 

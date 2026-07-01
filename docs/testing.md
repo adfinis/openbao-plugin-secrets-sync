@@ -51,6 +51,20 @@ provider should cover:
 - authn, authz, rate-limit, validation, capacity, collision, drift, and
   ownership error classes.
 
+Registered production providers must also pass the shared provider maturity
+matrix:
+
+- ownership loss rejects update/delete instead of overwriting or removing a
+  foreign object;
+- authentication failures map to `authn`;
+- throttling or rate limits map to `rate_limit`;
+- payload-size failures map to `capacity` before or at the provider boundary;
+- partial-success behavior is explicit: atomic providers document the atomic
+  mutation, while multi-step providers classify post-write failures and return
+  no successful `SyncResult`;
+- stale remote state with a newer managed source version maps to `drift`;
+- delete semantics cover owned delete and idempotent missing-remote delete.
+
 ### Model Tests
 
 Model tests exercise state transitions across several operations and assert
@@ -101,6 +115,17 @@ Current self-contained e2e coverage:
 
 Manual real-provider e2e tests prove cloud-specific IAM and API behavior, but
 must stay explicit and sandbox-scoped.
+
+Documented provider validation paths:
+
+- AWS Secrets Manager: LocalStack self-contained path in
+  `test/e2e/localstack/README.md` and opt-in real AWS path in
+  `test/e2e/aws/README.md`;
+- Kubernetes Secrets: kind-backed real API-server path in
+  `test/e2e/kind/README.md`;
+- GitLab project variables: Dockerized GitLab CE path in
+  `test/e2e/gitlab/README.md`. A real GitLab project fixture remains opt-in
+  future work.
 
 ### Security Checks
 

@@ -84,6 +84,7 @@ func TestProviderConformance(t *testing.T) {
 			SourceVersion:  1,
 			RemoteVersion:  "current-version",
 		},
+		Maturity: awsMaturityMatrix(),
 	})
 }
 
@@ -764,6 +765,97 @@ func TestErrorClassification(t *testing.T) {
 	}
 }
 
+func awsMaturityMatrix() *providertest.MaturityMatrix {
+	return &providertest.MaturityMatrix{
+		OwnershipLoss: []providertest.MaturityCase{
+			{
+				Name: "upsert-unowned-secret",
+				Provider: Provider{client: &mockSecretsManagerClient{
+					describeOutput: &secretsmanager.DescribeSecretOutput{Name: aws.String(testResolvedName)},
+				}},
+				Operation:       providertest.OperationUpsert,
+				UpsertRequest:   defaultUpsertRequest(),
+				ErrorClass:      providers.ErrorClassOwnership,
+				NoResultOnError: true,
+			},
+		},
+		AuthFailure: providertest.MaturityCase{
+			Name: "read-state-authn",
+			Provider: Provider{client: &mockSecretsManagerClient{
+				describeError: apiError("UnrecognizedClientException"),
+			}},
+			Operation:        providertest.OperationReadState,
+			ReadStateRequest: defaultReadStateRequest(),
+			ErrorClass:       providers.ErrorClassAuthn,
+		},
+		Throttling: providertest.MaturityCase{
+			Name: "create-throttled",
+			Provider: Provider{client: &mockSecretsManagerClient{
+				describeError:     apiError("ResourceNotFoundException"),
+				createSecretError: apiError("ThrottlingException"),
+			}},
+			Operation:       providertest.OperationUpsert,
+			UpsertRequest:   defaultUpsertRequest(),
+			ErrorClass:      providers.ErrorClassRateLimit,
+			NoResultOnError: true,
+		},
+		PayloadLimit: providertest.MaturityCase{
+			Name:            "oversized-payload",
+			Provider:        Provider{client: &mockSecretsManagerClient{}},
+			Operation:       providertest.OperationUpsert,
+			UpsertRequest:   oversizedAWSUpsertRequest(),
+			ErrorClass:      providers.ErrorClassCapacity,
+			NoResultOnError: true,
+		},
+		PartialSuccess: providertest.PartialSuccessCase{
+			Name: "put-succeeds-tag-fails",
+			Mode: providertest.PartialSuccessClassifiedFailure,
+			Case: providertest.MaturityCase{
+				Provider: Provider{client: &mockSecretsManagerClient{
+					describeOutput:       ownedDescribeOutput(testPayloadSHAOld),
+					putSecretValueOutput: &secretsmanager.PutSecretValueOutput{VersionId: aws.String("version-2")},
+					tagResourceError:     apiError("AccessDeniedException"),
+				}},
+				Operation:       providertest.OperationUpsert,
+				UpsertRequest:   defaultUpsertRequest(),
+				ErrorClass:      providers.ErrorClassAuthz,
+				NoResultOnError: true,
+			},
+		},
+		StaleRemoteState: providertest.MaturityCase{
+			Name: "newer-remote-source-version",
+			Provider: Provider{client: &mockSecretsManagerClient{
+				describeOutput: ownedDescribeOutputAtVersion(testPayloadSHAOld, 2),
+			}},
+			Operation:       providertest.OperationUpsert,
+			UpsertRequest:   defaultUpsertRequest(),
+			ErrorClass:      providers.ErrorClassDrift,
+			NoResultOnError: true,
+		},
+		DeleteSemantics: []providertest.MaturityCase{
+			{
+				Name: "missing-delete-is-idempotent",
+				Provider: Provider{client: &mockSecretsManagerClient{
+					describeError: apiError("ResourceNotFoundException"),
+				}},
+				Operation:     providertest.OperationDelete,
+				DeleteRequest: defaultDeleteRequest(),
+				RemoteVersion: "missing",
+			},
+			{
+				Name: "owned-delete-uses-recovery-window",
+				Provider: Provider{client: &mockSecretsManagerClient{
+					describeOutput:     ownedDescribeOutput(testPayloadSHAOld),
+					deleteSecretOutput: &secretsmanager.DeleteSecretOutput{ARN: aws.String("arn:aws:secretsmanager:test")},
+				}},
+				Operation:     providertest.OperationDelete,
+				DeleteRequest: defaultDeleteRequest(),
+				RemoteVersion: "arn:aws:secretsmanager:test",
+			},
+		},
+	}
+}
+
 func defaultPlanRequest(payloadSHA256 string) providers.PlanRequest {
 	return providers.PlanRequest{
 		Destination:   defaultDestinationConfig(),
@@ -791,6 +883,12 @@ func defaultUpsertRequest() providers.UpsertRequest {
 		AssociationID: testAssociationID,
 		ObjectID:      testObjectID,
 	}
+}
+
+func oversizedAWSUpsertRequest() providers.UpsertRequest {
+	request := defaultUpsertRequest()
+	request.Payload = make([]byte, secretValueMaxBytes+1)
+	return request
 }
 
 func defaultDeleteRequest() providers.DeleteRequest {
