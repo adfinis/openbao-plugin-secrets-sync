@@ -44,6 +44,11 @@ artifacts:
   binaryName: openbao-plugin-secrets-sync
   distDirectory: dist/release
   binaryPattern: openbao-plugin-secrets-sync_${VERSION}_${GOOS}_${GOARCH}
+  sbomFormat: spdx-json
+  reproducibilityReport: reproducibility-report.md
+  provenanceIndex: provenance-index.json
+  ociPluginImage:
+    status: deferred
   checksumAlgorithm: sha256
   checksumFile: checksums.txt
   linuxTargets:

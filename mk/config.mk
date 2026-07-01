@@ -14,7 +14,7 @@ SEMGREP_ARTIFACT_DIR ?= dist/semgrep
 SEMGREP_OUTPUT_JSON ?= $(SEMGREP_ARTIFACT_DIR)/semgrep.json
 FUZZTIME ?= 10s
 FUZZ_TARGETS ?= ./internal/payload:FuzzBuildRaw ./internal/payload:FuzzBuildJSON ./internal/backend:FuzzRenderAssociationObjectName
-GO_SOURCE_DIRS := $(shell for d in cmd internal test; do [ -d "$$d" ] && printf '%s ' "$$d"; done)
+GO_SOURCE_DIRS := $(shell for d in cmd internal test hack; do [ -d "$$d" ] && printf '%s ' "$$d"; done)
 
 BINARY_NAME ?= openbao-plugin-secrets-sync
 BIN ?= bin/$(BINARY_NAME)
@@ -23,12 +23,13 @@ CHECKSUM_FILE ?= $(DIST_DIR)/checksums.txt
 CHECKSUM ?= shasum -a 256
 RELEASE_TARGETS ?= linux/amd64 linux/arm64
 VERSION ?= 0.0.0-dev
+PLUGIN_VERSION ?= $(if $(filter v%,$(VERSION)),$(VERSION),v$(VERSION))
 COMMIT ?= $(shell git rev-parse --short HEAD 2>/dev/null || printf '%s' unknown)
 BUILD_DATE ?= $(shell if [ -n "$${SOURCE_DATE_EPOCH:-}" ]; then date -u -r "$${SOURCE_DATE_EPOCH}" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date -u -d "@$${SOURCE_DATE_EPOCH}" +%Y-%m-%dT%H:%M:%SZ; else date -u +%Y-%m-%dT%H:%M:%SZ; fi)
 DIRTY ?= $(shell if [ -n "$$(git status --porcelain 2>/dev/null)" ]; then printf '%s' true; else printf '%s' false; fi)
 VERSION_PKG := github.com/adfinis/openbao-secret-sync/internal/version
 GO_BUILD_FLAGS ?= -trimpath -buildvcs=false
-LDFLAGS := -s -w -X $(VERSION_PKG).version=$(VERSION) -X $(VERSION_PKG).commit=$(COMMIT) -X $(VERSION_PKG).buildDate=$(BUILD_DATE) -X $(VERSION_PKG).dirty=$(DIRTY)
+LDFLAGS := -s -w -X $(VERSION_PKG).version=$(PLUGIN_VERSION) -X $(VERSION_PKG).commit=$(COMMIT) -X $(VERSION_PKG).buildDate=$(BUILD_DATE) -X $(VERSION_PKG).dirty=$(DIRTY)
 
 GOFUMPT_VERSION ?= v0.9.2
 STATICCHECK_VERSION ?= v0.7.0

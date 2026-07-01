@@ -26,7 +26,6 @@ import (
 
 const (
 	pluginName       = "openbao-plugin-secrets-sync"
-	pluginVersion    = "v0.0.0-dev"
 	mountPath        = "secret-sync"
 	rootToken        = "root"
 	awsRegion        = "us-east-1"
@@ -145,7 +144,7 @@ func registerPlugin(t *testing.T, client *api.Client) {
 		Type:    api.PluginTypeSecrets,
 		Command: pluginName,
 		SHA256:  hex.EncodeToString(sum[:]),
-		Version: pluginVersion,
+		Version: pluginVersion(),
 	}); err != nil {
 		t.Fatalf("register plugin: %v", err)
 	}
@@ -158,11 +157,15 @@ func mountPlugin(t *testing.T, client *api.Client) {
 		Type:       "plugin",
 		PluginName: pluginName,
 		Config: api.MountConfigInput{
-			PluginVersion: pluginVersion,
+			PluginVersion: pluginVersion(),
 		},
 	}); err != nil {
 		t.Fatalf("mount plugin: %v", err)
 	}
+}
+
+func pluginVersion() string {
+	return env("E2E_PLUGIN_VERSION", "v0.0.0-dev")
 }
 
 func newSecretsManagerClient(t *testing.T, ctx context.Context) *secretsmanager.Client {

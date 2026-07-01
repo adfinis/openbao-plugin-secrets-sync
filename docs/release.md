@@ -26,8 +26,12 @@ Published artifacts use this naming shape:
 ```text
 openbao-plugin-secrets-sync_<version>_linux_amd64
 openbao-plugin-secrets-sync_<version>_linux_arm64
+sbom-openbao-plugin-secrets-sync-linux-amd64.spdx.json
+sbom-openbao-plugin-secrets-sync-linux-arm64.spdx.json
+reproducibility-report.md
 checksums.txt
 checksums.txt.bundle
+provenance-index.json
 ```
 
 The release workflow attaches these artifacts to the matching draft GitHub
@@ -41,6 +45,10 @@ Build release artifacts locally:
 VERSION=0.1.0-preview.1 make release-artifacts
 ```
 
+This creates the Linux plugin binaries, per-binary SPDX JSON SBOMs, and
+`checksums.txt`. Signature bundles and `provenance-index.json` are generated
+after checksum verification during the release workflow.
+
 Verify checksums:
 
 ```sh
@@ -48,7 +56,54 @@ Verify checksums:
 ```
 
 The build embeds version metadata through Go linker flags. Use a clean tree for
-release builds so `dirty=false` is meaningful.
+release builds so `dirty=false` is meaningful. Release tags and artifact names
+omit the leading `v`, but the plugin reports a `v`-prefixed runtime version to
+match OpenBao plugin catalog version normalization.
+
+To exercise the same reproducibility path locally, build with fixed metadata
+into two directories, compare them, write the report into both directories, and
+regenerate checksums:
+
+```sh
+SOURCE_DATE_EPOCH="$(git show -s --format=%ct HEAD)"
+BUILD_DATE="$(
+  date -u -r "${SOURCE_DATE_EPOCH}" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null ||
+    date -u -d "@${SOURCE_DATE_EPOCH}" +%Y-%m-%dT%H:%M:%SZ
+)"
+COMMIT="$(git rev-parse HEAD)"
+
+SOURCE_DATE_EPOCH="${SOURCE_DATE_EPOCH}" make release-artifacts \
+  DIST_DIR=dist/release VERSION=0.1.0-preview.1 COMMIT="${COMMIT}" \
+  BUILD_DATE="${BUILD_DATE}" DIRTY=false
+
+SOURCE_DATE_EPOCH="${SOURCE_DATE_EPOCH}" make release-artifacts \
+  DIST_DIR=dist/rebuild VERSION=0.1.0-preview.1 COMMIT="${COMMIT}" \
+  BUILD_DATE="${BUILD_DATE}" DIRTY=false
+
+PRIMARY_DIR=dist/release REBUILD_DIR=dist/rebuild \
+  bash hack/ci/verify-byte-reproducibility.sh
+
+VERSION=0.1.0-preview.1 COMMIT="${COMMIT}" BUILD_DATE="${BUILD_DATE}" \
+  PRIMARY_DIR=dist/release REBUILD_DIR=dist/rebuild \
+  REPORT_PATH=dist/release/reproducibility-report.md \
+  MIRROR_REPORT_PATH=dist/rebuild/reproducibility-report.md \
+  bash hack/ci/write-reproducibility-report.sh
+
+make checksums DIST_DIR=dist/release
+make checksums DIST_DIR=dist/rebuild
+
+PRIMARY_DIR=dist/release REBUILD_DIR=dist/rebuild \
+  bash hack/ci/verify-byte-reproducibility.sh
+```
+
+After signing `checksums.txt`, generate the local provenance index:
+
+```sh
+REPO=adfinis/openbao-secret-sync OWNER=adfinis \
+  VERSION=0.1.0-preview.1 PLUGIN_VERSION=v0.1.0-preview.1 \
+  SOURCE_DATE_EPOCH="${SOURCE_DATE_EPOCH}" \
+  bash hack/ci/generate-provenance-index.sh
+```
 
 ## Release Flow
 
@@ -95,15 +150,24 @@ It can also be run manually for an existing semver tag through
 The workflow:
 
 - checks out the tag;
+- runs release source gates: lint, vulnerability checks, license checks,
+  filesystem scan, unit tests, race tests, and fuzz smoke tests;
 - requires the matching GitHub Release to already exist and be a draft;
 - builds release binaries with deterministic build metadata derived from the
   tagged commit;
+- generates per-binary SPDX JSON SBOMs from the compiled Go build metadata;
+- rebuilds the binaries and SBOMs independently and verifies byte equality;
+- writes a reproducibility report and includes it in `checksums.txt`;
 - generates and verifies `checksums.txt`;
+- registers and mounts the built release binary in OpenBao and runs the
+  self-contained LocalStack smoke test;
 - signs `checksums.txt` with a keyless cosign signature bundle;
 - creates GitHub build-provenance attestations for `checksums.txt` and the
   release binaries on public repositories;
 - verifies checksum signatures and public-repository artifact attestations
   before upload;
+- writes `provenance-index.json` with release identity, checksum evidence,
+  binary assets, SBOMs, reproducibility status, and attestation availability;
 - uploads the files as workflow artifacts;
 - uploads the files to the matching GitHub Release without replacing
   conflicting existing assets;
@@ -144,6 +208,13 @@ gh attestation verify "./openbao-plugin-secrets-sync_${VERSION}_linux_amd64" \
   --deny-self-hosted-runners
 ```
 
+Inspect the release provenance index:
+
+```sh
+jq '.release, .checksums, .assets, .reproducibility, .attestations' \
+  provenance-index.json
+```
+
 Install the binary into the OpenBao plugin directory under the command name used
 at registration time:
 
@@ -161,20 +232,30 @@ sha256="$(shasum -a 256 /opt/openbao/plugins/openbao-plugin-secrets-sync | awk '
 bao plugin register \
   -sha256="$sha256" \
   -command=openbao-plugin-secrets-sync \
-  -version=0.1.0-preview.1 \
+  -version=v0.1.0-preview.1 \
   secret openbao-plugin-secrets-sync
 ```
 
 Mount or tune an existing mount to use the registered version according to the
 normal OpenBao plugin lifecycle.
 
+## OCI Plugin Images
+
+OpenBao supports OCI-based plugin distribution through declarative `plugin`
+configuration. In that model OpenBao downloads an OCI image, extracts the
+plugin binary from the image root, verifies the extracted binary SHA-256, and
+runs the binary as a normal external plugin process.
+
+This project does not publish OCI plugin images yet. When added, OCI images
+should be an optional distribution path beside binary releases, use minimal
+static-binary images, be signed and attested by digest, and have their image
+digests recorded in `provenance-index.json`.
+
 ## Deferred Release Hardening
 
-The first release-engineering slice intentionally does not yet implement:
+The current release-engineering baseline intentionally does not yet implement:
 
-- SBOM generation;
-- byte-for-byte rebuild verification;
-- container image publishing.
+- OCI plugin image publishing.
 
-These should be added once the artifact workflow has run successfully and the
-repository release process is settled.
+This should be added once the binary artifact workflow has run successfully and
+the repository release process is settled.

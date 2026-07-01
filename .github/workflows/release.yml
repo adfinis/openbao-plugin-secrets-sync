@@ -58,8 +58,24 @@ jobs:
 
       - name: Setup repo tools
         uses: ./.github/actions/setup-repo-tools
+
+      - name: Install Semgrep
+        env:
+          SEMGREP_VERSION: "1.157.0"
+        run: |
+          python3 -m venv .venv-semgrep
+          . .venv-semgrep/bin/activate
+          python -m pip install --upgrade pip
+          python -m pip install "semgrep==${SEMGREP_VERSION}"
+          echo "${GITHUB_WORKSPACE}/.venv-semgrep/bin" >> "${GITHUB_PATH}"
+
+      - name: Install Trivy
+        uses: aquasecurity/setup-trivy@81e514348e19b6112ce2a7e3ecbafe19c1e1f567 # v0.3.1
         with:
-          bootstrap-tools: "false"
+          version: v0.69.3
+
+      - name: Run release source gates
+        run: make lint-ci security-ci test test-race fuzz
 
       - name: Compute build metadata
         id: metadata
@@ -107,8 +123,49 @@ jobs:
             BUILD_DATE="${{ steps.metadata.outputs.build_date }}" \
             DIRTY=false
 
+      - name: Build independent rebuild artifacts
+        env:
+          SOURCE_DATE_EPOCH: ${{ steps.metadata.outputs.source_date_epoch }}
+        run: |
+          make release-artifacts \
+            DIST_DIR=dist/rebuild \
+            VERSION="${{ steps.release.outputs.version }}" \
+            COMMIT="${{ steps.metadata.outputs.commit }}" \
+            BUILD_DATE="${{ steps.metadata.outputs.build_date }}" \
+            DIRTY=false
+
+      - name: Verify release reproducibility
+        run: PRIMARY_DIR=dist/release REBUILD_DIR=dist/rebuild bash hack/ci/verify-byte-reproducibility.sh
+
+      - name: Write reproducibility report
+        env:
+          VERSION: ${{ steps.release.outputs.version }}
+          COMMIT: ${{ steps.metadata.outputs.commit }}
+          BUILD_DATE: ${{ steps.metadata.outputs.build_date }}
+        run: |
+          PRIMARY_DIR=dist/release \
+          REBUILD_DIR=dist/rebuild \
+          REPORT_PATH=dist/release/reproducibility-report.md \
+          MIRROR_REPORT_PATH=dist/rebuild/reproducibility-report.md \
+          bash hack/ci/write-reproducibility-report.sh
+          cat dist/release/reproducibility-report.md >> "${GITHUB_STEP_SUMMARY}"
+
+      - name: Regenerate checksums with reproducibility report
+        run: |
+          make checksums DIST_DIR=dist/release
+          make checksums DIST_DIR=dist/rebuild
+
+      - name: Verify final release reproducibility
+        run: PRIMARY_DIR=dist/release REBUILD_DIR=dist/rebuild bash hack/ci/verify-byte-reproducibility.sh
+
       - name: Verify checksums
         run: cd dist/release && shasum -a 256 -c checksums.txt
+
+      - name: Run OpenBao release smoke test
+        run: |
+          make test-e2e-release-localstack \
+            VERSION="${{ steps.release.outputs.version }}" \
+            E2E_PLUGIN_VERSION="v${{ steps.release.outputs.version }}"
 
       - name: Install cosign
         uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
@@ -161,6 +218,24 @@ jobs:
           REPO: ${{ github.repository }}
           VERSION: ${{ steps.release.outputs.version }}
         run: bash hack/ci/verify-release-artifact-attestations.sh
+
+      - name: Generate provenance index
+        env:
+          REPO: ${{ github.repository }}
+          OWNER: ${{ github.repository_owner }}
+          VERSION: ${{ steps.release.outputs.version }}
+          PLUGIN_VERSION: v${{ steps.release.outputs.version }}
+          SOURCE_DATE_EPOCH: ${{ steps.metadata.outputs.source_date_epoch }}
+          ATTESTATIONS_AVAILABLE: ${{ !github.event.repository.private }}
+        run: |
+          set -euo pipefail
+          reason=""
+          if [[ "${ATTESTATIONS_AVAILABLE}" != "true" ]]; then
+            reason="GitHub artifact attestations were skipped for a private repository dry run."
+          fi
+          ATTESTATIONS_UNAVAILABLE_REASON="${reason}" bash hack/ci/generate-provenance-index.sh
+          jq '.release, .checksums, .reproducibility, .attestations' \
+            dist/release/provenance-index.json >> "${GITHUB_STEP_SUMMARY}"
 
       - name: Upload workflow artifact
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1

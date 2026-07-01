@@ -12,8 +12,9 @@ E2E_OPENBAO_ADDR ?= http://127.0.0.1:$(E2E_OPENBAO_PORT)
 E2E_LOCALSTACK_ENDPOINT ?= http://127.0.0.1:$(E2E_LOCALSTACK_PORT)
 E2E_PLUGIN_DIR ?= $(CURDIR)/bin/e2e
 E2E_PLUGIN_BIN ?= $(E2E_PLUGIN_DIR)/$(BINARY_NAME)
-E2E_PLUGIN_VERSION ?= v0.0.0-dev
 E2E_GOARCH ?= $(shell "$(GO)" env GOHOSTARCH)
+E2E_RELEASE_PLUGIN_BIN ?= $(DIST_DIR)/$(BINARY_NAME)_$(VERSION)_linux_$(E2E_GOARCH)
+E2E_PLUGIN_VERSION ?= v0.0.0-dev
 E2E_LDFLAGS := -s -w -X $(VERSION_PKG).version=$(E2E_PLUGIN_VERSION) -X $(VERSION_PKG).commit=$(COMMIT) -X $(VERSION_PKG).buildDate=$(BUILD_DATE) -X $(VERSION_PKG).dirty=$(DIRTY)
 E2E_AWS_COMPOSE_FILE ?= test/e2e/aws/compose.yaml
 E2E_AWS_OPENBAO_PORT ?= 18201
@@ -49,6 +50,16 @@ e2e-build-plugin: ## Build the Linux plugin binary used by the OpenBao e2e conta
 	@CGO_ENABLED=0 GOOS=linux GOARCH="$(E2E_GOARCH)" "$(GO)" build $(GO_BUILD_FLAGS) -ldflags "$(E2E_LDFLAGS)" -o "$(E2E_PLUGIN_BIN)" ./cmd/openbao-plugin-secrets-sync
 	@chmod 0755 "$(E2E_PLUGIN_BIN)"
 
+.PHONY: e2e-stage-release-plugin
+e2e-stage-release-plugin: ## Stage a prebuilt release binary for OpenBao e2e testing.
+	@if [ ! -f "$(E2E_RELEASE_PLUGIN_BIN)" ]; then \
+		printf 'release plugin binary not found: %s\n' "$(E2E_RELEASE_PLUGIN_BIN)" >&2; \
+		exit 1; \
+	fi
+	@mkdir -p "$(E2E_PLUGIN_DIR)"
+	@cp "$(E2E_RELEASE_PLUGIN_BIN)" "$(E2E_PLUGIN_BIN)"
+	@chmod 0755 "$(E2E_PLUGIN_BIN)"
+
 .PHONY: e2e-up
 e2e-up: e2e-build-plugin ## Start the self-contained OpenBao plus LocalStack e2e stack.
 	@E2E_OPENBAO_PORT="$(E2E_OPENBAO_PORT)" E2E_LOCALSTACK_PORT="$(E2E_LOCALSTACK_PORT)" $(DOCKER_COMPOSE) -f "$(E2E_COMPOSE_FILE)" up -d --wait
@@ -69,6 +80,21 @@ test-e2e: e2e-build-plugin ## Run self-contained OpenBao plus LocalStack e2e tes
 	E2E_OPENBAO_ADDR="$(E2E_OPENBAO_ADDR)" \
 	E2E_LOCALSTACK_ENDPOINT="$(E2E_LOCALSTACK_ENDPOINT)" \
 	E2E_PLUGIN_PATH="$(E2E_PLUGIN_BIN)" \
+	"$(GO)" test -tags=e2e ./test/e2e/localstack -count=1 -v
+
+.PHONY: test-e2e-release-localstack
+test-e2e-release-localstack: e2e-stage-release-plugin ## Run LocalStack e2e against a prebuilt release binary.
+	@set -eu; \
+	E2E_OPENBAO_PORT="$(E2E_OPENBAO_PORT)" E2E_LOCALSTACK_PORT="$(E2E_LOCALSTACK_PORT)" $(DOCKER_COMPOSE) -f "$(E2E_COMPOSE_FILE)" up -d --wait; \
+	trap 'E2E_OPENBAO_PORT="$(E2E_OPENBAO_PORT)" E2E_LOCALSTACK_PORT="$(E2E_LOCALSTACK_PORT)" $(DOCKER_COMPOSE) -f "$(E2E_COMPOSE_FILE)" down -v --remove-orphans' EXIT; \
+	AWS_ACCESS_KEY_ID=test \
+	AWS_SECRET_ACCESS_KEY=test \
+	AWS_REGION=us-east-1 \
+	AWS_DEFAULT_REGION=us-east-1 \
+	E2E_OPENBAO_ADDR="$(E2E_OPENBAO_ADDR)" \
+	E2E_LOCALSTACK_ENDPOINT="$(E2E_LOCALSTACK_ENDPOINT)" \
+	E2E_PLUGIN_PATH="$(E2E_PLUGIN_BIN)" \
+	E2E_PLUGIN_VERSION="$(E2E_PLUGIN_VERSION)" \
 	"$(GO)" test -tags=e2e ./test/e2e/localstack -count=1 -v
 
 .PHONY: e2e-kind-image
