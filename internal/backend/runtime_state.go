@@ -227,3 +227,11 @@ func newRuntimeID(prefix string) (string, error) {
 	}
 	return prefix + "-" + hex.EncodeToString(raw[:]), nil
 }
+
+func bestEffortRuntimeID(prefix string) string {
+	id, err := newRuntimeID(prefix)
+	if err != nil {
+		return prefix + "-unavailable"
+	}
+	return id
+}

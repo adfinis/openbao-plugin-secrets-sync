@@ -147,19 +147,22 @@ type enqueueIntentOperation struct {
 }
 
 type outboxRecord struct {
-	ID             string               `json:"id"`
-	Type           outbox.OperationType `json:"type"`
-	Path           string               `json:"path"`
-	Version        int                  `json:"version"`
-	AssociationID  string               `json:"association_id"`
-	ObjectID       string               `json:"object_id"`
-	DestinationRef string               `json:"destination_ref"`
-	State          string               `json:"state"`
-	Attempts       int                  `json:"attempts"`
-	NotBefore      string               `json:"not_before"`
-	CreatedTime    string               `json:"created_time"`
-	UpdatedTime    string               `json:"updated_time"`
-	IdempotencyKey string               `json:"idempotency_key"`
+	ID               string               `json:"id"`
+	Type             outbox.OperationType `json:"type"`
+	Path             string               `json:"path"`
+	Version          int                  `json:"version"`
+	AssociationID    string               `json:"association_id"`
+	ObjectID         string               `json:"object_id"`
+	DestinationRef   string               `json:"destination_ref"`
+	State            string               `json:"state"`
+	Attempts         int                  `json:"attempts"`
+	NotBefore        string               `json:"not_before"`
+	CreatedTime      string               `json:"created_time"`
+	UpdatedTime      string               `json:"updated_time"`
+	IdempotencyKey   string               `json:"idempotency_key"`
+	ClaimOwner       string               `json:"claim_owner,omitempty"`
+	ClaimExpiresTime string               `json:"claim_expires_time,omitempty"`
+	ClaimAttempt     int                  `json:"claim_attempt,omitempty"`
 }
 
 type statusRecord struct {

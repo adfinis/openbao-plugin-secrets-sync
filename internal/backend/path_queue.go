@@ -13,11 +13,13 @@ const (
 	defaultDrainMaxOperations = 100
 	restoreGuardActiveError   = "restore guard is active; acknowledge " +
 		"config/restore-guard/acknowledge before remote mutation"
+	remoteMutationUnsafeError = "remote mutation is not allowed on this replication node"
 )
 
 type queueSummary struct {
 	Pending          int
 	RetryWait        int
+	Claimed          int
 	Terminal         int
 	Canceled         int
 	OldestAgeSeconds int
@@ -135,6 +137,9 @@ func (b *secretSyncBackend) pathQueueDrain(
 	if cfg.RestoreGuard {
 		return logical.ErrorResponse(restoreGuardActiveError), nil
 	}
+	if !b.remoteMutationAllowed() {
+		return logical.ErrorResponse(remoteMutationUnsafeError), nil
+	}
 	maxOperations := data.Get("max_operations").(int)
 	if maxOperations < 0 {
 		return logical.ErrorResponse("max_operations must be greater than or equal to zero"), nil
@@ -164,6 +169,7 @@ func (b *secretSyncBackend) pathQueueDrain(
 		responseField("max_operations", maxOperations),
 		responseField("queue_pending", summary.Pending),
 		responseField("queue_retry_wait", summary.RetryWait),
+		responseField("queue_claimed", summary.Claimed),
 		responseField("queue_terminal", summary.Terminal),
 		responseField("queue_canceled", summary.Canceled),
 		responseField("queue_oldest_age_seconds", summary.OldestAgeSeconds),
@@ -203,6 +209,9 @@ func readQueueSummary(ctx context.Context, storage logical.Storage, now time.Tim
 			summary.Canceled++
 		}
 		if isQueuedOutboxState(record.State) {
+			if isOutboxClaimActive(*record, now) {
+				summary.Claimed++
+			}
 			summary.recordQueuedAge(*record, now)
 		}
 	}
@@ -227,6 +236,7 @@ func queueSummaryResponse(summary queueSummary) map[string]interface{} { //nolin
 	return newResponseData(
 		responseField("pending", summary.Pending),
 		responseField("retry_wait", summary.RetryWait),
+		responseField("claimed", summary.Claimed),
 		responseField("terminal", summary.Terminal),
 		responseField("canceled", summary.Canceled),
 		responseField("oldest_age_seconds", summary.OldestAgeSeconds),
@@ -260,15 +270,20 @@ func pathQueueOperationRetry(
 	if record == nil {
 		return nil, nil
 	}
+	now := nowUTC()
+	if isOutboxClaimActive(*record, now) {
+		return logical.ErrorResponse("operation is currently claimed"), nil
+	}
 	switch record.State {
 	case outboxStatePending:
 		return nil, nil
 	case outboxStateRetryWait, outboxStateFailedTerminal, outboxStateCanceled:
-		now := nowUTC().Format(timeFormatRFC3339)
-		record.State = outboxStatePending
+		nowString := now.Format(timeFormatRFC3339)
 		record.Attempts = 0
-		record.NotBefore = now
-		record.UpdatedTime = now
+		record.State = outboxStatePending
+		record.NotBefore = nowString
+		record.UpdatedTime = nowString
+		clearOutboxClaim(record)
 		if err := putOutbox(ctx, req.Storage, *record); err != nil {
 			return nil, err
 		}
@@ -290,13 +305,18 @@ func pathQueueOperationCancel(
 	if record == nil {
 		return nil, nil
 	}
+	now := nowUTC()
+	if isOutboxClaimActive(*record, now) {
+		return logical.ErrorResponse("operation is currently claimed"), nil
+	}
 	switch record.State {
 	case outboxStateCanceled:
 		return nil, nil
 	case outboxStatePending, outboxStateRetryWait:
-		now := nowUTC().Format(timeFormatRFC3339)
+		nowString := now.Format(timeFormatRFC3339)
 		record.State = outboxStateCanceled
-		record.UpdatedTime = now
+		record.UpdatedTime = nowString
+		clearOutboxClaim(record)
 		if err := putOutbox(ctx, req.Storage, *record); err != nil {
 			return nil, err
 		}
@@ -321,5 +341,9 @@ func outboxOperationResponse(record outboxRecord) map[string]interface{} { //nol
 		responseField("created_time", record.CreatedTime),
 		responseField("updated_time", record.UpdatedTime),
 		responseField("idempotency_key", record.IdempotencyKey),
+		responseField("claimed", isOutboxClaimActive(record, nowUTC())),
+		responseField("claim_owner", record.ClaimOwner),
+		responseField("claim_expires_time", record.ClaimExpiresTime),
+		responseField("claim_attempt", record.ClaimAttempt),
 	)
 }

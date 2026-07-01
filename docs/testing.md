@@ -128,6 +128,15 @@ Current backend security-boundary coverage asserts that:
   queue summaries, queue operation reads, drain responses, status responses,
   or reconcile plan/apply responses.
 
+Current queue hardening coverage asserts that:
+
+- unexpired outbox claims are skipped by manual drain and block operator cancel;
+- expired outbox claims are reclaimable and cleared after successful dispatch;
+- retryable provider failures clear claim metadata before moving to
+  `retry_wait`;
+- periodic processing skips unsafe OpenBao replication states;
+- manual drain returns an operator-visible error on unsafe replication states.
+
 ## Hardening Order
 
 Hardening should proceed in this order:

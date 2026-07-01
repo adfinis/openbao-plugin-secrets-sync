@@ -494,6 +494,7 @@ func cancelQueuedOutboxForAssociation(
 		}
 		record.State = outboxStateCanceled
 		record.UpdatedTime = now
+		clearOutboxClaim(record)
 		if err := putOutbox(ctx, storage, *record); err != nil {
 			return nil, err
 		}
@@ -537,6 +538,7 @@ func cancelQueuedOutboxIDs(ctx context.Context, storage logical.Storage, ids []s
 		}
 		record.State = outboxStateCanceled
 		record.UpdatedTime = now
+		clearOutboxClaim(record)
 		if err := putOutbox(ctx, storage, *record); err != nil {
 			return err
 		}

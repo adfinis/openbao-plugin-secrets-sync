@@ -19,6 +19,7 @@ const (
 	maxAutomaticRetryAttempts = 3
 	retryBaseDelay            = 30 * time.Second
 	retryMaxDelay             = 5 * time.Minute
+	outboxClaimLease          = 5 * time.Minute
 )
 
 func (b *secretSyncBackend) processDueOutbox(ctx context.Context, storage logical.Storage, now time.Time) error {
@@ -32,6 +33,13 @@ func (b *secretSyncBackend) processDueOutboxLimit(
 	now time.Time,
 	maxOperations int,
 ) (int, error) {
+	b.dispatchMu.Lock()
+	defer b.dispatchMu.Unlock()
+
+	claimOwner, err := b.outboxClaimOwner(ctx, storage)
+	if err != nil {
+		return 0, err
+	}
 	ids, err := listOutboxIDs(ctx, storage)
 	if err != nil {
 		return 0, err
@@ -51,7 +59,14 @@ func (b *secretSyncBackend) processDueOutboxLimit(
 		if !isSupportedOperation(*record) {
 			continue
 		}
-		if err := b.processOutboxRecord(ctx, storage, *record, now); err != nil {
+		claimed, ok, err := claimOutboxRecord(ctx, storage, *record, claimOwner, now)
+		if err != nil {
+			return processed, err
+		}
+		if !ok {
+			continue
+		}
+		if err := b.processOutboxRecord(ctx, storage, *claimed, now); err != nil {
 			return processed, err
 		}
 		processed++
@@ -60,6 +75,62 @@ func (b *secretSyncBackend) processDueOutboxLimit(
 		}
 	}
 	return processed, nil
+}
+
+func (b *secretSyncBackend) outboxClaimOwner(ctx context.Context, storage logical.Storage) (string, error) {
+	state, err := ensureRuntimeState(ctx, storage)
+	if err != nil {
+		return "", err
+	}
+	return state.PluginInstance.ID + "/" + b.dispatchWorkerID, nil
+}
+
+func claimOutboxRecord(
+	ctx context.Context,
+	storage logical.Storage,
+	record outboxRecord,
+	owner string,
+	now time.Time,
+) (*outboxRecord, bool, error) {
+	if isOutboxClaimActive(record, now) {
+		return nil, false, nil
+	}
+	claimExpires := now.Add(outboxClaimLease).Format(timeFormatRFC3339)
+	record.ClaimOwner = owner
+	record.ClaimExpiresTime = claimExpires
+	record.ClaimAttempt = record.Attempts + 1
+	record.UpdatedTime = now.Format(timeFormatRFC3339)
+	if err := putOutbox(ctx, storage, record); err != nil {
+		return nil, false, err
+	}
+	claimed, err := getOutbox(ctx, storage, record.ID)
+	if err != nil {
+		return nil, false, err
+	}
+	if claimed == nil ||
+		claimed.ClaimOwner != owner ||
+		claimed.ClaimExpiresTime != claimExpires ||
+		claimed.ClaimAttempt != record.ClaimAttempt {
+		return nil, false, nil
+	}
+	return claimed, true, nil
+}
+
+func isOutboxClaimActive(record outboxRecord, now time.Time) bool {
+	if record.ClaimOwner == "" || record.ClaimExpiresTime == "" {
+		return false
+	}
+	expires, err := time.Parse(timeFormatRFC3339, record.ClaimExpiresTime)
+	if err != nil {
+		return false
+	}
+	return expires.After(now)
+}
+
+func clearOutboxClaim(record *outboxRecord) {
+	record.ClaimOwner = ""
+	record.ClaimExpiresTime = ""
+	record.ClaimAttempt = 0
 }
 
 func isOutboxDue(record outboxRecord, now time.Time) bool {
@@ -170,6 +241,7 @@ func (b *secretSyncBackend) processUpsert(
 	record.State = outboxStateSucceeded
 	record.Attempts++
 	record.UpdatedTime = now.Format(timeFormatRFC3339)
+	clearOutboxClaim(&record)
 	if err := putOutbox(ctx, storage, record); err != nil {
 		return err
 	}
@@ -250,6 +322,7 @@ func (b *secretSyncBackend) processDelete(
 	record.State = outboxStateSucceeded
 	record.Attempts++
 	record.UpdatedTime = now.Format(timeFormatRFC3339)
+	clearOutboxClaim(&record)
 	if err := putOutbox(ctx, storage, record); err != nil {
 		return err
 	}
@@ -515,6 +588,7 @@ func markOperationFailed(
 		record.NotBefore = ""
 	}
 	record.UpdatedTime = now.Format(timeFormatRFC3339)
+	clearOutboxClaim(&record)
 	if err := putOutbox(ctx, storage, record); err != nil {
 		return err
 	}

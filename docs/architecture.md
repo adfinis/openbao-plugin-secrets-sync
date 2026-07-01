@@ -246,19 +246,21 @@ claimed    -> pending        when claim expires
 applying   -> pending        when claim expires and provider operation is idempotent
 ```
 
-The MVP dispatcher may process due `retry_wait` records directly without a
-separate persisted claim record. Automatic retry is reserved for provider
-`rate_limit` and `unavailable` classes, with a bounded attempt budget and
-`not_before` delay. Manual queue retry moves canceled, retry-wait, or terminal
-failed work back to `pending` and resets the attempt counter.
+The dispatcher persists claim owner, expiry, and attempt metadata directly on
+the outbox record rather than exposing `claimed` as a separate public operation
+state. Due `pending` and `retry_wait` records with an unexpired claim are
+skipped; expired claims are reclaimable. Automatic retry is reserved for
+provider `rate_limit` and `unavailable` classes, with a bounded attempt budget
+and `not_before` delay. Manual queue retry moves canceled, retry-wait, or
+terminal failed work back to `pending` and resets the attempt counter.
 
 The `queue/drain` path runs the same due-operation dispatcher as background
 work with a request-bounded operation limit. It first checks global mutation
-safety gates, including `disabled` and `restore_guard`, then recovers
-incomplete enqueue intents and returns a queue summary without exposing source
-payload data. The path exists for deterministic tests, operator-controlled
-catch-up, and break-glass workflows; normal progress should come from the
-periodic function.
+safety gates, including `disabled`, `restore_guard`, and OpenBao replication
+state, then recovers incomplete enqueue intents and returns a queue summary
+without exposing source payload data. The path exists for deterministic tests,
+operator-controlled catch-up, and break-glass workflows; normal progress should
+come from the periodic function.
 
 Source delete uses the same durable outbox model. Deleting the latest local
 version cancels queued upsert work for that version. Associations with
@@ -267,8 +269,8 @@ leave the remote object untouched. Delete enqueue intent recovery is
 type-aware: upsert intents recover only while the source version is live,
 delete intents recover only after the source version is deleted.
 
-Claims must include owner, expiry, and attempt number. In-memory locks are only
-an optimization. Correctness comes from durable claims, idempotency keys, and
+Claims include owner, expiry, and attempt number. In-memory locks are only an
+optimization. Correctness comes from durable claims, idempotency keys, and
 provider-side version or ownership checks.
 
 ## Ordering

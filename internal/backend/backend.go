@@ -15,6 +15,7 @@ import (
 	"github.com/adfinis/openbao-secret-sync/internal/providers/kubernetessecrets"
 	"github.com/adfinis/openbao-secret-sync/internal/version"
 	"github.com/openbao/openbao/sdk/v2/framework"
+	"github.com/openbao/openbao/sdk/v2/helper/consts"
 	"github.com/openbao/openbao/sdk/v2/logical"
 )
 
@@ -41,7 +42,8 @@ func Backend(_ *logical.BackendConfig) *secretSyncBackend {
 			gitlab.New(),
 			kubernetessecrets.New(),
 		),
-		observer: observability.New(),
+		observer:         observability.New(),
+		dispatchWorkerID: bestEffortRuntimeID("worker"),
 	}
 	b.Backend = &framework.Backend{
 		Help: strings.TrimSpace(backendHelp),
@@ -77,6 +79,8 @@ type secretSyncBackend struct {
 	*framework.Backend
 
 	cacheMu          sync.Mutex
+	dispatchMu       sync.Mutex
+	dispatchWorkerID string
 	providerRegistry *providers.Registry
 	observer         observability.Recorder
 }
@@ -102,6 +106,9 @@ func (b *secretSyncBackend) periodic(ctx context.Context, req *logical.Request) 
 	if req == nil || req.Storage == nil {
 		return nil
 	}
+	if !b.remoteMutationAllowed() {
+		return nil
+	}
 	if _, err := ensureRuntimeState(ctx, req.Storage); err != nil {
 		return err
 	}
@@ -117,6 +124,24 @@ func (b *secretSyncBackend) periodic(ctx context.Context, req *logical.Request) 
 		return err
 	}
 	return b.processDueOutbox(ctx, req.Storage, now)
+}
+
+func (b *secretSyncBackend) remoteMutationAllowed() bool {
+	if b.Backend == nil || b.System() == nil {
+		return true
+	}
+	sys := b.System()
+	if sys.LocalMount() {
+		return true
+	}
+	state := sys.ReplicationState()
+	return !state.HasState(
+		consts.ReplicationPerformanceSecondary |
+			consts.ReplicationPerformanceStandby |
+			consts.ReplicationPerformanceBootstrapping |
+			consts.ReplicationDRSecondary |
+			consts.ReplicationDRBootstrapping,
+	)
 }
 
 func nowUTC() time.Time {

@@ -13,6 +13,7 @@ import (
 	"github.com/adfinis/openbao-secret-sync/internal/providers/awssecretsmanager"
 	"github.com/adfinis/openbao-secret-sync/internal/providers/gitlab"
 	"github.com/adfinis/openbao-secret-sync/internal/providers/kubernetessecrets"
+	"github.com/openbao/openbao/sdk/v2/helper/consts"
 	"github.com/openbao/openbao/sdk/v2/logical"
 )
 
@@ -1775,6 +1776,29 @@ func TestPeriodicHonorsRestoreGuard(t *testing.T) {
 	assertOutboxOperation(t, storage, operationID, 1, outboxStateSucceeded)
 }
 
+func TestPeriodicSkipsUnsafeReplicationNode(t *testing.T) {
+	b := Backend(&logical.BackendConfig{})
+	storage := &logical.InmemStorage{}
+
+	writeAppDBSecret(t, b, storage, "initial")
+	createFakeDestination(t, b, storage, "default")
+	associationResp := createDefaultFakeAssociation(t, b, storage)
+	operationID := operationIDsFromResponse(t, associationResp)[0]
+	acknowledgeRestoreGuard(t, b, storage)
+
+	if err := b.Setup(context.Background(), &logical.BackendConfig{
+		System: &logical.StaticSystemView{
+			ReplicationStateVal: consts.ReplicationPerformanceSecondary,
+		},
+	}); err != nil {
+		t.Fatalf("setup backend: %v", err)
+	}
+	if err := b.periodic(context.Background(), &logical.Request{Storage: storage}); err != nil {
+		t.Fatalf("periodic on unsafe replication node: %v", err)
+	}
+	assertOutboxOperation(t, storage, operationID, 1, outboxStatePending)
+}
+
 func TestPeriodicRejectsPayloadOverProviderLimit(t *testing.T) {
 	b := Backend(&logical.BackendConfig{})
 	storage := &logical.InmemStorage{}
@@ -2047,6 +2071,102 @@ func TestQueueDrainProcessesDueOperations(t *testing.T) {
 	assertOutboxOperation(t, storage, operationID, 1, outboxStateSucceeded)
 }
 
+func TestQueueDrainSkipsUnexpiredClaim(t *testing.T) {
+	b := Backend(&logical.BackendConfig{})
+	storage := &logical.InmemStorage{}
+
+	writeAppDBSecret(t, b, storage, "initial")
+	createFakeDestination(t, b, storage, "default")
+	associationResp := createDefaultFakeAssociation(t, b, storage)
+	operationID := operationIDsFromResponse(t, associationResp)[0]
+	operation, err := getOutbox(context.Background(), storage, operationID)
+	if err != nil {
+		t.Fatalf("read outbox operation: %v", err)
+	}
+	operation.ClaimOwner = "worker-other"
+	operation.ClaimExpiresTime = nowUTC().Add(time.Hour).Format(timeFormatRFC3339)
+	operation.ClaimAttempt = 1
+	if err := putOutbox(context.Background(), storage, *operation); err != nil {
+		t.Fatalf("write claimed outbox operation: %v", err)
+	}
+
+	acknowledgeRestoreGuard(t, b, storage)
+	drainResp := handleRequest(t, b, storage, logical.UpdateOperation, "queue/drain", map[string]interface{}{
+		"max_operations": 1,
+	})
+	assertNoErrorResponse(t, drainResp)
+	if got := drainResp.Data["processed"]; got != 0 {
+		t.Fatalf("processed = %v, want 0", got)
+	}
+	if got := drainResp.Data["queue_claimed"]; got != 1 {
+		t.Fatalf("queue_claimed = %v, want 1", got)
+	}
+	operation = assertOutboxOperation(t, storage, operationID, 1, outboxStatePending)
+	if operation.ClaimOwner != "worker-other" {
+		t.Fatalf("claim_owner = %q, want worker-other", operation.ClaimOwner)
+	}
+
+	cancelResp := handleRequest(t, b, storage, logical.UpdateOperation, "queue/"+operationID+"/cancel", nil)
+	if cancelResp == nil || !cancelResp.IsError() {
+		t.Fatalf("cancel claimed operation response = %#v, want error", cancelResp)
+	}
+}
+
+func TestQueueDrainReclaimsExpiredClaimAndClearsIt(t *testing.T) {
+	b := Backend(&logical.BackendConfig{})
+	storage := &logical.InmemStorage{}
+
+	writeAppDBSecret(t, b, storage, "initial")
+	createFakeDestination(t, b, storage, "default")
+	associationResp := createDefaultFakeAssociation(t, b, storage)
+	operationID := operationIDsFromResponse(t, associationResp)[0]
+	operation, err := getOutbox(context.Background(), storage, operationID)
+	if err != nil {
+		t.Fatalf("read outbox operation: %v", err)
+	}
+	operation.ClaimOwner = "worker-stale"
+	operation.ClaimExpiresTime = nowUTC().Add(-time.Minute).Format(timeFormatRFC3339)
+	operation.ClaimAttempt = 1
+	if err := putOutbox(context.Background(), storage, *operation); err != nil {
+		t.Fatalf("write expired claimed outbox operation: %v", err)
+	}
+
+	acknowledgeRestoreGuard(t, b, storage)
+	drainResp := handleRequest(t, b, storage, logical.UpdateOperation, "queue/drain", map[string]interface{}{
+		"max_operations": 1,
+	})
+	assertNoErrorResponse(t, drainResp)
+	if got := drainResp.Data["processed"]; got != 1 {
+		t.Fatalf("processed = %v, want 1", got)
+	}
+	operation = assertOutboxOperation(t, storage, operationID, 1, outboxStateSucceeded)
+	if operation.ClaimOwner != "" || operation.ClaimExpiresTime != "" || operation.ClaimAttempt != 0 {
+		t.Fatalf("claim fields after success = %#v, want cleared", operation)
+	}
+
+	readResp := handleRequest(t, b, storage, logical.ReadOperation, "queue/"+operationID, nil)
+	assertNoErrorResponse(t, readResp)
+	if got := readResp.Data["claimed"]; got != false {
+		t.Fatalf("claimed response = %v, want false", got)
+	}
+}
+
+func TestQueueDrainClearsClaimAfterRetryableFailure(t *testing.T) {
+	b := Backend(&logical.BackendConfig{})
+	storage := &logical.InmemStorage{}
+
+	writeAppDBSecret(t, b, storage, "initial")
+	createFakeDestination(t, b, storage, "default")
+	associationResp := createFakeAssociationWithResolvedName(t, b, storage, "prod/rate-limit/app/db")
+	operationID := operationIDsFromResponse(t, associationResp)[0]
+
+	runPeriodicAllowed(t, b, storage, "periodic")
+	operation := assertOutboxOperation(t, storage, operationID, 1, outboxStateRetryWait)
+	if operation.ClaimOwner != "" || operation.ClaimExpiresTime != "" || operation.ClaimAttempt != 0 {
+		t.Fatalf("claim fields after retryable failure = %#v, want cleared", operation)
+	}
+}
+
 func TestQueueDrainHonorsRestoreGuard(t *testing.T) {
 	b := Backend(&logical.BackendConfig{})
 	storage := &logical.InmemStorage{}
@@ -2072,6 +2192,35 @@ func TestQueueDrainHonorsRestoreGuard(t *testing.T) {
 	if got := drainResp.Data["processed"]; got != 1 {
 		t.Fatalf("processed after acknowledge = %v, want 1", got)
 	}
+}
+
+func TestQueueDrainRejectsUnsafeReplicationNode(t *testing.T) {
+	b := Backend(&logical.BackendConfig{})
+	storage := &logical.InmemStorage{}
+
+	writeAppDBSecret(t, b, storage, "initial")
+	createFakeDestination(t, b, storage, "default")
+	associationResp := createDefaultFakeAssociation(t, b, storage)
+	operationID := operationIDsFromResponse(t, associationResp)[0]
+	acknowledgeRestoreGuard(t, b, storage)
+
+	if err := b.Setup(context.Background(), &logical.BackendConfig{
+		System: &logical.StaticSystemView{
+			ReplicationStateVal: consts.ReplicationPerformanceSecondary,
+		},
+	}); err != nil {
+		t.Fatalf("setup backend: %v", err)
+	}
+	drainResp := handleRequest(t, b, storage, logical.UpdateOperation, "queue/drain", map[string]interface{}{
+		"max_operations": 1,
+	})
+	if drainResp == nil || !drainResp.IsError() {
+		t.Fatalf("drain unsafe replication response = %#v, want error", drainResp)
+	}
+	if !strings.Contains(drainResp.Error().Error(), remoteMutationUnsafeError) {
+		t.Fatalf("drain unsafe replication error = %q, want %q", drainResp.Error().Error(), remoteMutationUnsafeError)
+	}
+	assertOutboxOperation(t, storage, operationID, 1, outboxStatePending)
 }
 
 func TestQueueSummaryOldestAge(t *testing.T) {

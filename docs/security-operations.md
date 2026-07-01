@@ -68,8 +68,9 @@ Destination authority can be proven through:
 
 `queue/drain` is an operator action because it can execute remote mutations for
 all due operations in the durable queue. It must be policy-gated like retry and
-cancel operations, honors the global disabled flag, recovers incomplete enqueue
-intents before dispatch, and must not expose source payload data in responses.
+cancel operations, honors the global disabled flag and restore guard, refuses
+unsafe OpenBao replication states, recovers incomplete enqueue intents before
+dispatch, and must not expose source payload data in responses.
 
 ## Confused-Deputy Controls
 

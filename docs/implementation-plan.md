@@ -25,6 +25,11 @@ Implemented backend slices now include:
 - association `delete_mode` with source-delete enqueue semantics;
 - durable outbox, enqueue-intent recovery, queue summary, operation read,
   cancel, manual retry, and bounded manual drain;
+- durable outbox claims with owner, expiry, and attempt metadata; active claims
+  are skipped, expired claims are reclaimable, and success/failure/operator
+  state transitions clear stale claims;
+- periodic and manual drain mutation guards for OpenBao replication states
+  where remote mutation is unsafe;
 - provider delete dispatch for durable delete operations;
 - manual per-path reconcile plan/apply using provider read-state;
 - automatic retry for `rate_limit` and `unavailable` provider errors with a
