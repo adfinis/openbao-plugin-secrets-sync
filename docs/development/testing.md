@@ -188,6 +188,8 @@ Current queue hardening coverage asserts that:
 - newer source writes supersede older inactive queued upserts for the same
   association object;
 - older operations cannot overwrite newer per-object status records;
+- incomplete enqueue intents recover missing outbox work and completed enqueue
+  intents are pruned;
 - expired outbox claims are reclaimable and cleared after successful dispatch;
 - retryable provider failures clear claim metadata before moving to
   `retry_wait`;

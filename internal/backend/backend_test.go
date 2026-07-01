@@ -3359,13 +3359,8 @@ func TestPeriodicRecoversIncompleteEnqueueIntent(t *testing.T) {
 	if err := deleteOutbox(context.Background(), storage, *operation); err != nil {
 		t.Fatalf("delete outbox operation: %v", err)
 	}
-	intent, err := getEnqueueIntent(context.Background(), storage, "app/db", 2)
-	if err != nil {
-		t.Fatalf("read enqueue intent: %v", err)
-	}
-	intent.Complete = false
-	intent.CompletedTime = ""
-	if err := putEnqueueIntent(context.Background(), storage, *intent); err != nil {
+	intent := newEnqueueIntentRecord("app/db", 2, []outboxRecord{*operation}, operation.CreatedTime)
+	if err := putEnqueueIntent(context.Background(), storage, intent); err != nil {
 		t.Fatalf("write incomplete enqueue intent: %v", err)
 	}
 
@@ -3377,12 +3372,12 @@ func TestPeriodicRecoversIncompleteEnqueueIntent(t *testing.T) {
 	if recovered == nil || recovered.State != outboxStateSucceeded {
 		t.Fatalf("recovered operation = %#v, want succeeded operation", recovered)
 	}
-	intent, err = getEnqueueIntent(context.Background(), storage, "app/db", 2)
+	intentRecord, err := getEnqueueIntent(context.Background(), storage, "app/db", 2)
 	if err != nil {
 		t.Fatalf("read recovered enqueue intent: %v", err)
 	}
-	if intent == nil || !intent.Complete {
-		t.Fatalf("recovered enqueue intent = %#v, want complete", intent)
+	if intentRecord != nil {
+		t.Fatalf("recovered enqueue intent = %#v, want pruned", intentRecord)
 	}
 }
 
@@ -3407,13 +3402,8 @@ func TestRecoveryRestoresDeleteIntentAfterSourceDelete(t *testing.T) {
 	if err := deleteOutbox(context.Background(), storage, *operation); err != nil {
 		t.Fatalf("delete outbox operation: %v", err)
 	}
-	intent, err := getEnqueueIntent(context.Background(), storage, "app/db", 1)
-	if err != nil {
-		t.Fatalf("read delete enqueue intent: %v", err)
-	}
-	intent.Complete = false
-	intent.CompletedTime = ""
-	if err := putEnqueueIntent(context.Background(), storage, *intent); err != nil {
+	intent := newEnqueueIntentRecord("app/db", 1, []outboxRecord{*operation}, operation.CreatedTime)
+	if err := putEnqueueIntent(context.Background(), storage, intent); err != nil {
 		t.Fatalf("write incomplete delete enqueue intent: %v", err)
 	}
 
@@ -3452,8 +3442,8 @@ func TestRecoveryCompletesIntentWithoutCommittedVersion(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read recovered enqueue intent: %v", err)
 	}
-	if recoveredIntent == nil || !recoveredIntent.Complete {
-		t.Fatalf("recovered enqueue intent = %#v, want complete", recoveredIntent)
+	if recoveredIntent != nil {
+		t.Fatalf("recovered enqueue intent = %#v, want pruned", recoveredIntent)
 	}
 	recoveredOperation, err := getOutbox(context.Background(), storage, operation.ID)
 	if err != nil {
@@ -3461,6 +3451,28 @@ func TestRecoveryCompletesIntentWithoutCommittedVersion(t *testing.T) {
 	}
 	if recoveredOperation != nil {
 		t.Fatalf("recovered operation = %#v, want nil without committed version", recoveredOperation)
+	}
+}
+
+func TestRecoveryPrunesCompletedEnqueueIntent(t *testing.T) {
+	storage := &logical.InmemStorage{}
+	now := nowUTC().Format(timeFormatRFC3339)
+	intent := newEnqueueIntentRecord("app/db", 1, nil, now)
+	intent.Complete = true
+	intent.CompletedTime = now
+	if err := putEnqueueIntent(context.Background(), storage, intent); err != nil {
+		t.Fatalf("write completed enqueue intent: %v", err)
+	}
+
+	if err := recoverIncompleteEnqueueIntents(context.Background(), storage, nowUTC()); err != nil {
+		t.Fatalf("recover incomplete enqueue intents: %v", err)
+	}
+	prunedIntent, err := getEnqueueIntent(context.Background(), storage, "app/db", 1)
+	if err != nil {
+		t.Fatalf("read pruned enqueue intent: %v", err)
+	}
+	if prunedIntent != nil {
+		t.Fatalf("enqueue intent = %#v, want pruned", prunedIntent)
 	}
 }
 
@@ -3501,7 +3513,7 @@ func TestQueueCapacityCountsQueuedOperationsOnly(t *testing.T) {
 	if got := metadata["version"]; got != 2 {
 		t.Fatalf("second write version = %v, want 2", got)
 	}
-	assertCompleteEnqueueIntent(t, storage, "app/db", 2, metadata)
+	assertPrunedEnqueueIntentAndOutbox(t, storage, "app/db", 2, metadata)
 }
 
 func handleRequest(
@@ -3555,7 +3567,7 @@ func assertNoErrorResponse(t *testing.T, resp *logical.Response) {
 	}
 }
 
-func assertCompleteEnqueueIntent(
+func assertPrunedEnqueueIntentAndOutbox(
 	t *testing.T,
 	storage logical.Storage,
 	path string,
@@ -3568,11 +3580,8 @@ func assertCompleteEnqueueIntent(
 	if err != nil {
 		t.Fatalf("read enqueue intent: %v", err)
 	}
-	if intent == nil || !intent.Complete {
-		t.Fatalf("enqueue intent = %#v, want complete intent", intent)
-	}
-	if got := intent.OperationIDs; len(got) != len(operationIDs) || got[0] != operationIDs[0] {
-		t.Fatalf("enqueue intent operation IDs = %v, want %v", got, operationIDs)
+	if intent != nil {
+		t.Fatalf("enqueue intent = %#v, want pruned", intent)
 	}
 	operation, err := getOutbox(context.Background(), storage, operationIDs[0])
 	if err != nil {

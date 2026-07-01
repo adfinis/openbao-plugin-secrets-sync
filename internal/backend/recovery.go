@@ -16,6 +16,9 @@ func recoverIncompleteEnqueueIntents(ctx context.Context, storage logical.Storag
 	}
 	for _, intent := range intents {
 		if intent.Complete {
+			if err := deleteEnqueueIntent(ctx, storage, intent.Path, intent.Version); err != nil {
+				return err
+			}
 			continue
 		}
 		if err := recoverEnqueueIntent(ctx, storage, intent, now.Format(timeFormatRFC3339)); err != nil {
@@ -52,7 +55,7 @@ func recoverEnqueueIntent(
 			return err
 		}
 	}
-	return completeRecoveredIntent(ctx, storage, intent, now)
+	return pruneRecoveredIntent(ctx, storage, intent)
 }
 
 func recoverableIntentOperations(
@@ -144,14 +147,10 @@ func shouldRecoverIntentOperation(operationType outbox.OperationType, versionAva
 	}
 }
 
-func completeRecoveredIntent(
+func pruneRecoveredIntent(
 	ctx context.Context,
 	storage logical.Storage,
 	intent enqueueIntentRecord,
-	now string,
 ) error {
-	intent.Complete = true
-	intent.CompletedTime = now
-	intent.UpdatedTime = now
-	return putEnqueueIntent(ctx, storage, intent)
+	return deleteEnqueueIntent(ctx, storage, intent.Path, intent.Version)
 }

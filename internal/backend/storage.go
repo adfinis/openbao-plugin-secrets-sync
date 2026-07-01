@@ -193,6 +193,10 @@ func getEnqueueIntent(
 	return &record, nil
 }
 
+func deleteEnqueueIntent(ctx context.Context, storage logical.Storage, path string, version int) error {
+	return storage.Delete(ctx, enqueueIntentStorageKey(path, version))
+}
+
 func listEnqueueIntents(ctx context.Context, storage logical.Storage) ([]enqueueIntentRecord, error) {
 	keys, err := logical.CollectKeysWithPrefix(ctx, storage, enqueueIntentStoragePrefix)
 	if err != nil {

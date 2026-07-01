@@ -241,12 +241,15 @@ If transactions are not available, use a recoverable state:
 6. write version record;
 7. cancel superseded queued upsert records;
 8. create outbox records;
-9. mark enqueue intent complete;
+9. remove the enqueue intent after outbox records are durable;
 10. update metadata current version;
 11. release lock.
 
 The reconciler must scan incomplete enqueue intents and committed versions to
-recreate missing outbox records. This makes crash recovery explicit.
+recreate missing outbox records. Completed enqueue intents are pruned after the
+corresponding outbox records are durable; legacy completed intents are pruned
+during recovery scans. This makes crash recovery explicit without retaining
+unbounded completed intent history.
 
 Source metadata writes, source version mutations, and association lifecycle
 mutations use the same source-path lock. Association writes also lock the

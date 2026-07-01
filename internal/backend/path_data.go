@@ -703,16 +703,12 @@ func completeEnqueueIntent(
 	path string,
 	version int,
 	operations []outboxRecord,
-	now string,
+	_ string,
 ) error {
 	if len(operations) == 0 {
 		return nil
 	}
-	intent := newEnqueueIntentRecord(path, version, operations, now)
-	intent.Complete = true
-	intent.CompletedTime = now
-	intent.UpdatedTime = now
-	return putEnqueueIntent(ctx, storage, intent)
+	return deleteEnqueueIntent(ctx, storage, path, version)
 }
 
 func syncStateForOperationIDs(operationIDs []string) domain.SyncState {
