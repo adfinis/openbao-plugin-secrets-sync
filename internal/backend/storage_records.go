@@ -131,6 +131,13 @@ type associationRecord struct {
 	UpdatedTime     string `json:"updated_time"`
 }
 
+func (record associationRecord) reservationName() string {
+	if record.Granularity == syncGranularitySecretKey {
+		return record.NameTemplate
+	}
+	return record.ResolvedName
+}
+
 type enqueueIntentRecord struct {
 	Path          string                   `json:"path"`
 	Version       int                      `json:"version"`

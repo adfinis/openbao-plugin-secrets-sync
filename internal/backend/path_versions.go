@@ -8,7 +8,7 @@ import (
 	"github.com/openbao/openbao/sdk/v2/logical"
 )
 
-func pathVersionMutations(_ *secretSyncBackend) []*framework.Path {
+func pathVersionMutations(b *secretSyncBackend) []*framework.Path {
 	fields := map[string]*framework.FieldSchema{
 		"path": {
 			Type:        framework.TypeString,
@@ -25,7 +25,7 @@ func pathVersionMutations(_ *secretSyncBackend) []*framework.Path {
 			Fields:  fields,
 			Operations: map[logical.Operation]framework.OperationHandler{
 				logical.UpdateOperation: &framework.PathOperation{
-					Callback: pathDeleteVersionsWrite,
+					Callback: b.pathDeleteVersionsWrite,
 					Summary:  "Soft-delete local source secret versions.",
 				},
 			},
@@ -37,7 +37,7 @@ func pathVersionMutations(_ *secretSyncBackend) []*framework.Path {
 			Fields:  fields,
 			Operations: map[logical.Operation]framework.OperationHandler{
 				logical.UpdateOperation: &framework.PathOperation{
-					Callback: pathUndeleteWrite,
+					Callback: b.pathUndeleteWrite,
 					Summary:  "Undelete local source secret versions.",
 				},
 			},
@@ -49,7 +49,7 @@ func pathVersionMutations(_ *secretSyncBackend) []*framework.Path {
 			Fields:  fields,
 			Operations: map[logical.Operation]framework.OperationHandler{
 				logical.UpdateOperation: &framework.PathOperation{
-					Callback: pathDestroyWrite,
+					Callback: b.pathDestroyWrite,
 					Summary:  "Destroy local source secret versions.",
 				},
 			},
@@ -59,28 +59,28 @@ func pathVersionMutations(_ *secretSyncBackend) []*framework.Path {
 	}
 }
 
-func pathDeleteVersionsWrite(
+func (b *secretSyncBackend) pathDeleteVersionsWrite(
 	ctx context.Context,
 	req *logical.Request,
 	data *framework.FieldData,
 ) (*logical.Response, error) {
-	return runVersionMutation(ctx, req, data, softDeleteVersion)
+	return b.runVersionMutation(ctx, req, data, softDeleteVersion)
 }
 
-func pathUndeleteWrite(
+func (b *secretSyncBackend) pathUndeleteWrite(
 	ctx context.Context,
 	req *logical.Request,
 	data *framework.FieldData,
 ) (*logical.Response, error) {
-	return runVersionMutation(ctx, req, data, undeleteVersion)
+	return b.runVersionMutation(ctx, req, data, undeleteVersion)
 }
 
-func pathDestroyWrite(
+func (b *secretSyncBackend) pathDestroyWrite(
 	ctx context.Context,
 	req *logical.Request,
 	data *framework.FieldData,
 ) (*logical.Response, error) {
-	return runVersionMutation(ctx, req, data, destroyVersion)
+	return b.runVersionMutation(ctx, req, data, destroyVersion)
 }
 
 type versionMutationFunc func(
@@ -92,7 +92,7 @@ type versionMutationFunc func(
 	string,
 ) error
 
-func runVersionMutation(
+func (b *secretSyncBackend) runVersionMutation(
 	ctx context.Context,
 	req *logical.Request,
 	data *framework.FieldData,
@@ -102,6 +102,9 @@ func runVersionMutation(
 	if err != nil {
 		return logical.ErrorResponse(err.Error()), nil
 	}
+	unlock := b.lockSourcePath(path)
+	defer unlock()
+
 	metadata, err := getMetadata(ctx, req.Storage, path)
 	if err != nil {
 		return nil, err

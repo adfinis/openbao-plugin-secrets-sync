@@ -16,6 +16,7 @@ import (
 	"github.com/adfinis/openbao-plugin-secrets-sync/internal/version"
 	"github.com/openbao/openbao/sdk/v2/framework"
 	"github.com/openbao/openbao/sdk/v2/helper/consts"
+	"github.com/openbao/openbao/sdk/v2/helper/locksutil"
 	"github.com/openbao/openbao/sdk/v2/logical"
 )
 
@@ -44,6 +45,7 @@ func Backend(_ *logical.BackendConfig) *secretSyncBackend {
 		),
 		observer:         observability.New(),
 		dispatchWorkerID: bestEffortRuntimeID("worker"),
+		writeLocks:       locksutil.CreateLocks(),
 	}
 	b.Backend = &framework.Backend{
 		Help: strings.TrimSpace(backendHelp),
@@ -81,7 +83,9 @@ type secretSyncBackend struct {
 
 	cacheMu          sync.Mutex
 	dispatchMu       sync.Mutex
+	enqueueMu        sync.Mutex
 	dispatchWorkerID string
+	writeLocks       []*locksutil.LockEntry
 	providerRegistry *providers.Registry
 	observer         observability.Recorder
 }

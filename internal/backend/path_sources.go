@@ -37,7 +37,7 @@ func pathSources(b *secretSyncBackend) []*framework.Path {
 			},
 			Operations: map[logical.Operation]framework.OperationHandler{
 				logical.UpdateOperation: &framework.PathOperation{
-					Callback: pathSourceEnable,
+					Callback: b.pathSourceEnable,
 					Summary:  "Mark a source path as syncable.",
 				},
 			},
@@ -108,7 +108,7 @@ func (b *secretSyncBackend) pathSourceCheck(
 	)}, nil
 }
 
-func pathSourceEnable(
+func (b *secretSyncBackend) pathSourceEnable(
 	ctx context.Context,
 	req *logical.Request,
 	data *framework.FieldData,
@@ -117,6 +117,9 @@ func pathSourceEnable(
 	if err != nil {
 		return logical.ErrorResponse(err.Error()), nil
 	}
+	unlock := b.lockSourcePath(path)
+	defer unlock()
+
 	metadata, err := getMetadata(ctx, req.Storage, path)
 	if err != nil {
 		return nil, err

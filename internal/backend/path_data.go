@@ -12,7 +12,7 @@ import (
 	"github.com/openbao/openbao/sdk/v2/logical"
 )
 
-func pathData(_ *secretSyncBackend) *framework.Path {
+func pathData(b *secretSyncBackend) *framework.Path {
 	return &framework.Path{
 		Pattern: "data/" + framework.MatchAllRegex("path"),
 		Fields: map[string]*framework.FieldSchema{
@@ -35,11 +35,11 @@ func pathData(_ *secretSyncBackend) *framework.Path {
 		},
 		Operations: map[logical.Operation]framework.OperationHandler{
 			logical.CreateOperation: &framework.PathOperation{
-				Callback: pathDataWrite,
+				Callback: b.pathDataWrite,
 				Summary:  "Write a new local source secret version.",
 			},
 			logical.UpdateOperation: &framework.PathOperation{
-				Callback: pathDataWrite,
+				Callback: b.pathDataWrite,
 				Summary:  "Write a new local source secret version.",
 			},
 			logical.ReadOperation: &framework.PathOperation{
@@ -47,7 +47,7 @@ func pathData(_ *secretSyncBackend) *framework.Path {
 				Summary:  "Read a local source secret version.",
 			},
 			logical.DeleteOperation: &framework.PathOperation{
-				Callback: pathDataDelete,
+				Callback: b.pathDataDelete,
 				Summary:  "Soft-delete the latest local source secret version.",
 			},
 		},
@@ -56,7 +56,11 @@ func pathData(_ *secretSyncBackend) *framework.Path {
 	}
 }
 
-func pathDataWrite(ctx context.Context, req *logical.Request, data *framework.FieldData) (*logical.Response, error) {
+func (b *secretSyncBackend) pathDataWrite(
+	ctx context.Context,
+	req *logical.Request,
+	data *framework.FieldData,
+) (*logical.Response, error) {
 	path, err := normalizeSourcePath(data.Get("path").(string))
 	if err != nil {
 		return logical.ErrorResponse(err.Error()), nil
@@ -65,6 +69,8 @@ func pathDataWrite(ctx context.Context, req *logical.Request, data *framework.Fi
 	if err != nil {
 		return logical.ErrorResponse(err.Error()), nil
 	}
+	unlock := b.lockSourcePath(path)
+	defer unlock()
 
 	metadata, err := getMetadata(ctx, req.Storage, path)
 	if err != nil {
@@ -92,6 +98,10 @@ func pathDataWrite(ctx context.Context, req *logical.Request, data *framework.Fi
 	operations, operationIDs, err := newAssociationOutboxRecords(associations, nextVersion, payload, now)
 	if err != nil {
 		return logical.ErrorResponse(err.Error()), nil
+	}
+	if len(operations) > 0 {
+		b.enqueueMu.Lock()
+		defer b.enqueueMu.Unlock()
 	}
 	if err := ensureQueueCapacityFor(ctx, req.Storage, len(operations)); err != nil {
 		return logical.ErrorResponse(err.Error()), nil
@@ -200,11 +210,18 @@ func pathDataRead(ctx context.Context, req *logical.Request, data *framework.Fie
 	)}, nil
 }
 
-func pathDataDelete(ctx context.Context, req *logical.Request, data *framework.FieldData) (*logical.Response, error) {
+func (b *secretSyncBackend) pathDataDelete(
+	ctx context.Context,
+	req *logical.Request,
+	data *framework.FieldData,
+) (*logical.Response, error) {
 	path, err := normalizeSourcePath(data.Get("path").(string))
 	if err != nil {
 		return logical.ErrorResponse(err.Error()), nil
 	}
+	unlock := b.lockSourcePath(path)
+	defer unlock()
+
 	metadata, shouldDelete, err := metadataForSourceDelete(ctx, req.Storage, path)
 	if err != nil {
 		return nil, err
@@ -213,6 +230,8 @@ func pathDataDelete(ctx context.Context, req *logical.Request, data *framework.F
 		return nil, nil
 	}
 	now := nowUTC().Format(timeFormatRFC3339)
+	b.enqueueMu.Lock()
+	defer b.enqueueMu.Unlock()
 	deletePlan, err := buildSourceDeletePlan(ctx, req.Storage, path, metadata.CurrentVersion, now)
 	if err != nil {
 		return nil, err

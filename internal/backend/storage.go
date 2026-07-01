@@ -312,7 +312,7 @@ func putAssociation(ctx context.Context, storage logical.Storage, record associa
 		return err
 	}
 	reservationEntry, err := logical.StorageEntryJSON(
-		associationNameStorageKey(record.DestinationRef, record.ResolvedName, record.ID),
+		associationNameStorageKey(record.DestinationRef, record.reservationName(), record.ID),
 		record.Path,
 	)
 	if err != nil {
@@ -353,7 +353,7 @@ func deleteAssociation(ctx context.Context, storage logical.Storage, record asso
 	); err != nil {
 		return err
 	}
-	return storage.Delete(ctx, associationNameStorageKey(record.DestinationRef, record.ResolvedName, record.ID))
+	return storage.Delete(ctx, associationNameStorageKey(record.DestinationRef, record.reservationName(), record.ID))
 }
 
 func listAssociationIDsForPath(ctx context.Context, storage logical.Storage, path string) ([]string, error) {

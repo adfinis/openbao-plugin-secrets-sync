@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -2110,6 +2111,151 @@ func TestDataWriteCAS(t *testing.T) {
 	metadata := thirdResp.Data["metadata"].(map[string]interface{})
 	if got := metadata["version"]; got != 2 {
 		t.Fatalf("third write version = %v, want 2", got)
+	}
+}
+
+func TestConcurrentDataWritesPreserveVersions(t *testing.T) {
+	b := Backend(&logical.BackendConfig{})
+	storage := &logical.InmemStorage{}
+	const writers = 32
+	resp := handleRequest(t, b, storage, logical.UpdateOperation, "metadata/app/db", map[string]interface{}{
+		"max_versions": writers,
+	})
+	assertNoErrorResponse(t, resp)
+
+	start := make(chan struct{})
+	errs := make(chan error, writers)
+	var wg sync.WaitGroup
+	for i := 0; i < writers; i++ {
+		wg.Add(1)
+		go func(index int) {
+			defer wg.Done()
+			<-start
+			resp, err := b.HandleRequest(context.Background(), &logical.Request{
+				Operation: logical.UpdateOperation,
+				Path:      "data/app/db",
+				Storage:   storage,
+				Data: map[string]interface{}{
+					"data": map[string]interface{}{
+						"password": fmt.Sprintf("secret-%02d", index),
+					},
+				},
+			})
+			if err != nil {
+				errs <- err
+				return
+			}
+			if resp == nil {
+				errs <- fmt.Errorf("write %d returned nil response", index)
+				return
+			}
+			if resp.IsError() {
+				errs <- fmt.Errorf("write %d returned error response: %v", index, resp.Error())
+			}
+		}(i)
+	}
+	close(start)
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	metadata, err := getMetadata(context.Background(), storage, "app/db")
+	if err != nil {
+		t.Fatalf("read metadata: %v", err)
+	}
+	if metadata == nil {
+		t.Fatal("metadata must exist")
+	}
+	if got := metadata.CurrentVersion; got != writers {
+		t.Fatalf("current version = %d, want %d", got, writers)
+	}
+	for version := 1; version <= writers; version++ {
+		record, err := getVersion(context.Background(), storage, "app/db", version)
+		if err != nil {
+			t.Fatalf("read version %d: %v", version, err)
+		}
+		if record == nil {
+			t.Fatalf("version %d is missing", version)
+		}
+	}
+}
+
+func TestConcurrentAssociationWritesReserveResolvedNameOnce(t *testing.T) {
+	b := Backend(&logical.BackendConfig{})
+	storage := &logical.InmemStorage{}
+
+	for _, path := range []string{"app/db", "app/api"} {
+		resp := handleRequest(t, b, storage, logical.UpdateOperation, "data/"+path, map[string]interface{}{
+			"data": map[string]interface{}{
+				"password": path,
+			},
+		})
+		assertNoErrorResponse(t, resp)
+		resp = handleRequest(t, b, storage, logical.UpdateOperation, "metadata/"+path, map[string]interface{}{
+			"custom_metadata": map[string]interface{}{
+				sourceMetadataKeySyncable: sourceMetadataValueTrue,
+			},
+		})
+		assertNoErrorResponse(t, resp)
+	}
+	createFakeDestination(t, b, storage, "default")
+
+	start := make(chan struct{})
+	results := make(chan bool, 2)
+	var wg sync.WaitGroup
+	for _, path := range []string{"app/db", "app/api"} {
+		wg.Add(1)
+		go func(path string) {
+			defer wg.Done()
+			<-start
+			resp, err := b.HandleRequest(context.Background(), &logical.Request{
+				Operation: logical.UpdateOperation,
+				Path:      "associations/" + path,
+				Storage:   storage,
+				Data: map[string]interface{}{
+					"destination_type": providerTypeFake,
+					"destination_name": "default",
+					"resolved_name":    "prod/shared",
+					"granularity":      syncObjectIDSecretPath,
+					"format":           defaultAssociationFormat,
+				},
+			})
+			if err != nil {
+				t.Errorf("association write %s: %v", path, err)
+				results <- false
+				return
+			}
+			results <- resp != nil && !resp.IsError()
+		}(path)
+	}
+	close(start)
+	wg.Wait()
+	close(results)
+
+	successes := 0
+	for success := range results {
+		if success {
+			successes++
+		}
+	}
+	if successes != 1 {
+		t.Fatalf("successful association writes = %d, want 1", successes)
+	}
+	reservations, err := listAssociationNameReservationIDs(
+		context.Background(),
+		storage,
+		"fake/default",
+		"prod/shared",
+	)
+	if err != nil {
+		t.Fatalf("list reservations: %v", err)
+	}
+	if len(reservations) != 1 {
+		t.Fatalf("reservation count = %d, want 1", len(reservations))
 	}
 }
 
