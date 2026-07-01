@@ -183,6 +183,66 @@ func TestSourceEnableMarksPathSyncable(t *testing.T) {
 	}
 }
 
+func TestSourceCheckReportsReadiness(t *testing.T) {
+	b := Backend(&logical.BackendConfig{})
+	storage := &logical.InmemStorage{}
+
+	initialResp := handleRequest(t, b, storage, logical.ReadOperation, "sources/app/db/check", nil)
+	assertNoErrorResponse(t, initialResp)
+	if got := initialResp.Data["ready"]; got != false {
+		t.Fatalf("initial ready = %v, want false", got)
+	}
+	if got := initialResp.Data["current_version"]; got != 0 {
+		t.Fatalf("initial current_version = %v, want 0", got)
+	}
+	assertStringSlice(t, initialResp.Data["blockers"].([]string), []string{
+		"source_missing",
+		"source_not_syncable",
+	})
+
+	writeAppDBSecret(t, b, storage, "secret")
+	writtenResp := handleRequest(t, b, storage, logical.ReadOperation, "sources/app/db/check", nil)
+	assertNoErrorResponse(t, writtenResp)
+	if got := writtenResp.Data["ready"]; got != false {
+		t.Fatalf("written ready = %v, want false", got)
+	}
+	if got := writtenResp.Data["current_version"]; got != 1 {
+		t.Fatalf("written current_version = %v, want 1", got)
+	}
+	if got := writtenResp.Data["current_version_available"]; got != true {
+		t.Fatalf("written current_version_available = %v, want true", got)
+	}
+	assertStringSlice(t, writtenResp.Data["blockers"].([]string), []string{"source_not_syncable"})
+
+	createFakeDestination(t, b, storage, "default")
+	enableResp := handleRequest(t, b, storage, logical.UpdateOperation, "sources/app/db/enable", nil)
+	assertNoErrorResponse(t, enableResp)
+	associationResp := handleRequest(t, b, storage, logical.UpdateOperation, "associations/app/db", map[string]interface{}{
+		"destination_type": providerTypeFake,
+		"destination_name": "default",
+	})
+	assertNoErrorResponse(t, associationResp)
+
+	readyResp := handleRequest(t, b, storage, logical.ReadOperation, "sources/app/db/check", nil)
+	assertNoErrorResponse(t, readyResp)
+	if got := readyResp.Data["ready"]; got != true {
+		t.Fatalf("ready = %v, want true", got)
+	}
+	if got := readyResp.Data["syncable"]; got != true {
+		t.Fatalf("syncable = %v, want true", got)
+	}
+	if got := readyResp.Data["association_count"]; got != 1 {
+		t.Fatalf("association_count = %v, want 1", got)
+	}
+	if got := readyResp.Data["enabled_association_count"]; got != 1 {
+		t.Fatalf("enabled_association_count = %v, want 1", got)
+	}
+	if got := readyResp.Data["queued_operations"]; got != 1 {
+		t.Fatalf("queued_operations = %v, want 1", got)
+	}
+	assertStringSlice(t, readyResp.Data["blockers"].([]string), []string{})
+}
+
 func TestDestinationValidateSupportsRead(t *testing.T) {
 	b := Backend(&logical.BackendConfig{})
 	storage := &logical.InmemStorage{}
@@ -193,6 +253,89 @@ func TestDestinationValidateSupportsRead(t *testing.T) {
 	if got := resp.Data["valid"]; got != true {
 		t.Fatalf("valid = %v, want true", got)
 	}
+}
+
+func TestDestinationCheckReportsReady(t *testing.T) {
+	b := Backend(&logical.BackendConfig{})
+	storage := &logical.InmemStorage{}
+
+	createFakeDestination(t, b, storage, "primary")
+
+	readyResp := handleRequest(t, b, storage, logical.ReadOperation, "destinations/fake/primary/check", nil)
+	assertNoErrorResponse(t, readyResp)
+	if got := readyResp.Data["ready"]; got != true {
+		t.Fatalf("ready = %v, want true", got)
+	}
+	if got := readyResp.Data["valid"]; got != true {
+		t.Fatalf("valid = %v, want true", got)
+	}
+	if got := readyResp.Data["healthy"]; got != true {
+		t.Fatalf("healthy = %v, want true", got)
+	}
+	if got := readyResp.Data["health_checked"]; got != true {
+		t.Fatalf("health_checked = %v, want true", got)
+	}
+	assertStringSlice(t, readyResp.Data["blockers"].([]string), []string{})
+}
+
+func TestDestinationCheckReportsValidationFailure(t *testing.T) {
+	b := Backend(&logical.BackendConfig{})
+	storage := &logical.InmemStorage{}
+
+	createFakeDestination(t, b, storage, "invalid")
+	invalidResp := handleRequest(t, b, storage, logical.ReadOperation, "destinations/fake/invalid/check", nil)
+	assertNoErrorResponse(t, invalidResp)
+	assertResponseBool(t, invalidResp, "ready", false)
+	assertResponseBool(t, invalidResp, "valid", false)
+	assertResponseBool(t, invalidResp, "health_checked", false)
+	assertResponseString(t, invalidResp, "validation_error_class", string(providers.ErrorClassValidation))
+	assertStringSlice(t, invalidResp.Data["blockers"].([]string), []string{"validation_failed"})
+}
+
+func TestDestinationCheckReportsHealthFailure(t *testing.T) {
+	b := Backend(&logical.BackendConfig{})
+	storage := &logical.InmemStorage{}
+
+	createFakeDestination(t, b, storage, "unhealthy")
+	unhealthyResp := handleRequest(t, b, storage, logical.ReadOperation, "destinations/fake/unhealthy/check", nil)
+	assertNoErrorResponse(t, unhealthyResp)
+	assertResponseBool(t, unhealthyResp, "ready", false)
+	assertResponseBool(t, unhealthyResp, "valid", true)
+	assertResponseBool(t, unhealthyResp, "healthy", false)
+	assertResponseString(t, unhealthyResp, "health_error_class", string(providers.ErrorClassUnavailable))
+	assertStringSlice(t, unhealthyResp.Data["blockers"].([]string), []string{"health_failed"})
+}
+
+func TestDestinationCheckReportsDisabled(t *testing.T) {
+	b := Backend(&logical.BackendConfig{})
+	storage := &logical.InmemStorage{}
+
+	disabledResp := handleRequest(
+		t,
+		b,
+		storage,
+		logical.UpdateOperation,
+		"destinations/fake/disabled",
+		map[string]interface{}{
+			"description": "disabled destination",
+			"disabled":    true,
+		},
+	)
+	if disabledResp != nil && disabledResp.IsError() {
+		t.Fatalf("unexpected disabled destination write error: %v", disabledResp.Error())
+	}
+	disabledCheckResp := handleRequest(t, b, storage, logical.ReadOperation, "destinations/fake/disabled/check", nil)
+	assertNoErrorResponse(t, disabledCheckResp)
+	if got := disabledCheckResp.Data["ready"]; got != false {
+		t.Fatalf("disabled ready = %v, want false", got)
+	}
+	if got := disabledCheckResp.Data["valid"]; got != true {
+		t.Fatalf("disabled valid = %v, want true", got)
+	}
+	if got := disabledCheckResp.Data["health_checked"]; got != false {
+		t.Fatalf("disabled health_checked = %v, want false", got)
+	}
+	assertStringSlice(t, disabledCheckResp.Data["blockers"].([]string), []string{"destination_disabled"})
 }
 
 func TestAssociationCreateUsesSafeDefaults(t *testing.T) {
@@ -223,6 +366,19 @@ func TestAssociationCreateUsesSafeDefaults(t *testing.T) {
 	}
 	if got := resp.Data["enabled"]; got != true {
 		t.Fatalf("enabled = %v, want true", got)
+	}
+	defaults := resp.Data["defaults"].(map[string]interface{})
+	if got := defaults["granularity"]; got != syncGranularitySecretPath {
+		t.Fatalf("default granularity = %v, want %s", got, syncGranularitySecretPath)
+	}
+	if got := defaults["format"]; got != defaultAssociationFormat {
+		t.Fatalf("default format = %v, want %s", got, defaultAssociationFormat)
+	}
+	if got := defaults["delete_mode"]; got != deleteModeRetain {
+		t.Fatalf("default delete_mode = %v, want %s", got, deleteModeRetain)
+	}
+	if got := defaults["enabled"]; got != true {
+		t.Fatalf("default enabled = %v, want true", got)
 	}
 	operationIDs := operationIDsFromResponse(t, resp)
 	if len(operationIDs) != 1 {
@@ -2841,6 +2997,20 @@ func assertStringSlice(t *testing.T, got []string, want []string) {
 		if got[i] != want[i] {
 			t.Fatalf("string slice = %v, want %v", got, want)
 		}
+	}
+}
+
+func assertResponseBool(t *testing.T, resp *logical.Response, key string, want bool) {
+	t.Helper()
+	if got := resp.Data[key]; got != want {
+		t.Fatalf("%s = %v, want %v", key, got, want)
+	}
+}
+
+func assertResponseString(t *testing.T, resp *logical.Response, key string, want string) {
+	t.Helper()
+	if got := resp.Data[key]; got != want {
+		t.Fatalf("%s = %v, want %s", key, got, want)
 	}
 }
 

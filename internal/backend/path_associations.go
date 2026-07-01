@@ -715,6 +715,7 @@ func associationSecretKeyPlanResponse(
 		responseField("source_eligible", sourceEligible),
 		responseField("association_id", record.ID),
 		responseField("destination_ref", record.DestinationRef),
+		responseField("defaults", associationDefaultsResponse()),
 		responseField("association", associationResponse(record)),
 		responseField("destination", newResponseData(
 			responseField("type", record.DestinationType),
@@ -739,6 +740,7 @@ func associationPlanResponse(
 		responseField("source_eligible", sourceEligible),
 		responseField("association_id", record.ID),
 		responseField("destination_ref", record.DestinationRef),
+		responseField("defaults", associationDefaultsResponse()),
 		responseField("association", associationResponse(record)),
 		responseField("destination", newResponseData(
 			responseField("type", record.DestinationType),
@@ -762,6 +764,7 @@ func associationSummaryFields(record associationRecord) []responseEntry {
 		responseField("format", record.Format),
 		responseField("delete_mode", normalizedDeleteMode(record.DeleteMode)),
 		responseField("enabled", record.Enabled),
+		responseField("defaults", associationDefaultsResponse()),
 	}
 }
 
@@ -1358,8 +1361,20 @@ func associationResponse(record associationRecord) map[string]interface{} { //no
 		responseField("format", record.Format),
 		responseField("delete_mode", normalizedDeleteMode(record.DeleteMode)),
 		responseField("enabled", record.Enabled),
+		responseField("defaults", associationDefaultsResponse()),
 		responseField("created_time", record.CreatedTime),
 		responseField("updated_time", record.UpdatedTime),
+	)
+}
+
+func associationDefaultsResponse() map[string]interface{} { //nolint:forbidigo
+	return newResponseData(
+		responseField("granularity", syncGranularitySecretPath),
+		responseField("format", defaultAssociationFormat),
+		responseField("delete_mode", defaultDeleteMode),
+		responseField("enabled", true),
+		responseField("secret_path_name_template", defaultNameTemplate),
+		responseField("secret_key_name_template", defaultPerKeyNameTemplate),
 	)
 }
 

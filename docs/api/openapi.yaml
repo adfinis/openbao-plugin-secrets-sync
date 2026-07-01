@@ -1,0 +1,1730 @@
+openapi: 3.1.0
+info:
+  title: OpenBao Secret Sync API
+  version: 0.0.0-draft
+  description: |
+    Draft inspection spec for the OpenBao Secret Sync plugin HTTP API.
+
+    The plugin is mounted under an OpenBao logical mount. The default examples
+    use `secret-sync/`, so paths below are relative to `/v1/secret-sync`.
+    This spec is an API review artifact while the plugin is pre-release. It is
+    not a generated client compatibility promise yet.
+servers:
+  - url: http://127.0.0.1:8200/v1/secret-sync
+    description: Local OpenBao dev server with the plugin mounted at secret-sync.
+security:
+  - OpenBaoToken: []
+tags:
+  - name: config
+  - name: destinations
+  - name: sources
+  - name: source-data
+  - name: metadata
+  - name: associations
+  - name: queue
+  - name: status
+  - name: reconcile
+paths:
+  /config:
+    get:
+      tags: [config]
+      operationId: readConfig
+      summary: Read mount-wide secret sync configuration.
+      x-openbao-operation: read
+      responses:
+        "200":
+          description: Current configuration and runtime identity.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ConfigResponse"
+    post:
+      tags: [config]
+      operationId: writeConfig
+      summary: Update mount-wide secret sync configuration.
+      x-openbao-operation: update
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ConfigWriteRequest"
+      responses:
+        "200":
+          description: Updated configuration.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ConfigResponse"
+
+  /config/restore-guard/acknowledge:
+    post:
+      tags: [config]
+      operationId: acknowledgeRestoreGuard
+      summary: Acknowledge restore guard and resume remote mutation.
+      x-openbao-operation: update
+      responses:
+        "200":
+          description: Updated restore guard state.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ConfigResponse"
+
+  /destinations/{type}:
+    get:
+      tags: [destinations]
+      operationId: listDestinations
+      summary: List configured destination names for a provider type.
+      x-openbao-operation: list
+      parameters:
+        - $ref: "#/components/parameters/DestinationType"
+      responses:
+        "200":
+          description: Destination names.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ListResponse"
+
+  /destinations/{type}/{name}:
+    get:
+      tags: [destinations]
+      operationId: readDestination
+      summary: Read one destination configuration.
+      x-openbao-operation: read
+      parameters:
+        - $ref: "#/components/parameters/DestinationType"
+        - $ref: "#/components/parameters/DestinationName"
+      responses:
+        "200":
+          description: Destination configuration with sensitive fields redacted.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DestinationResponse"
+    post:
+      tags: [destinations]
+      operationId: writeDestination
+      summary: Create or update one destination configuration.
+      x-openbao-operation: update
+      parameters:
+        - $ref: "#/components/parameters/DestinationType"
+        - $ref: "#/components/parameters/DestinationName"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/DestinationWriteRequest"
+      responses:
+        "200":
+          description: Destination stored. Empty response body on success.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EmptyOpenBaoResponse"
+    delete:
+      tags: [destinations]
+      operationId: deleteDestination
+      summary: Delete one destination when no associations reference it.
+      x-openbao-operation: delete
+      parameters:
+        - $ref: "#/components/parameters/DestinationType"
+        - $ref: "#/components/parameters/DestinationName"
+      responses:
+        "204":
+          description: Destination deleted or absent.
+
+  /destinations/{type}/{name}/check:
+    get:
+      tags: [destinations]
+      operationId: checkDestination
+      summary: Check destination readiness.
+      description: Combines provider validation and health into a single non-mutating readiness response.
+      x-openbao-operation: read
+      parameters:
+        - $ref: "#/components/parameters/DestinationType"
+        - $ref: "#/components/parameters/DestinationName"
+      responses:
+        "200":
+          description: Destination readiness result.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DestinationCheckResponse"
+
+  /destinations/{type}/{name}/validate:
+    get:
+      tags: [destinations]
+      operationId: validateDestination
+      summary: Validate static destination configuration.
+      description: Non-mutating provider validation. The POST form is kept for OpenBao CLI compatibility.
+      x-openbao-operation: read
+      parameters:
+        - $ref: "#/components/parameters/DestinationType"
+        - $ref: "#/components/parameters/DestinationName"
+      responses:
+        "200":
+          description: Validation result.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DestinationValidationResponse"
+    post:
+      tags: [destinations]
+      operationId: validateDestinationPost
+      summary: Validate static destination configuration.
+      x-openbao-operation: update
+      parameters:
+        - $ref: "#/components/parameters/DestinationType"
+        - $ref: "#/components/parameters/DestinationName"
+      responses:
+        "200":
+          description: Validation result.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DestinationValidationResponse"
+
+  /destinations/{type}/{name}/health:
+    get:
+      tags: [destinations]
+      operationId: readDestinationHealth
+      summary: Check destination reachability and provider authorization.
+      x-openbao-operation: read
+      parameters:
+        - $ref: "#/components/parameters/DestinationType"
+        - $ref: "#/components/parameters/DestinationName"
+      responses:
+        "200":
+          description: Destination health result.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DestinationHealthResponse"
+
+  /sources/{path}/check:
+    get:
+      tags: [sources]
+      operationId: checkSource
+      summary: Check source readiness.
+      description: Reports whether a source has an available current version and explicit sync eligibility.
+      x-openbao-operation: read
+      parameters:
+        - $ref: "#/components/parameters/SourcePath"
+      responses:
+        "200":
+          description: Source readiness result.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SourceCheckResponse"
+
+  /sources/{path}/enable:
+    post:
+      tags: [sources]
+      operationId: enableSource
+      summary: Mark a source path as syncable.
+      x-openbao-operation: update
+      parameters:
+        - $ref: "#/components/parameters/SourcePath"
+      responses:
+        "200":
+          description: Source eligibility metadata.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SourceEnableResponse"
+
+  /metadata:
+    get:
+      tags: [metadata]
+      operationId: listMetadataRoot
+      summary: List root source metadata keys.
+      x-openbao-operation: list
+      responses:
+        "200":
+          description: Metadata keys.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ListResponse"
+
+  /metadata/{path}:
+    get:
+      tags: [metadata]
+      operationId: readMetadata
+      summary: Read source metadata, or list metadata keys for a prefix.
+      x-openbao-operations: [read, list]
+      parameters:
+        - $ref: "#/components/parameters/SourcePath"
+      responses:
+        "200":
+          description: Source metadata or key list.
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: "#/components/schemas/MetadataResponse"
+                  - $ref: "#/components/schemas/ListResponse"
+    post:
+      tags: [metadata]
+      operationId: writeMetadata
+      summary: Create or update source metadata.
+      x-openbao-operation: update
+      parameters:
+        - $ref: "#/components/parameters/SourcePath"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/MetadataWriteRequest"
+      responses:
+        "200":
+          description: Updated metadata.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MetadataResponse"
+    delete:
+      tags: [metadata]
+      operationId: deleteMetadata
+      summary: Delete source metadata and versions when no associations exist.
+      x-openbao-operation: delete
+      parameters:
+        - $ref: "#/components/parameters/SourcePath"
+      responses:
+        "204":
+          description: Metadata deleted or absent.
+
+  /data/{path}:
+    get:
+      tags: [source-data]
+      operationId: readSourceData
+      summary: Read a local source secret version.
+      x-openbao-operation: read
+      parameters:
+        - $ref: "#/components/parameters/SourcePath"
+        - name: version
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+          description: Version to read. Defaults to latest.
+      responses:
+        "200":
+          description: Source data and version metadata.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SourceDataResponse"
+    post:
+      tags: [source-data]
+      operationId: writeSourceData
+      summary: Write a new local source secret version.
+      x-openbao-operation: update
+      parameters:
+        - $ref: "#/components/parameters/SourcePath"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SourceDataWriteRequest"
+      responses:
+        "200":
+          description: New source version and sync enqueue metadata.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SourceDataWriteResponse"
+    delete:
+      tags: [source-data]
+      operationId: deleteLatestSourceData
+      summary: Soft-delete the latest local source secret version.
+      x-openbao-operation: delete
+      parameters:
+        - $ref: "#/components/parameters/SourcePath"
+      responses:
+        "200":
+          description: Delete enqueue metadata.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SourceDeleteResponse"
+
+  /delete/{path}:
+    post:
+      tags: [source-data]
+      operationId: softDeleteSourceVersions
+      summary: Soft-delete selected local source versions.
+      x-openbao-operation: update
+      parameters:
+        - $ref: "#/components/parameters/SourcePath"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/VersionMutationRequest"
+      responses:
+        "200":
+          description: Versions soft-deleted. Empty body on success.
+
+  /undelete/{path}:
+    post:
+      tags: [source-data]
+      operationId: undeleteSourceVersions
+      summary: Undelete selected local source versions.
+      x-openbao-operation: update
+      parameters:
+        - $ref: "#/components/parameters/SourcePath"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/VersionMutationRequest"
+      responses:
+        "200":
+          description: Versions undeleted. Empty body on success.
+
+  /destroy/{path}:
+    post:
+      tags: [source-data]
+      operationId: destroySourceVersions
+      summary: Permanently destroy selected local source versions.
+      x-openbao-operation: update
+      parameters:
+        - $ref: "#/components/parameters/SourcePath"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/VersionMutationRequest"
+      responses:
+        "200":
+          description: Versions destroyed. Empty body on success.
+
+  /associations:
+    get:
+      tags: [associations]
+      operationId: listAssociationPrefixes
+      summary: List source path prefixes with associations.
+      x-openbao-operation: list
+      responses:
+        "200":
+          description: Association source path prefixes.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ListResponse"
+
+  /associations/{path}:
+    get:
+      tags: [associations]
+      operationId: readAssociations
+      summary: Read associations for one source path.
+      x-openbao-operation: read
+      parameters:
+        - $ref: "#/components/parameters/SourcePath"
+      responses:
+        "200":
+          description: Associations for the source path.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AssociationsResponse"
+    post:
+      tags: [associations]
+      operationId: writeAssociation
+      summary: Create or update a source-to-destination association.
+      x-openbao-operation: update
+      parameters:
+        - $ref: "#/components/parameters/SourcePath"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AssociationWriteRequest"
+      responses:
+        "200":
+          description: Association and queued sync operation ids.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AssociationLifecycleResponse"
+
+  /associations/{path}/plan:
+    post:
+      tags: [associations]
+      operationId: planAssociation
+      summary: Plan an association without mutating remote state.
+      x-openbao-operation: update
+      parameters:
+        - $ref: "#/components/parameters/SourcePath"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AssociationWriteRequest"
+      responses:
+        "200":
+          description: Provider plan using effective association defaults.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AssociationPlanResponse"
+
+  /associations/{path}/{association_id}:
+    delete:
+      tags: [associations]
+      operationId: deleteAssociation
+      summary: Delete an association without deleting remote state.
+      x-openbao-operation: delete
+      parameters:
+        - $ref: "#/components/parameters/SourcePath"
+        - $ref: "#/components/parameters/AssociationID"
+      responses:
+        "204":
+          description: Association deleted or absent.
+
+  /associations/{path}/{association_id}/disable:
+    post:
+      tags: [associations]
+      operationId: disableAssociation
+      summary: Disable an association and cancel queued work.
+      x-openbao-operation: update
+      parameters:
+        - $ref: "#/components/parameters/SourcePath"
+        - $ref: "#/components/parameters/AssociationID"
+      responses:
+        "200":
+          description: Disabled association and canceled operation ids.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AssociationLifecycleResponse"
+
+  /associations/{path}/{association_id}/enable:
+    post:
+      tags: [associations]
+      operationId: enableAssociation
+      summary: Enable an association and enqueue the current source version.
+      x-openbao-operation: update
+      parameters:
+        - $ref: "#/components/parameters/SourcePath"
+        - $ref: "#/components/parameters/AssociationID"
+      responses:
+        "200":
+          description: Enabled association and queued sync operation ids.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AssociationLifecycleResponse"
+
+  /associations/{path}/{association_id}/sync:
+    post:
+      tags: [associations]
+      operationId: syncAssociation
+      summary: Manually enqueue sync for one enabled association.
+      x-openbao-operation: update
+      parameters:
+        - $ref: "#/components/parameters/SourcePath"
+        - $ref: "#/components/parameters/AssociationID"
+      responses:
+        "200":
+          description: Association and queued sync operation ids.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AssociationLifecycleResponse"
+
+  /status/{path}:
+    get:
+      tags: [status]
+      operationId: readStatus
+      summary: Read per-source sync status.
+      x-openbao-operation: read
+      parameters:
+        - $ref: "#/components/parameters/SourcePath"
+      responses:
+        "200":
+          description: Current source and per-object sync status.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StatusResponse"
+
+  /queue:
+    get:
+      tags: [queue]
+      operationId: readQueue
+      summary: Read durable queue summary.
+      x-openbao-operation: read
+      responses:
+        "200":
+          description: Queue counters.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/QueueSummaryResponse"
+
+  /queue/drain:
+    post:
+      tags: [queue]
+      operationId: drainQueue
+      summary: Process due queue operations.
+      x-openbao-operation: update
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/QueueDrainRequest"
+      responses:
+        "200":
+          description: Drain result and queue counters.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/QueueDrainResponse"
+
+  /queue/{operation_id}:
+    get:
+      tags: [queue]
+      operationId: readQueueOperation
+      summary: Read one queue operation.
+      x-openbao-operation: read
+      parameters:
+        - $ref: "#/components/parameters/OperationID"
+      responses:
+        "200":
+          description: Durable queue operation without source payload data.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/QueueOperationResponse"
+
+  /queue/{operation_id}/retry:
+    post:
+      tags: [queue]
+      operationId: retryQueueOperation
+      summary: Move one queue operation back to pending.
+      x-openbao-operation: update
+      parameters:
+        - $ref: "#/components/parameters/OperationID"
+      responses:
+        "200":
+          description: Updated operation.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/QueueOperationResponse"
+
+  /queue/{operation_id}/cancel:
+    post:
+      tags: [queue]
+      operationId: cancelQueueOperation
+      summary: Cancel one pending or retry-wait operation.
+      x-openbao-operation: update
+      parameters:
+        - $ref: "#/components/parameters/OperationID"
+      responses:
+        "200":
+          description: Updated operation.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/QueueOperationResponse"
+
+  /reconcile/{path}/plan:
+    get:
+      tags: [reconcile]
+      operationId: planReconcile
+      summary: Read remote state and plan status reconciliation.
+      x-openbao-operation: read
+      parameters:
+        - $ref: "#/components/parameters/SourcePath"
+      responses:
+        "200":
+          description: Reconcile plan. Remote objects are not mutated.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ReconcileResponse"
+
+  /reconcile/{path}:
+    post:
+      tags: [reconcile]
+      operationId: applyReconcile
+      summary: Read remote state and update local status records.
+      x-openbao-operation: update
+      parameters:
+        - $ref: "#/components/parameters/SourcePath"
+      responses:
+        "200":
+          description: Applied reconcile result. Remote objects are not mutated.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ReconcileResponse"
+
+components:
+  securitySchemes:
+    OpenBaoToken:
+      type: apiKey
+      in: header
+      name: X-Vault-Token
+      description: OpenBao token header. OpenBao keeps the Vault-compatible header name.
+
+  parameters:
+    DestinationType:
+      name: type
+      in: path
+      required: true
+      schema:
+        type: string
+        enum: [fake, aws-sm, k8s, gitlab]
+      description: Destination provider type.
+    DestinationName:
+      name: name
+      in: path
+      required: true
+      schema:
+        type: string
+      description: Destination name.
+    SourcePath:
+      name: path
+      in: path
+      required: true
+      x-openbao-match-all: true
+      schema:
+        type: string
+        example: app/db
+      description: Slash-containing OpenBao source path. Clients may need to preserve or encode slashes.
+    AssociationID:
+      name: association_id
+      in: path
+      required: true
+      schema:
+        type: string
+        pattern: ^assoc-[0-9a-f]+$
+      description: Association id returned by association create or read.
+    OperationID:
+      name: operation_id
+      in: path
+      required: true
+      schema:
+        type: string
+        pattern: ^op-[0-9a-f]+-[0-9]+$
+      description: Queue operation id.
+
+  schemas:
+    OpenBaoErrors:
+      type: object
+      properties:
+        errors:
+          type: array
+          items:
+            type: string
+      required: [errors]
+
+    EmptyOpenBaoResponse:
+      type: object
+      additionalProperties: true
+      description: OpenBao logical success response with no data fields.
+
+    ListResponse:
+      type: object
+      properties:
+        data:
+          type: object
+          properties:
+            keys:
+              type: array
+              items:
+                type: string
+          required: [keys]
+      required: [data]
+
+    ConfigWriteRequest:
+      type: object
+      properties:
+        disabled:
+          type: boolean
+          description: Pause background remote mutations when true.
+        restore_guard:
+          type: boolean
+          description: Require explicit acknowledgement before remote mutation.
+        queue_capacity:
+          type: integer
+          minimum: 0
+          default: 1000
+      additionalProperties: false
+
+    ConfigResponse:
+      type: object
+      properties:
+        data:
+          $ref: "#/components/schemas/Config"
+      required: [data]
+
+    Config:
+      type: object
+      properties:
+        disabled:
+          type: boolean
+        restore_guard:
+          type: boolean
+        restore_guard_acknowledged_time:
+          type: string
+        restore_epoch:
+          type: string
+        plugin_instance_id:
+          type: string
+        storage_schema_version:
+          type: integer
+        storage_schema_min_compatible_version:
+          type: integer
+        queue_capacity:
+          type: integer
+
+    DestinationWriteRequest:
+      type: object
+      description: Flat destination config. Provider-specific fields are accepted according to destination type.
+      properties:
+        description:
+          type: string
+        disabled:
+          type: boolean
+        allowed_source_path_prefixes:
+          type: array
+          items:
+            type: string
+          description: Source path prefixes allowed to use the destination.
+        allowed_resolved_name_prefixes:
+          type: array
+          items:
+            type: string
+          description: Resolved remote-name prefixes allowed to use the destination.
+        region:
+          type: string
+          description: AWS region.
+        endpoint_url:
+          type: string
+          format: uri
+          description: AWS custom endpoint URL.
+        endpoint_policy:
+          type: string
+          enum: [local, private]
+        auth_mode:
+          type: string
+          description: Provider auth mode.
+        role_arn:
+          type: string
+          description: AWS IAM role ARN for assume-role auth.
+        external_id:
+          type: string
+          writeOnly: true
+          description: AWS STS external id. Stored seal-wrapped and redacted on read.
+        session_name:
+          type: string
+        access_key_id:
+          type: string
+          writeOnly: true
+          description: Reserved AWS static auth field. Static auth is not supported yet.
+        secret_access_key:
+          type: string
+          writeOnly: true
+          description: Reserved AWS static auth field. Static auth is not supported yet.
+        session_token:
+          type: string
+          writeOnly: true
+          description: Reserved AWS static auth field. Static auth is not supported yet.
+        namespace:
+          type: string
+          description: Kubernetes namespace.
+        kubeconfig_path:
+          type: string
+        context:
+          type: string
+          description: Kubernetes kubeconfig context.
+        base_url:
+          type: string
+          format: uri
+          default: https://gitlab.com
+        project_id:
+          type: string
+        environment_scope:
+          type: string
+          default: "*"
+        protected:
+          type: boolean
+          default: false
+        masked:
+          type: boolean
+          default: false
+        hidden:
+          type: boolean
+          default: false
+        variable_raw:
+          type: boolean
+          default: true
+        variable_type:
+          type: string
+          enum: [env_var, file]
+          default: env_var
+        allow_insecure_http:
+          type: boolean
+          default: false
+        token:
+          type: string
+          writeOnly: true
+          description: GitLab API token. Stored seal-wrapped and redacted on read.
+      additionalProperties: false
+
+    DestinationResponse:
+      type: object
+      properties:
+        data:
+          $ref: "#/components/schemas/Destination"
+      required: [data]
+
+    Destination:
+      type: object
+      properties:
+        type:
+          type: string
+        name:
+          type: string
+        description:
+          type: string
+        disabled:
+          type: boolean
+        allowed_source_path_prefixes:
+          type: array
+          items:
+            type: string
+        allowed_resolved_name_prefixes:
+          type: array
+          items:
+            type: string
+        config:
+          type: object
+          additionalProperties:
+            type: string
+        sensitive_config:
+          type: object
+          properties:
+            redacted:
+              type: boolean
+            configured:
+              type: boolean
+            keys:
+              type: array
+              items:
+                type: string
+        capabilities:
+          $ref: "#/components/schemas/ProviderCapabilities"
+        created_time:
+          type: string
+        updated_time:
+          type: string
+
+    DestinationRef:
+      type: object
+      properties:
+        type:
+          type: string
+        name:
+          type: string
+      required: [type, name]
+
+    DestinationCheckResponse:
+      type: object
+      properties:
+        data:
+          type: object
+          properties:
+            ready:
+              type: boolean
+            valid:
+              type: boolean
+            healthy:
+              type: boolean
+            health_checked:
+              type: boolean
+            disabled:
+              type: boolean
+            destination:
+              $ref: "#/components/schemas/DestinationRef"
+            capabilities:
+              $ref: "#/components/schemas/ProviderCapabilities"
+            blockers:
+              type: array
+              items:
+                type: string
+                enum: [destination_disabled, validation_failed, health_failed]
+            validation_error_class:
+              $ref: "#/components/schemas/ProviderErrorClass"
+            validation_message:
+              type: string
+            health_error_class:
+              $ref: "#/components/schemas/ProviderErrorClass"
+            health_message:
+              type: string
+          required:
+            - ready
+            - valid
+            - healthy
+            - health_checked
+            - disabled
+            - destination
+            - capabilities
+            - blockers
+      required: [data]
+
+    DestinationValidationResponse:
+      type: object
+      properties:
+        data:
+          type: object
+          properties:
+            valid:
+              type: boolean
+            destination:
+              $ref: "#/components/schemas/DestinationRef"
+            capabilities:
+              $ref: "#/components/schemas/ProviderCapabilities"
+            error_class:
+              $ref: "#/components/schemas/ProviderErrorClass"
+            error:
+              type: string
+          required: [valid, destination]
+      required: [data]
+
+    DestinationHealthResponse:
+      type: object
+      properties:
+        data:
+          type: object
+          properties:
+            healthy:
+              type: boolean
+            destination:
+              $ref: "#/components/schemas/DestinationRef"
+            disabled:
+              type: boolean
+            error_class:
+              $ref: "#/components/schemas/ProviderErrorClass"
+            message:
+              type: string
+          required: [healthy, destination]
+      required: [data]
+
+    ProviderCapabilities:
+      type: object
+      properties:
+        supports_value_readback:
+          type: boolean
+        supports_metadata_readback:
+          type: boolean
+        supports_payload_hash_metadata:
+          type: boolean
+        supports_update_if_owned:
+          type: boolean
+        supports_delete_if_owned:
+          type: boolean
+        supports_secret_path:
+          type: boolean
+        supports_secret_key:
+          type: boolean
+        max_payload_bytes:
+          type: integer
+
+    SourceCheckResponse:
+      type: object
+      properties:
+        data:
+          type: object
+          properties:
+            path:
+              type: string
+            ready:
+              type: boolean
+            syncable:
+              type: boolean
+            current_version:
+              type: integer
+            current_version_available:
+              type: boolean
+            association_count:
+              type: integer
+            enabled_association_count:
+              type: integer
+            queued_operations:
+              type: integer
+            status_objects:
+              type: integer
+            blockers:
+              type: array
+              items:
+                type: string
+                enum: [source_missing, current_version_unavailable, source_not_syncable]
+          required:
+            - path
+            - ready
+            - syncable
+            - current_version
+            - current_version_available
+            - association_count
+            - enabled_association_count
+            - queued_operations
+            - status_objects
+            - blockers
+      required: [data]
+
+    SourceEnableResponse:
+      type: object
+      properties:
+        data:
+          type: object
+          properties:
+            path:
+              type: string
+            syncable:
+              type: boolean
+            changed:
+              type: boolean
+            metadata:
+              $ref: "#/components/schemas/Metadata"
+          required: [path, syncable, changed, metadata]
+      required: [data]
+
+    MetadataWriteRequest:
+      type: object
+      properties:
+        max_versions:
+          type: integer
+          minimum: 1
+          default: 10
+        cas_required:
+          type: boolean
+          default: false
+        delete_version_after:
+          type: string
+          default: 0s
+          description: Go duration string. Stored for compatibility and future enforcement.
+        custom_metadata:
+          type: object
+          additionalProperties:
+            type: string
+      additionalProperties: false
+
+    MetadataResponse:
+      type: object
+      properties:
+        data:
+          $ref: "#/components/schemas/Metadata"
+      required: [data]
+
+    Metadata:
+      type: object
+      properties:
+        current_version:
+          type: integer
+        oldest_version:
+          type: integer
+        max_versions:
+          type: integer
+        cas_required:
+          type: boolean
+        delete_version_after:
+          type: string
+        custom_metadata:
+          type: object
+          additionalProperties:
+            type: string
+        updated_time:
+          type: string
+        versions:
+          type: object
+          additionalProperties:
+            type: object
+            properties:
+              created_time:
+                type: string
+              deletion_time:
+                type: string
+              destroyed:
+                type: boolean
+        sync:
+          type: object
+          properties:
+            queued_operations:
+              type: integer
+            objects:
+              type: integer
+
+    SourceDataWriteRequest:
+      type: object
+      properties:
+        data:
+          type: object
+          additionalProperties: true
+        options:
+          type: object
+          properties:
+            cas:
+              type: integer
+              minimum: 0
+      required: [data]
+      additionalProperties: false
+
+    SourceDataResponse:
+      type: object
+      properties:
+        data:
+          type: object
+          properties:
+            data:
+              type: object
+              additionalProperties: true
+            metadata:
+              type: object
+              properties:
+                version:
+                  type: integer
+                created_time:
+                  type: string
+                deletion_time:
+                  type: string
+                destroyed:
+                  type: boolean
+      required: [data]
+
+    SourceDataWriteResponse:
+      type: object
+      properties:
+        data:
+          type: object
+          properties:
+            metadata:
+              type: object
+              properties:
+                version:
+                  type: integer
+                created_time:
+                  type: string
+                sync_operation_ids:
+                  type: array
+                  items:
+                    type: string
+                sync_state:
+                  type: string
+      required: [data]
+
+    SourceDeleteResponse:
+      type: object
+      properties:
+        data:
+          type: object
+          properties:
+            metadata:
+              type: object
+              properties:
+                version:
+                  type: integer
+                deletion_time:
+                  type: string
+                delete_operation_ids:
+                  type: array
+                  items:
+                    type: string
+                canceled_operation_ids:
+                  type: array
+                  items:
+                    type: string
+
+    VersionMutationRequest:
+      type: object
+      properties:
+        versions:
+          type: array
+          items:
+            type: integer
+            minimum: 1
+      required: [versions]
+      additionalProperties: false
+
+    AssociationWriteRequest:
+      type: object
+      properties:
+        destination_type:
+          type: string
+          enum: [fake, aws-sm, k8s, gitlab]
+        destination_name:
+          type: string
+        resolved_name:
+          type: string
+          description: Explicit remote object name for secret-path granularity.
+        name_template:
+          type: string
+          default: "{{ path }}"
+          description: Remote name template. Secret-key granularity requires `{{ key }}`.
+        granularity:
+          type: string
+          enum: [secret-path, secret-key]
+          default: secret-path
+        format:
+          type: string
+          enum: [json, raw]
+          default: json
+        delete_mode:
+          type: string
+          enum: [retain, delete, orphan]
+          default: retain
+        enabled:
+          type: boolean
+          default: true
+      required: [destination_type, destination_name]
+      additionalProperties: false
+
+    AssociationLifecycleResponse:
+      type: object
+      properties:
+        data:
+          type: object
+          properties:
+            association_id:
+              type: string
+            destination_ref:
+              type: string
+            resolved_name:
+              type: string
+            granularity:
+              type: string
+            format:
+              type: string
+            delete_mode:
+              type: string
+            enabled:
+              type: boolean
+            defaults:
+              $ref: "#/components/schemas/AssociationDefaults"
+            sync_operation_ids:
+              type: array
+              items:
+                type: string
+            canceled_operation_ids:
+              type: array
+              items:
+                type: string
+            association:
+              $ref: "#/components/schemas/Association"
+      required: [data]
+
+    AssociationsResponse:
+      type: object
+      properties:
+        data:
+          type: object
+          properties:
+            path:
+              type: string
+            associations:
+              type: array
+              items:
+                $ref: "#/components/schemas/Association"
+      required: [data]
+
+    Association:
+      type: object
+      properties:
+        id:
+          type: string
+        path:
+          type: string
+        destination:
+          $ref: "#/components/schemas/DestinationRef"
+        destination_ref:
+          type: string
+        name_template:
+          type: string
+        resolved_name:
+          type: string
+        granularity:
+          type: string
+        format:
+          type: string
+        delete_mode:
+          type: string
+        enabled:
+          type: boolean
+        defaults:
+          $ref: "#/components/schemas/AssociationDefaults"
+        created_time:
+          type: string
+        updated_time:
+          type: string
+
+    AssociationDefaults:
+      type: object
+      properties:
+        granularity:
+          type: string
+          enum: [secret-path]
+        format:
+          type: string
+          enum: [json]
+        delete_mode:
+          type: string
+          enum: [retain]
+        enabled:
+          type: boolean
+          enum: [true]
+        secret_path_name_template:
+          type: string
+          example: "{{ path }}"
+        secret_key_name_template:
+          type: string
+          example: "{{ path }}/{{ key }}"
+      required:
+        - granularity
+        - format
+        - delete_mode
+        - enabled
+        - secret_path_name_template
+        - secret_key_name_template
+
+    AssociationPlanResponse:
+      type: object
+      properties:
+        data:
+          type: object
+          properties:
+            path:
+              type: string
+            version:
+              type: integer
+            action:
+              type: string
+              enum: [create, update, noop, conflict, blocked]
+            source_eligible:
+              type: boolean
+            association_id:
+              type: string
+            destination_ref:
+              type: string
+            defaults:
+              $ref: "#/components/schemas/AssociationDefaults"
+            association:
+              $ref: "#/components/schemas/Association"
+            destination:
+              $ref: "#/components/schemas/DestinationRef"
+            resolved_name:
+              type: string
+            granularity:
+              type: string
+            format:
+              type: string
+            payload_sha256:
+              type: string
+            payload_bytes:
+              type: integer
+            error_class:
+              $ref: "#/components/schemas/ProviderErrorClass"
+            message:
+              type: string
+            objects:
+              type: array
+              items:
+                $ref: "#/components/schemas/AssociationPlanObject"
+      required: [data]
+
+    AssociationPlanObject:
+      type: object
+      properties:
+        object_id:
+          type: string
+        resolved_name:
+          type: string
+        action:
+          type: string
+          enum: [create, update, noop, conflict, blocked]
+        payload_sha256:
+          type: string
+        payload_bytes:
+          type: integer
+        error_class:
+          $ref: "#/components/schemas/ProviderErrorClass"
+        message:
+          type: string
+
+    StatusResponse:
+      type: object
+      properties:
+        data:
+          type: object
+          properties:
+            path:
+              type: string
+            version:
+              type: integer
+            state:
+              $ref: "#/components/schemas/SyncState"
+            operation_ids:
+              type: array
+              items:
+                type: string
+            association_id:
+              type: string
+            object_id:
+              type: string
+            destination_ref:
+              type: string
+            resolved_name:
+              type: string
+            payload_sha256:
+              type: string
+            remote_version:
+              type: string
+            last_operation_id:
+              type: string
+            last_success_time:
+              type: string
+            last_error_class:
+              $ref: "#/components/schemas/ProviderErrorClass"
+            last_error:
+              type: string
+            objects:
+              type: array
+              items:
+                $ref: "#/components/schemas/StatusObject"
+      required: [data]
+
+    StatusObject:
+      type: object
+      properties:
+        association_id:
+          type: string
+        object_id:
+          type: string
+        destination_ref:
+          type: string
+        resolved_name:
+          type: string
+        state:
+          $ref: "#/components/schemas/SyncState"
+        version:
+          type: integer
+        payload_sha256:
+          type: string
+        remote_version:
+          type: string
+        last_operation_id:
+          type: string
+        last_success_time:
+          type: string
+        last_error_class:
+          $ref: "#/components/schemas/ProviderErrorClass"
+        last_error:
+          type: string
+
+    QueueSummaryResponse:
+      type: object
+      properties:
+        data:
+          $ref: "#/components/schemas/QueueSummary"
+      required: [data]
+
+    QueueDrainRequest:
+      type: object
+      properties:
+        max_operations:
+          type: integer
+          minimum: 0
+          default: 100
+      additionalProperties: false
+
+    QueueDrainResponse:
+      type: object
+      properties:
+        data:
+          type: object
+          properties:
+            processed:
+              type: integer
+            max_operations:
+              type: integer
+            queue_pending:
+              type: integer
+            queue_retry_wait:
+              type: integer
+            queue_claimed:
+              type: integer
+            queue_terminal:
+              type: integer
+            queue_canceled:
+              type: integer
+            queue_oldest_age_seconds:
+              type: integer
+            queue:
+              $ref: "#/components/schemas/QueueSummary"
+      required: [data]
+
+    QueueSummary:
+      type: object
+      properties:
+        pending:
+          type: integer
+        retry_wait:
+          type: integer
+        claimed:
+          type: integer
+        terminal:
+          type: integer
+        canceled:
+          type: integer
+        oldest_age_seconds:
+          type: integer
+
+    QueueOperationResponse:
+      type: object
+      properties:
+        data:
+          $ref: "#/components/schemas/QueueOperation"
+      required: [data]
+
+    QueueOperation:
+      type: object
+      properties:
+        id:
+          type: string
+        type:
+          type: string
+          enum: [upsert, delete]
+        path:
+          type: string
+        version:
+          type: integer
+        association_id:
+          type: string
+        object_id:
+          type: string
+        destination_ref:
+          type: string
+        state:
+          type: string
+          enum: [pending, retry_wait, failed_terminal, succeeded, canceled]
+        attempts:
+          type: integer
+        not_before:
+          type: string
+        created_time:
+          type: string
+        updated_time:
+          type: string
+        idempotency_key:
+          type: string
+        claimed:
+          type: boolean
+        claim_owner:
+          type: string
+        claim_expires_time:
+          type: string
+        claim_attempt:
+          type: integer
+
+    ReconcileResponse:
+      type: object
+      properties:
+        data:
+          type: object
+          properties:
+            path:
+              type: string
+            version:
+              type: integer
+            applied:
+              type: boolean
+            state:
+              $ref: "#/components/schemas/SyncState"
+            objects:
+              type: array
+              items:
+                $ref: "#/components/schemas/ReconcileObject"
+      required: [data]
+
+    ReconcileObject:
+      type: object
+      properties:
+        association_id:
+          type: string
+        object_id:
+          type: string
+        destination_ref:
+          type: string
+        resolved_name:
+          type: string
+        state:
+          $ref: "#/components/schemas/SyncState"
+        version:
+          type: integer
+        payload_sha256:
+          type: string
+        remote_exists:
+          type: boolean
+        remote_ownership_known:
+          type: boolean
+        remote_owned:
+          type: boolean
+        remote_payload_sha256:
+          type: string
+        remote_source_version:
+          type: integer
+        remote_version:
+          type: string
+        error_class:
+          $ref: "#/components/schemas/ProviderErrorClass"
+        message:
+          type: string
+
+    ProviderErrorClass:
+      type: string
+      enum:
+        - validation
+        - authn
+        - authz
+        - rate_limit
+        - unavailable
+        - collision
+        - ownership
+        - drift
+        - capacity
+        - internal
+
+    SyncState:
+      type: string
+      enum:
+        - UNKNOWN
+        - PENDING
+        - SYNCED
+        - DISABLED
+        - NO_ASSOCIATION
+        - REMOTE_MISSING
+        - REMOTE_OWNERSHIP_LOST
+        - DESTINATION_AUTH_ERROR
+        - DESTINATION_POLICY_ERROR
+        - DESTINATION_RATE_LIMITED
+        - DESTINATION_UNAVAILABLE
+        - VALIDATION_ERROR
+        - QUEUE_BLOCKED
+        - DRIFTED

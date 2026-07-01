@@ -69,6 +69,20 @@ func pathDestinations(b *secretSyncBackend) []*framework.Path {
 		},
 		{
 			Pattern: "destinations/" + framework.GenericNameRegex("type") + "/" +
+				framework.GenericNameRegex("name") + "/check",
+			Fields: destinationIdentityFields(),
+			Operations: map[logical.Operation]framework.OperationHandler{
+				logical.ReadOperation: &framework.PathOperation{
+					Callback: b.pathDestinationCheck,
+					Summary:  "Check destination readiness.",
+				},
+			},
+			HelpSynopsis: "Check destination readiness.",
+			HelpDescription: "Runs provider validation and, when enabled and valid, provider health checks " +
+				"for a configured destination without mutating remote state.",
+		},
+		{
+			Pattern: "destinations/" + framework.GenericNameRegex("type") + "/" +
 				framework.GenericNameRegex("name") + "/validate",
 			Fields: destinationIdentityFields(),
 			Operations: map[logical.Operation]framework.OperationHandler{
@@ -366,6 +380,71 @@ func (b *secretSyncBackend) pathDestinationValidate(
 		responseField("valid", true),
 		responseField("destination", destinationRefResponse(*record)),
 		responseField("capabilities", capabilitiesResponse(provider.Capabilities())),
+	)}, nil
+}
+
+func (b *secretSyncBackend) pathDestinationCheck(
+	ctx context.Context,
+	req *logical.Request,
+	data *framework.FieldData,
+) (*logical.Response, error) {
+	record, provider, response, err := b.destinationProviderFromRequest(ctx, req, data)
+	if response != nil || err != nil {
+		return response, err
+	}
+	resolvedConfig, err := destinationConfig(ctx, req.Storage, *record)
+	if err != nil {
+		return nil, err
+	}
+	blockers := []string{}
+	if record.Disabled {
+		blockers = append(blockers, "destination_disabled")
+	}
+	valid := true
+	validationErrorClass := ""
+	validationMessage := ""
+	if providerErr := provider.Validate(ctx, resolvedConfig); providerErr != nil {
+		valid = false
+		validationErrorClass = string(providerErrorClass(providerErr))
+		validationMessage = providerErr.Error()
+		blockers = append(blockers, "validation_failed")
+	}
+	healthChecked := false
+	healthy := false
+	healthErrorClass := ""
+	healthMessage := ""
+	if valid && !record.Disabled {
+		healthChecked = true
+		result, providerErr := provider.Health(ctx, resolvedConfig)
+		if providerErr != nil {
+			healthErrorClass = string(providerErrorClass(providerErr))
+			healthMessage = providerErr.Error()
+			blockers = append(blockers, "health_failed")
+		} else {
+			if result == nil {
+				result = &providers.HealthResult{}
+			}
+			healthy = result.Healthy
+			healthErrorClass = string(result.ErrorClass)
+			healthMessage = result.Message
+			if !result.Healthy {
+				blockers = append(blockers, "health_failed")
+			}
+		}
+	}
+	return &logical.Response{Data: newResponseData(
+		responseField("ready", len(blockers) == 0),
+		responseField("valid", valid),
+		responseField("healthy", healthy),
+		responseField("health_checked", healthChecked),
+		responseField("disabled", record.Disabled),
+		responseField("destination", destinationRefResponse(*record)),
+		responseField("capabilities", capabilitiesResponse(provider.Capabilities())),
+		responseField("blockers", blockers),
+		responseField("validation_error_class", validationErrorClass),
+		responseField("validation_message", validationMessage),
+		responseField("health_error_class", healthErrorClass),
+		responseField("health_message", healthMessage),
 	)}, nil
 }
 

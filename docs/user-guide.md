@@ -109,12 +109,15 @@ Read destination config. Sensitive fields are redacted:
 bao read secret-sync/destinations/aws-sm/prod
 ```
 
-Validate and check health:
+Check destination readiness:
 
 ```sh
-bao read secret-sync/destinations/aws-sm/prod/validate
-bao read secret-sync/destinations/aws-sm/prod/health
+bao read secret-sync/destinations/aws-sm/prod/check
 ```
+
+Use `destinations/aws-sm/prod/validate` and
+`destinations/aws-sm/prod/health` when you need split configuration and
+runtime diagnostics.
 
 ## Constrain Destination Use
 
@@ -161,11 +164,10 @@ Ownership metadata is stored in labels and annotations. The `resolved_name`
 must be a valid Kubernetes Secret name, so use a DNS-safe name such as `app-db`
 instead of `app/db`.
 
-Validate and check health:
+Check destination readiness:
 
 ```sh
-bao read secret-sync/destinations/k8s/apps/validate
-bao read secret-sync/destinations/k8s/apps/health
+bao read secret-sync/destinations/k8s/apps/check
 ```
 
 ## Configure GitLab Project Variables
@@ -202,11 +204,10 @@ Sensitive fields are redacted and seal-wrapped:
 bao read secret-sync/destinations/gitlab/prod
 ```
 
-Validate and check health:
+Check destination readiness:
 
 ```sh
-bao read secret-sync/destinations/gitlab/prod/validate
-bao read secret-sync/destinations/gitlab/prod/health
+bao read secret-sync/destinations/gitlab/prod/check
 ```
 
 ## Write Source Data
@@ -228,6 +229,12 @@ Read the latest source version:
 
 ```sh
 bao read secret-sync/data/app/db
+```
+
+Check source readiness before creating the association:
+
+```sh
+bao read secret-sync/sources/app/db/check
 ```
 
 ## Plan And Create An Association
@@ -253,6 +260,8 @@ The default association shape is `granularity=secret-path`, `format=json`,
 `delete_mode=retain`, `enabled=true`, and `name_template='{{ path }}'`. Set
 `resolved_name`, `name_template`, `format`, or `delete_mode` only when the
 destination needs a different remote name, payload shape, or delete behavior.
+Create and plan responses include a `defaults` object beside the effective
+values so these defaults are visible in CLI and API output.
 
 For Kubernetes, use the `k8s` destination type and a Kubernetes-safe
 `resolved_name`:
@@ -443,9 +452,8 @@ For operational response flows and evidence to capture, see the
 
 If sync does not happen:
 
-- confirm the source has been enabled with `sources/<path>/enable`;
-- read `destinations/<type>/<name>/validate`;
-- run `destinations/<type>/<name>/health`;
+- read `sources/<path>/check`;
+- read `destinations/<type>/<name>/check`;
 - inspect `queue` and the returned operation IDs;
 - inspect `status/<path>`;
 - verify the association is enabled and the destination is not disabled;

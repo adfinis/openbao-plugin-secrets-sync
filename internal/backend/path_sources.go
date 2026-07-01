@@ -10,6 +10,23 @@ import (
 func pathSources(_ *secretSyncBackend) []*framework.Path {
 	return []*framework.Path{
 		{
+			Pattern: "sources/(?P<path>.+)/check",
+			Fields: map[string]*framework.FieldSchema{
+				"path": {
+					Type:        framework.TypeString,
+					Description: "Source secret path.",
+				},
+			},
+			Operations: map[logical.Operation]framework.OperationHandler{
+				logical.ReadOperation: &framework.PathOperation{
+					Callback: pathSourceCheck,
+					Summary:  "Check source readiness.",
+				},
+			},
+			HelpSynopsis:    "Check source sync readiness.",
+			HelpDescription: "Reports whether a source path has a current version and is marked syncable.",
+		},
+		{
 			Pattern: "sources/(?P<path>.+)/enable",
 			Fields: map[string]*framework.FieldSchema{
 				"path": {
@@ -29,6 +46,66 @@ func pathSources(_ *secretSyncBackend) []*framework.Path {
 	}
 }
 
+func pathSourceCheck(
+	ctx context.Context,
+	req *logical.Request,
+	data *framework.FieldData,
+) (*logical.Response, error) {
+	path, err := normalizeSourcePath(data.Get("path").(string))
+	if err != nil {
+		return logical.ErrorResponse(err.Error()), nil
+	}
+	metadata, err := getMetadata(ctx, req.Storage, path)
+	if err != nil {
+		return nil, err
+	}
+	currentVersionAvailable := false
+	if metadata != nil && metadata.CurrentVersion > 0 {
+		version, err := getVersion(ctx, req.Storage, path, metadata.CurrentVersion)
+		if err != nil {
+			return nil, err
+		}
+		currentVersionAvailable = version != nil && !version.Destroyed && version.DeletionTime == ""
+	}
+	associations, err := listAssociationsForPath(ctx, req.Storage, path)
+	if err != nil {
+		return nil, err
+	}
+	enabledAssociations := 0
+	for _, association := range associations {
+		if association.Enabled {
+			enabledAssociations++
+		}
+	}
+	queuedOperations, err := listQueuedOutboxIDsForPath(ctx, req.Storage, path)
+	if err != nil {
+		return nil, err
+	}
+	statusRecords, err := listStatusRecordsForPath(ctx, req.Storage, path)
+	if err != nil {
+		return nil, err
+	}
+	currentVersion := 0
+	syncable := false
+	if metadata != nil {
+		currentVersion = metadata.CurrentVersion
+		syncable = sourceMetadataSyncable(*metadata)
+	}
+	blockers := sourceReadinessBlockers(metadata, syncable, currentVersionAvailable)
+	return &logical.Response{Data: newResponseData(
+		responseField("path", path),
+		responseField("ready", len(blockers) == 0),
+		responseField("syncable", syncable),
+		responseField("current_version", currentVersion),
+		responseField("current_version_available", currentVersionAvailable),
+		responseField("association_count", len(associations)),
+		responseField("enabled_association_count", enabledAssociations),
+		responseField("queued_operations", len(queuedOperations)),
+		responseField("status_objects", len(statusRecords)),
+		responseField("blockers", blockers),
+	)}, nil
+}
+
 func pathSourceEnable(
 	ctx context.Context,
 	req *logical.Request,
@@ -45,7 +122,7 @@ func pathSourceEnable(
 	if metadata == nil {
 		metadata = newMetadataRecordPtr()
 	}
-	changed := metadata.CustomMetadata[sourceMetadataKeySyncable] != sourceMetadataValueTrue
+	changed := !sourceMetadataSyncable(*metadata)
 	if changed {
 		metadata.CustomMetadata[sourceMetadataKeySyncable] = sourceMetadataValueTrue
 		metadata.UpdatedTime = nowUTC().Format(timeFormatRFC3339)
@@ -69,4 +146,25 @@ func pathSourceEnable(
 			metadataResponseFields(*metadata, len(queuedOperations), len(statusRecords))...,
 		)),
 	)}, nil
+}
+
+func sourceMetadataSyncable(metadata metadataRecord) bool {
+	return metadata.CustomMetadata[sourceMetadataKeySyncable] == sourceMetadataValueTrue
+}
+
+func sourceReadinessBlockers(
+	metadata *metadataRecord,
+	syncable bool,
+	currentVersionAvailable bool,
+) []string {
+	blockers := []string{}
+	if metadata == nil || metadata.CurrentVersion == 0 {
+		blockers = append(blockers, "source_missing")
+	} else if !currentVersionAvailable {
+		blockers = append(blockers, "current_version_unavailable")
+	}
+	if !syncable {
+		blockers = append(blockers, "source_not_syncable")
+	}
+	return blockers
 }

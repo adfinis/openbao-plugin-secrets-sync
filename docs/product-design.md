@@ -193,6 +193,8 @@ GET    metadata/<path>   read local metadata and sync summary
 POST   undelete/<path>   undelete versions
 POST   destroy/<path>    permanently destroy versions
 DELETE metadata/<path>   delete all local metadata and versions
+POST   sources/<path>/enable
+GET    sources/<path>/check
 ```
 
 Write example:
@@ -219,6 +221,7 @@ POST   destinations/<type>/<name>
 GET    destinations/<type>/<name>
 LIST   destinations/<type>
 DELETE destinations/<type>/<name>
+GET    destinations/<type>/<name>/check
 POST   destinations/<type>/<name>/validate
 GET    destinations/<type>/<name>/health
 POST   destinations/<type>/<name>/rotate-credentials

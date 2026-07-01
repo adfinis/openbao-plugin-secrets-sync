@@ -47,6 +47,12 @@ Read destination config. Sensitive fields must be redacted:
 bao read secret-sync/destinations/<type>/<name>
 ```
 
+Check destination readiness:
+
+```sh
+bao read secret-sync/destinations/<type>/<name>/check
+```
+
 Validate static destination configuration:
 
 ```sh
@@ -83,6 +89,12 @@ Read the current source version:
 bao read secret-sync/data/app/db
 ```
 
+Check source readiness:
+
+```sh
+bao read secret-sync/sources/app/db/check
+```
+
 Plan the association before creating or changing it:
 
 ```sh
@@ -93,6 +105,8 @@ bao write secret-sync/associations/app/db/plan \
 ```
 
 `secret-path`, `json`, `retain`, and `enabled=true` are the defaults.
+Association create and plan responses also include a `defaults` object so the
+implicit shape is visible in CLI and API output.
 
 Read existing associations:
 
@@ -171,7 +185,7 @@ to use while the restore guard is active.
 `DESTINATION_AUTH_ERROR` or provider error class `authn`:
 
 - check destination credential material or workload identity;
-- rerun destination validation and health;
+- rerun destination readiness, validation, and health;
 - rotate the destination credential if compromise is suspected.
 
 `DESTINATION_POLICY_ERROR` or provider error class `authz`:

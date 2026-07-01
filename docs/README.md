@@ -43,6 +43,8 @@ page when you need to choose the right detailed document.
   slices, remaining hardening, and open questions.
 - [Testing and hardening](testing.md) defines unit, contract, model, fuzz, e2e,
   and security test lanes.
+- [API inspection artifacts](api/README.md) include the draft OpenAPI spec for
+  reviewing path shape, defaults, response fields, and error classes.
 - [Provider implementation guide](provider-implementation.md) explains the
   practical steps and review checklist for adding a provider.
 - [Provider contract](provider-contract.md) defines the provider interface,
