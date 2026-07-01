@@ -1,8 +1,13 @@
 .DS_Store
 .direnv/
 .envrc
+*.local.md
+*.test
+coverage.out
+coverage.html
 bin/
 dist/
 artifacts/
 .venv-*/
 vendor/
+workstreams/

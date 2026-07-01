@@ -1,0 +1,31 @@
+name: DCO
+
+on:
+  pull_request:
+    types:
+      - opened
+      - synchronize
+      - reopened
+
+permissions:
+  contents: read
+  pull-requests: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  dco:
+    name: DCO
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check DCO sign-off
+        uses: KineticCafe/actions-dco@1da04282bbf757dab7d92a5c8535dbfb8113da5c # v3.1.0
+        with:
+          config: |
+            bot.policy = "allowlist"
+            bot.allow = ["dependabot[bot]"]
+
+            [alias-signoffs.aliases]
+            "49699333+dependabot[bot]@users.noreply.github.com" = ["support@github.com"]

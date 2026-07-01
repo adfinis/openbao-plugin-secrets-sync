@@ -1,5 +1,8 @@
 version: 2
 
+# Dependabot emits Signed-off-by trailers in generated commits. The
+# commit-message blocks below only control Conventional Commit formatting;
+# GitHub does not document a dependabot.yml signoff option.
 updates:
   - package-ecosystem: gomod
     directory: /
