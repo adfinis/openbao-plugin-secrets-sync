@@ -8,7 +8,7 @@ set -euo pipefail
 : "${OCI_IMAGE_DIGEST:?OCI_IMAGE_DIGEST is required}"
 
 SIGNER_WORKFLOW="${SIGNER_WORKFLOW:-${REPO}/.github/workflows/release.yml}"
-SOURCE_REF="${SOURCE_REF:-refs/tags/${VERSION}}"
+SOURCE_REF="${SOURCE_REF:-refs/heads/main}"
 CERT_OIDC_ISSUER="${CERT_OIDC_ISSUER:-https://token.actions.githubusercontent.com}"
 MAX_ATTEMPTS="${MAX_ATTEMPTS:-10}"
 RETRY_SECONDS="${RETRY_SECONDS:-6}"

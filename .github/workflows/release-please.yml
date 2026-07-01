@@ -12,7 +12,9 @@ on:
         type: string
 
 permissions:
-  contents: read
+  contents: write
+  pull-requests: write
+  issues: write
 
 concurrency:
   group: release-please-pr
@@ -24,38 +26,9 @@ jobs:
     runs-on: ubuntu-24.04
     if: ${{ !github.event.repository.fork }}
     steps:
-      - name: Check release app secrets
-        id: release-app
-        env:
-          APP_ID: ${{ secrets.OPENBAO_SECRET_SYNC_RELEASE_PR_APP_ID }}
-          PRIVATE_KEY: ${{ secrets.OPENBAO_SECRET_SYNC_RELEASE_PR_PRIVATE_KEY }}
-        run: |
-          set -euo pipefail
-          if [ -n "${APP_ID}" ] && [ -n "${PRIVATE_KEY}" ]; then
-            echo "configured=true" >> "${GITHUB_OUTPUT}"
-          else
-            echo "configured=false" >> "${GITHUB_OUTPUT}"
-            echo "::notice::release-please skipped because OPENBAO_SECRET_SYNC_RELEASE_PR_APP_ID and OPENBAO_SECRET_SYNC_RELEASE_PR_PRIVATE_KEY are not configured."
-          fi
-
-      - name: Mint GitHub App token
-        if: ${{ steps.release-app.outputs.configured == 'true' }}
-        id: app-token
-        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
-        with:
-          app-id: ${{ secrets.OPENBAO_SECRET_SYNC_RELEASE_PR_APP_ID }}
-          private-key: ${{ secrets.OPENBAO_SECRET_SYNC_RELEASE_PR_PRIVATE_KEY }}
-          owner: ${{ github.repository_owner }}
-          repositories: ${{ github.event.repository.name }}
-          permission-contents: write
-          permission-pull-requests: write
-          permission-issues: write
-
       - name: Run release-please
-        if: ${{ steps.release-app.outputs.configured == 'true' }}
         uses: googleapis/release-please-action@45996ed1f6d02564a971a2fa1b5860e934307cf7 # v5.0.0
         with:
-          token: ${{ steps.app-token.outputs.token }}
           config-file: release-please-config.json
           manifest-file: .release-please-manifest.json
           release-as: ${{ github.event_name == 'workflow_dispatch' && inputs.release_as || '' }}

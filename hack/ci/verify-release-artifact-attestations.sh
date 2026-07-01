@@ -7,7 +7,7 @@ set -euo pipefail
 
 CHECKSUMS_PATH="${CHECKSUMS_PATH:-dist/release/checksums.txt}"
 SIGNER_WORKFLOW="${SIGNER_WORKFLOW:-${REPO}/.github/workflows/release.yml}"
-SOURCE_REF="${SOURCE_REF:-refs/tags/${VERSION}}"
+SOURCE_REF="${SOURCE_REF:-refs/heads/main}"
 CERT_OIDC_ISSUER="${CERT_OIDC_ISSUER:-https://token.actions.githubusercontent.com}"
 MAX_ATTEMPTS="${MAX_ATTEMPTS:-10}"
 RETRY_SECONDS="${RETRY_SECONDS:-6}"
