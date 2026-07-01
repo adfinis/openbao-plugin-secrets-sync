@@ -10,7 +10,9 @@ minimum artifact workflow rather than the final supply-chain posture.
 ## Current Release Shape
 
 Release Please manages changelog and version bumps through
-`.release-please-manifest.json` and `CHANGELOG.md`.
+`.release-please-manifest.json` and `CHANGELOG.md`. It opens release PRs only;
+tag creation and draft GitHub Release creation are handled by the dedicated
+release-tag workflow.
 
 Tag-triggered releases build Linux plugin binaries for:
 
@@ -28,9 +30,8 @@ checksums.txt
 checksums.txt.bundle
 ```
 
-The release workflow attaches these artifacts to the matching GitHub Release.
-If a semver tag exists but the GitHub Release does not, the workflow creates a
-draft release and uploads the assets there.
+The release workflow attaches these artifacts to the matching draft GitHub
+Release. The draft must already exist before artifacts are built.
 
 ## Local Artifact Build
 
@@ -49,7 +50,37 @@ Verify checksums:
 The build embeds version metadata through Go linker flags. Use a clean tree for
 release builds so `dirty=false` is meaningful.
 
-## Release Workflow
+## Release Flow
+
+The release process has three separate automation steps:
+
+1. `.github/workflows/release-please.yml` opens or updates the release PR using
+   a GitHub App token and `skip-github-release: true`.
+2. `.github/workflows/release-pr-gate.yml` requires the `release:ready` label
+   and approval from the user configured in the
+   `OPENBAO_SECRET_SYNC_RELEASE_REQUIRED_APPROVER` repository variable.
+3. `.github/workflows/release-tag.yml` creates a signed annotated semver tag and
+   a draft GitHub Release from the merged release PR.
+
+The release PR app requires:
+
+```text
+OPENBAO_SECRET_SYNC_RELEASE_PR_APP_ID
+OPENBAO_SECRET_SYNC_RELEASE_PR_PRIVATE_KEY
+```
+
+The release tag app and signing key require:
+
+```text
+OPENBAO_SECRET_SYNC_RELEASE_TAG_APP_ID
+OPENBAO_SECRET_SYNC_RELEASE_TAG_PRIVATE_KEY
+OPENBAO_SECRET_SYNC_RELEASE_TAG_GPG_PRIVATE_KEY
+OPENBAO_SECRET_SYNC_RELEASE_TAG_GPG_PASSPHRASE
+OPENBAO_SECRET_SYNC_RELEASE_TAG_GPG_NAME
+OPENBAO_SECRET_SYNC_RELEASE_TAG_GPG_EMAIL
+```
+
+## Artifact Workflow
 
 The workflow in `.github/workflows/release.yml` runs on semver tags:
 
@@ -61,15 +92,10 @@ The workflow in `.github/workflows/release.yml` runs on semver tags:
 It can also be run manually for an existing semver tag through
 `workflow_dispatch`.
 
-Early-stage limitation: when a tag is created by another GitHub Actions
-workflow using the default `GITHUB_TOKEN`, GitHub may not start the tag-triggered
-workflow automatically. In that case, run the release workflow manually with the
-existing tag. A later hardening pass should move release PR and tag creation to
-a dedicated GitHub App or equivalent release identity.
-
 The workflow:
 
 - checks out the tag;
+- requires the matching GitHub Release to already exist and be a draft;
 - builds release binaries with deterministic build metadata derived from the
   tagged commit;
 - generates and verifies `checksums.txt`;
@@ -146,8 +172,6 @@ normal OpenBao plugin lifecycle.
 
 The first release-engineering slice intentionally does not yet implement:
 
-- signed release tags;
-- release PR approval gates;
 - SBOM generation;
 - byte-for-byte rebuild verification;
 - container image publishing.

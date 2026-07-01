@@ -1,0 +1,80 @@
+name: Release PR Gate
+
+on:
+  pull_request_target:
+    types:
+      - opened
+      - synchronize
+      - reopened
+      - labeled
+      - ready_for_review
+    paths:
+      - 'CHANGELOG.md'
+      - '.release-please-manifest.json'
+  pull_request_review:
+    types:
+      - submitted
+
+permissions:
+  contents: read
+  issues: read
+  pull-requests: read
+
+concurrency:
+  group: release-pr-gate-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  gate:
+    name: Gate Release PR Merge
+    runs-on: ubuntu-24.04
+    if: ${{ !github.event.repository.fork }}
+    steps:
+      - name: Evaluate release PR gate
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          REQUIRED_LABEL: release:ready
+          REQUIRED_APPROVER: ${{ vars.OPENBAO_SECRET_SYNC_RELEASE_REQUIRED_APPROVER }}
+          EVENT_NAME: ${{ github.event_name }}
+          REVIEW_STATE: ${{ github.event.review.state || '' }}
+        run: |
+          set -euo pipefail
+
+          if [[ "${EVENT_NAME}" == "pull_request_review" && "${REVIEW_STATE}" != "approved" ]]; then
+            echo "Review event is not an approval; skipping release PR gate."
+            exit 0
+          fi
+
+          if [[ -z "${REQUIRED_APPROVER}" ]]; then
+            echo "OPENBAO_SECRET_SYNC_RELEASE_REQUIRED_APPROVER repository variable is required for release PR gating." >&2
+            exit 1
+          fi
+
+          files="$(gh api "repos/${REPO}/pulls/${PR_NUMBER}/files" --paginate --jq '.[].filename')"
+          if ! (echo "${files}" | grep -qx "CHANGELOG.md" && echo "${files}" | grep -qx ".release-please-manifest.json"); then
+            echo "Not a release PR (missing CHANGELOG.md and/or .release-please-manifest.json); skipping gate."
+            exit 0
+          fi
+
+          labels="$(gh api "repos/${REPO}/issues/${PR_NUMBER}/labels" --paginate --jq '.[].name')"
+          if ! echo "${labels}" | grep -qx "${REQUIRED_LABEL}"; then
+            echo "Missing required label '${REQUIRED_LABEL}' on release PR." >&2
+            echo "Add it when the PR is ready to be merged." >&2
+            exit 1
+          fi
+
+          reviews="$(gh api "repos/${REPO}/pulls/${PR_NUMBER}/reviews" --paginate)"
+          approver_state="$(
+            jq -r \
+              --arg approver "${REQUIRED_APPROVER}" \
+              'map(select(.user.login == $approver)) | sort_by(.submitted_at) | last | .state // ""' \
+              <<<"${reviews}"
+          )"
+          if [[ "${approver_state}" != "APPROVED" ]]; then
+            echo "Missing latest approval from '${REQUIRED_APPROVER}' on release PR." >&2
+            exit 1
+          fi
+
+          echo "Release PR gate satisfied."
