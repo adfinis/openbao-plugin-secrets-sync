@@ -310,6 +310,10 @@ until an operator runs an explicit migration or mounts a compatible version.
 
 ## Runbooks
 
+The practical operator workflow lives in
+[Operator runbook](operator-runbook.md). This document records the security and
+operations requirements that the runbook should continue to satisfy.
+
 MVP runbooks should cover:
 
 - install, register, and mount;

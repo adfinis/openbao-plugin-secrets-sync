@@ -353,6 +353,10 @@ terminal until configuration changes.
 
 ## Provider Conformance Tests
 
+Use [Provider implementation guide](provider-implementation.md) for the
+practical provider development workflow. This section defines the shared
+contract expectations.
+
 Every provider package should use the shared provider conformance harness before
 it is registered in the backend. The harness is not a replacement for
 provider-specific tests, but it locks down the common contract:

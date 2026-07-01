@@ -1,42 +1,48 @@
 # OpenBao Secret Sync
 
-`openbao-plugin-secrets-sync` is an OpenBao secret engine plugin for one-way
-secret synchronization from OpenBao-managed source data to external
+`openbao-plugin-secrets-sync` is an early-stage OpenBao secret engine plugin
+for one-way synchronization from OpenBao-managed source data to external
 destinations.
 
-The project is intentionally not a clone of Vault Enterprise Secret Sync. It is
-a mount-scoped OpenBao plugin with explicit ownership checks, plan-first remote
-mutation, provider capability declarations, restore safety, and implementation
-diagnostics from the start.
+It is intentionally a mount-scoped OpenBao plugin, not a clone of Vault
+Enterprise Secret Sync and not a core `/sys/sync` feature.
 
 ## Status
 
-This repository is in early implementation state. The current code builds a
-logical backend plugin with KV-v2-like source storage, associations, a durable
-outbox, provider-agnostic dispatch, a fake provider, and an AWS Secrets Manager
-and Kubernetes Secrets provider foundation.
+This repository is under active implementation. APIs, storage records, provider
+behavior, and operational guidance may still change before a stable release.
+Do not treat the current state as production-ready.
 
-## Documentation
+Current implementation work includes:
 
-Start with [docs/README.md](docs/README.md). For hands-on use, see
-[docs/user-guide.md](docs/user-guide.md). The current design package is split
-into product, architecture, provider, security, operations, and
-implementation-plan documents.
+- KV-v2-like source storage in the plugin mount;
+- explicit source opt-in and association-based sync;
+- durable queued dispatch with status and reconcile surfaces;
+- provider packages for fake, AWS Secrets Manager, Kubernetes Secrets, and
+  GitLab project variables;
+- local and self-contained e2e coverage for the main provider paths.
+
+## Start Here
+
+- Use the plugin locally: [docs/user-guide.md](docs/user-guide.md)
+- Operate and troubleshoot it: [docs/operator-runbook.md](docs/operator-runbook.md)
+- Understand the design: [docs/README.md](docs/README.md)
+- Add or review a provider: [docs/provider-implementation.md](docs/provider-implementation.md)
 
 ## Development
 
+Common local checks:
+
 ```sh
 make test
-make build
+make lint
+make ci-core
 ```
 
-The self-contained e2e paths are available with:
+Self-contained e2e paths:
 
 ```sh
 make test-e2e
 make test-e2e-kind
+E2E_GITLAB_CONFIRM=1 make test-e2e-gitlab
 ```
-
-The project follows the tool and CI layout used by the OpenBao Kubernetes KMS
-provider where it fits this plugin. Hugo and docs-site generation are
-intentionally omitted.

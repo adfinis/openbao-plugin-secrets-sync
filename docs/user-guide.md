@@ -427,6 +427,9 @@ delete with `delete_mode=delete` when owned remote deletion is required.
 
 ## Troubleshooting
 
+For operational response flows and evidence to capture, see the
+[Operator runbook](operator-runbook.md).
+
 If sync does not happen:
 
 - confirm `metadata/<path>` has `custom_metadata.syncable=true`;

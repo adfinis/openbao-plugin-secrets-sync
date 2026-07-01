@@ -1,65 +1,72 @@
-# OpenBao Secret Sync Documentation
+# OpenBao Secret Sync Docs
 
 Status: draft
-Date: 2026-06-30
+Date: 2026-07-01
 
-This directory contains the initial design package for
-`openbao-plugin-secrets-sync`, an OpenBao secret engine plugin for one-way
-secret synchronization from OpenBao-managed source data to external
-destinations.
+These docs describe the current design and implementation direction for
+`openbao-plugin-secrets-sync`. The plugin is still early-stage, so documents
+may describe intended contracts as well as implemented behavior. When that
+matters, the document should say so explicitly.
 
-The project is intentionally not a copy of Vault Enterprise Secret Sync. It
-borrows proven concepts such as destinations, associations, retries, name
-templates, and reconciliation, but the implementation model, safety defaults,
-and operator diagnostics are OpenBao-native and plugin-first.
+## Documentation Shape
 
-## Design Bar
+Use the root [README](../README.md) as the short project front door. Use this
+page when you need to choose the right detailed document.
 
-- OpenBao remains the source of truth.
-- The MVP is a mount-scoped external plugin, not a core `/sys/sync` feature.
-- Sync is explicit and opt-in through this engine's data model.
-- Remote overwrite requires ownership proof by default.
-- Destructive and mutating remote actions must be plan-able.
-- Destination providers must declare their real capabilities.
-- Restore, clone, drift, partial success, and collision states are first-class.
-- Operational status is part of the product contract.
+### Evaluate The Design
 
-## Document Map
+- [Product design](product-design.md) explains goals, non-goals, safety
+  principles, and the user-facing model.
+- [Architecture](architecture.md) explains the plugin boundary, storage model,
+  queueing, background work, and consistency model.
+- [API compatibility](api-compatibility.md) explains the KV-v2-like source API
+  claim and the intentional differences.
+- [HLD/LLD entry point](openbao-secret-sync-hld-lld.md) preserves the original
+  design summary and recommendation trail.
 
-- [HLD/LLD entry point](openbao-secret-sync-hld-lld.md) - compact summary and
-  current recommendation.
-- [Product design](product-design.md) - goals, non-goals, design principles,
-  user-facing behavior, and API shape.
-- [User guide](user-guide.md) - install, configure, sync, inspect, and
-  troubleshoot the plugin.
-- [API compatibility](api-compatibility.md) - KV-v2-like compatibility claim,
-  intentional differences, and source metadata policy.
-- [Architecture](architecture.md) - plugin boundary, components, storage model,
-  consistency, queueing, and background work.
-- [Provider contract](provider-contract.md) - provider interface,
-  capabilities, naming, payload formatting, and provider test expectations.
-- [Security and operations](security-operations.md) - threat model,
-  authorization, redaction, ownership, audit, metrics, restore, and runbooks.
-- [Observability](observability.md) - OpenTelemetry metric surface, attribute
-  policy, and exporter boundary.
-- [Testing and hardening](testing.md) - unit, model, fuzz, e2e, and security
-  test lanes.
-- [Implementation plan](implementation-plan.md) - MVP scope, phased plan, test
-  strategy, and open decisions.
-- [LocalStack e2e workflow](../test/e2e/localstack/README.md) - self-contained
-  OpenBao plus LocalStack test stack for AWS Secrets Manager sync behavior.
-- [Kind e2e workflow](../test/e2e/kind/README.md) - self-contained OpenBao
-  plus kind test stack for Kubernetes Secrets sync behavior.
-- [Manual AWS e2e workflow](../test/e2e/aws/README.md) - opt-in real AWS
-  sandbox test with OpenTofu-managed IAM fixtures.
-- [GitLab e2e workflow](../test/e2e/gitlab/README.md) - opt-in Dockerized
-  GitLab CE test stack for project variable sync behavior.
+### Use Or Operate The Plugin
 
-## How To Use These Docs
+- [User guide](user-guide.md) gives the current hands-on workflow for
+  installing, configuring, writing source data, creating associations, and
+  inspecting status.
+- [Operator runbook](operator-runbook.md) gives operational checks,
+  troubleshooting flows, restore-guard handling, and failure response guidance.
+- [Security and operations](security-operations.md) records the threat model,
+  authorization shape, redaction rules, restore safety, packaging, and
+  operational requirements.
+- [Observability](observability.md) describes the current OpenTelemetry metric
+  surface and attribute policy.
 
-Start with [Product design](product-design.md) before making API or UX
-decisions. Use [Architecture](architecture.md) and
-[Provider contract](provider-contract.md) while implementing core packages.
-Use [Security and operations](security-operations.md) as the review checklist
-for any feature that writes remote state, logs data, stores credentials, or
-changes authorization behavior.
+### Build Or Review Implementation
+
+- [Implementation plan](implementation-plan.md) tracks MVP scope, implemented
+  slices, remaining hardening, and open questions.
+- [Testing and hardening](testing.md) defines unit, contract, model, fuzz, e2e,
+  and security test lanes.
+- [Provider implementation guide](provider-implementation.md) explains the
+  practical steps and review checklist for adding a provider.
+- [Provider contract](provider-contract.md) defines the provider interface,
+  capability model, payload rules, ownership behavior, and conformance
+  expectations.
+
+### Run Provider E2E Tests
+
+- [LocalStack e2e workflow](../test/e2e/localstack/README.md) covers AWS
+  Secrets Manager behavior against LocalStack.
+- [Kind e2e workflow](../test/e2e/kind/README.md) covers Kubernetes Secrets
+  behavior in a disposable kind cluster.
+- [GitLab e2e workflow](../test/e2e/gitlab/README.md) covers GitLab project
+  variables in a Dockerized GitLab CE stack.
+- [Manual AWS e2e workflow](../test/e2e/aws/README.md) covers opt-in real AWS
+  testing with OpenTofu-managed IAM fixtures.
+
+## Documentation Maintenance
+
+When behavior changes, update docs at the same ownership level as the code:
+
+- user-visible command or response changes: update the user guide and runbook;
+- provider interface or capability changes: update the provider contract and
+  provider implementation guide;
+- queue, restore, authorization, or redaction changes: update security and
+  operations, testing, and the runbook;
+- new hardening evidence: update testing and the implementation plan.

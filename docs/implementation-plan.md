@@ -63,6 +63,9 @@ Implemented backend slices now include:
 - first core backend state-model test covering source writes, association
   creation, queue lifecycle, disable/enable, manual sync, source delete,
   delete-mode dispatch, status state, and secret-value redaction invariants.
+- documentation information architecture with a concise root README, reader
+  routing in `docs/README.md`, a practical operator runbook, and a provider
+  implementation guide.
 
 ## MVP Scope
 
