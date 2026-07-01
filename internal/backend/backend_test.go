@@ -2814,6 +2814,78 @@ func TestPeriodicLeavesClaimedOperationOnDispatchContextCancellation(t *testing.
 	}
 }
 
+func TestPeriodicLeavesClaimedOperationWhenCanceledProviderRedactsCause(t *testing.T) {
+	b := Backend(&logical.BackendConfig{})
+	ctx, cancel := context.WithCancel(context.Background())
+	b.providerRegistry = providers.MustNewRegistry(contextCanceledProvider{cancel: cancel})
+	storage := &logical.InmemStorage{}
+
+	writeAppDBSecret(t, b, storage, "initial")
+	destinationResp := handleRequest(
+		t,
+		b,
+		storage,
+		logical.UpdateOperation,
+		"destinations/ctxcancel/default",
+		nil,
+	)
+	if destinationResp != nil && destinationResp.IsError() {
+		t.Fatalf("unexpected destination write error: %v", destinationResp.Error())
+	}
+	markAppDBSyncable(t, b, storage)
+	associationResp := handleRequest(t, b, storage, logical.UpdateOperation, "associations/app/db", map[string]interface{}{
+		"destination_type": "ctxcancel",
+		"destination_name": "default",
+		"resolved_name":    "prod/app/db",
+		"granularity":      syncObjectIDSecretPath,
+		"format":           defaultAssociationFormat,
+	})
+	assertNoErrorResponse(t, associationResp)
+	operationID := operationIDsFromResponse(t, associationResp)[0]
+
+	acknowledgeRestoreGuard(t, b, storage)
+	err := b.periodic(ctx, &logical.Request{Storage: storage})
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("periodic error = %v, want context.Canceled", err)
+	}
+
+	operation := assertOutboxOperation(t, storage, operationID, 1, outboxStatePending)
+	if got := operation.Attempts; got != 0 {
+		t.Fatalf("attempts = %d, want 0", got)
+	}
+	if operation.ClaimOwner == "" {
+		t.Fatal("claim owner must remain set")
+	}
+	if operation.ClaimExpiresTime == "" {
+		t.Fatal("claim expiry must remain set")
+	}
+	if got := operation.ClaimAttempt; got != 1 {
+		t.Fatalf("claim attempt = %d, want 1", got)
+	}
+	status, err := getStatus(
+		context.Background(),
+		storage,
+		"app/db",
+		associationIDFromResponse(t, associationResp),
+		syncObjectIDSecretPath,
+	)
+	if err != nil {
+		t.Fatalf("read status: %v", err)
+	}
+	if status != nil {
+		t.Fatalf("status = %#v, want nil", status)
+	}
+}
+
+func TestIsDispatchContextCanceledTreatsRedactedProviderErrorAsCancellation(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	if !isDispatchContextCanceled(ctx, &providers.Error{Class: providers.ErrorClassUnavailable, Message: "redacted"}) {
+		t.Fatal("canceled context with redacted provider error must be treated as cancellation")
+	}
+}
+
 func TestPeriodicRetriesRateLimitProviderErrors(t *testing.T) {
 	b := Backend(&logical.BackendConfig{})
 	storage := &logical.InmemStorage{}
@@ -3878,6 +3950,68 @@ func planDefaultFakeAssociation(
 		"granularity":      syncObjectIDSecretPath,
 		"format":           defaultAssociationFormat,
 	})
+}
+
+type contextCanceledProvider struct {
+	cancel context.CancelFunc
+}
+
+func (contextCanceledProvider) Type() string {
+	return "ctxcancel"
+}
+
+func (contextCanceledProvider) Capabilities() providers.Capabilities {
+	return providers.Capabilities{
+		SupportsValueReadback:       true,
+		SupportsMetadataReadback:    true,
+		SupportsPayloadHashMetadata: true,
+		SupportsUpdateIfOwned:       true,
+		SupportsDeleteIfOwned:       true,
+		SupportsSecretPath:          true,
+		MaxPayloadBytes:             1024 * 1024,
+	}
+}
+
+func (contextCanceledProvider) Validate(context.Context, providers.DestinationConfig) error {
+	return nil
+}
+
+func (contextCanceledProvider) Plan(context.Context, providers.PlanRequest) (*providers.PlanResult, error) {
+	return &providers.PlanResult{Action: providers.PlanActionCreate}, nil
+}
+
+func (p contextCanceledProvider) Upsert(ctx context.Context, _ providers.UpsertRequest) (*providers.SyncResult, error) {
+	if p.cancel != nil {
+		p.cancel()
+	}
+	if ctx.Err() != nil {
+		return nil, &providers.Error{
+			Class:   providers.ErrorClassUnavailable,
+			Message: "redacted provider request failed",
+		}
+	}
+	return &providers.SyncResult{RemoteVersion: "ctxcancel"}, nil
+}
+
+func (p contextCanceledProvider) Delete(ctx context.Context, _ providers.DeleteRequest) (*providers.SyncResult, error) {
+	if p.cancel != nil {
+		p.cancel()
+	}
+	if ctx.Err() != nil {
+		return nil, &providers.Error{
+			Class:   providers.ErrorClassUnavailable,
+			Message: "redacted provider request failed",
+		}
+	}
+	return &providers.SyncResult{RemoteVersion: "ctxcancel-deleted"}, nil
+}
+
+func (contextCanceledProvider) ReadState(context.Context, providers.ReadStateRequest) (*providers.RemoteState, error) {
+	return &providers.RemoteState{Exists: true, OwnershipKnown: true, Owned: true}, nil
+}
+
+func (contextCanceledProvider) Health(context.Context, providers.DestinationConfig) (*providers.HealthResult, error) {
+	return &providers.HealthResult{Healthy: true}, nil
 }
 
 func markAppDBSyncable(t *testing.T, b logical.Backend, storage logical.Storage) {

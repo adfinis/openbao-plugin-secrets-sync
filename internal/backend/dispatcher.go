@@ -233,6 +233,9 @@ func (b *secretSyncBackend) processUpsert(
 		ObjectID:      record.ObjectID,
 	})
 	if isDispatchContextCanceled(ctx, err) {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return ctxErr
+		}
 		return err
 	}
 	b.recordProviderRequest(
@@ -332,6 +335,9 @@ func (b *secretSyncBackend) processDelete(
 		ObjectID:      record.ObjectID,
 	})
 	if isDispatchContextCanceled(ctx, err) {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return ctxErr
+		}
 		return err
 	}
 	b.recordProviderRequest(
@@ -598,11 +604,13 @@ func isDispatchContextCanceled(ctx context.Context, err error) bool {
 	if err == nil {
 		return false
 	}
+	if ctx.Err() != nil {
+		return true
+	}
 	if errors.Is(err, context.Canceled) {
 		return true
 	}
-	ctxErr := ctx.Err()
-	return ctxErr != nil && errors.Is(err, ctxErr)
+	return errors.Is(err, context.DeadlineExceeded)
 }
 
 type operationFailure struct {
