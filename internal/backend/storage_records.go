@@ -7,7 +7,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/adfinis/openbao-secret-sync/internal/outbox"
+	"github.com/adfinis/openbao-plugin-secrets-sync/internal/outbox"
 )
 
 const (

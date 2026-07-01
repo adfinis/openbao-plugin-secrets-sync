@@ -9,8 +9,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/adfinis/openbao-secret-sync/internal/providers"
-	"github.com/adfinis/openbao-secret-sync/internal/providers/providertest"
+	"github.com/adfinis/openbao-plugin-secrets-sync/internal/providers"
+	"github.com/adfinis/openbao-plugin-secrets-sync/internal/providers/providertest"
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/secretsmanager"
 	smtypes "github.com/aws/aws-sdk-go-v2/service/secretsmanager/types"
@@ -27,7 +27,7 @@ const (
 	testPayloadSHANew   = "sha256:new"
 	testRegion          = "eu-central-1"
 	testEndpointURL     = "http://localhost:4566"
-	testRoleARN         = "arn:aws:iam::123456789012:role/openbao-secret-sync"
+	testRoleARN         = "arn:aws:iam::123456789012:role/openbao-plugin-secrets-sync"
 	testPluginInstance  = "inst-test"
 	testRestoreEpoch    = "epoch-test"
 )

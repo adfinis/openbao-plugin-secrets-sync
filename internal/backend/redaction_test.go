@@ -6,8 +6,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/adfinis/openbao-secret-sync/internal/providers/awssecretsmanager"
-	"github.com/adfinis/openbao-secret-sync/internal/providers/gitlab"
+	"github.com/adfinis/openbao-plugin-secrets-sync/internal/providers/awssecretsmanager"
+	"github.com/adfinis/openbao-plugin-secrets-sync/internal/providers/gitlab"
 	"github.com/openbao/openbao/sdk/v2/logical"
 )
 

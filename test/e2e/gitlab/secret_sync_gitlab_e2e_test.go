@@ -18,7 +18,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/adfinis/openbao-secret-sync/internal/providers/gitlab"
+	"github.com/adfinis/openbao-plugin-secrets-sync/internal/providers/gitlab"
 	"github.com/openbao/openbao/api/v2"
 )
 
@@ -94,9 +94,9 @@ func writeGitLabDestination(t *testing.T, client *api.Client) {
 	t.Helper()
 	write(t, client, mountPath+"/destinations/gitlab/local", map[string]interface{}{
 		gitlab.ConfigKeyBaseURL:           env("E2E_GITLAB_BASE_URL_IN_BAO", "http://gitlab"),
-		gitlab.ConfigKeyProjectID:         env("E2E_GITLAB_PROJECT_PATH", "root/openbao-secret-sync-e2e"),
+		gitlab.ConfigKeyProjectID:         env("E2E_GITLAB_PROJECT_PATH", "root/openbao-plugin-secrets-sync-e2e"),
 		gitlab.ConfigKeyEnvironmentScope:  env("E2E_GITLAB_ENVIRONMENT_SCOPE", "production"),
-		gitlab.ConfigKeyToken:             env("E2E_GITLAB_TOKEN", "glpat-openbao-secret-sync-e2e-token-000000"),
+		gitlab.ConfigKeyToken:             env("E2E_GITLAB_TOKEN", "glpat-openbao-plugin-secrets-sync-e2e-token-000000"),
 		gitlab.ConfigKeyVariableRaw:       "true",
 		gitlab.ConfigKeyVariableType:      gitlab.VariableTypeEnvVar,
 		gitlab.ConfigKeyAllowInsecureHTTP: "true",
@@ -324,8 +324,8 @@ func newGitLabClient(t *testing.T) gitLabClient {
 	t.Helper()
 	return gitLabClient{
 		baseURL:          strings.TrimRight(env("E2E_GITLAB_URL", "http://127.0.0.1:18080"), "/"),
-		token:            env("E2E_GITLAB_TOKEN", "glpat-openbao-secret-sync-e2e-token-000000"),
-		projectPath:      env("E2E_GITLAB_PROJECT_PATH", "root/openbao-secret-sync-e2e"),
+		token:            env("E2E_GITLAB_TOKEN", "glpat-openbao-plugin-secrets-sync-e2e-token-000000"),
+		projectPath:      env("E2E_GITLAB_PROJECT_PATH", "root/openbao-plugin-secrets-sync-e2e"),
 		environmentScope: env("E2E_GITLAB_ENVIRONMENT_SCOPE", "production"),
 		httpClient:       &http.Client{Timeout: 10 * time.Second},
 	}

@@ -55,7 +55,7 @@ The fixture creates:
 
 - an IAM role the plugin test assumes;
 - a least-privilege Secrets Manager policy scoped to
-  `openbao-secret-sync-manual/*`;
+  `openbao-plugin-secrets-sync-manual/*`;
 - an external ID stored in OpenTofu state;
 - outputs consumed by the manual e2e target.
 
@@ -107,7 +107,7 @@ bao write secret-sync/destinations/aws-sm/prod \
   auth_mode=assume_role \
   role_arn="${E2E_AWS_ROLE_ARN}" \
   external_id="${E2E_AWS_EXTERNAL_ID}" \
-  session_name=openbao-secret-sync-manual
+  session_name=openbao-plugin-secrets-sync-manual
 
 bao write -force secret-sync/destinations/aws-sm/prod/validate
 bao read secret-sync/destinations/aws-sm/prod/health
@@ -224,7 +224,7 @@ aws-vault exec "${AWS_VAULT_PROFILE:?set AWS_VAULT_PROFILE}" -- \
 
 - `make test-e2e-aws` requires `E2E_AWS_CONFIRM=1`.
 - `make test-e2e-aws-clean` requires `E2E_AWS_CLEAN_CONFIRM=1`.
-- The cleanup test refuses prefixes that do not contain `openbao-secret-sync`.
+- The cleanup test refuses prefixes that do not contain `openbao-plugin-secrets-sync`.
 - The committed `.envrc.example` is a template; local `.envrc` files are
   ignored.
 - OpenTofu state files and local variable files are ignored in this directory.

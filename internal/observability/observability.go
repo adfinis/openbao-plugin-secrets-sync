@@ -11,7 +11,7 @@ import (
 )
 
 const (
-	instrumentationName = "github.com/adfinis/openbao-secret-sync"
+	instrumentationName = "github.com/adfinis/openbao-plugin-secrets-sync"
 
 	MetricQueueDepth              = "openbao.secret_sync.queue.depth"
 	MetricOperations              = "openbao.secret_sync.operations"

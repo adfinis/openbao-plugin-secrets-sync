@@ -20,13 +20,13 @@ GO_SOURCE_DIRS := $(shell for d in cmd internal test hack; do [ -d "$$d" ] && pr
 BINARY_NAME ?= openbao-plugin-secrets-sync
 BIN ?= bin/$(BINARY_NAME)
 DIST_DIR ?= dist/release
-OCI_IMAGE_REPOSITORY ?= ghcr.io/adfinis/openbao-secret-sync
+OCI_IMAGE_REPOSITORY ?= ghcr.io/adfinis/openbao-plugin-secrets-sync
 OCI_IMAGE_TAG ?= $(PLUGIN_VERSION)
 OCI_IMAGE ?= $(OCI_IMAGE_REPOSITORY):$(OCI_IMAGE_TAG)
 OCI_IMAGE_PLATFORMS ?= linux/$(shell "$(GO)" env GOHOSTARCH)
 OCI_IMAGE_METADATA ?= dist/oci-plugin-image-metadata.json
 OCI_IMAGE_OUTPUT ?= --load
-OCI_IMAGE_SOURCE ?= https://github.com/adfinis/openbao-secret-sync
+OCI_IMAGE_SOURCE ?= https://github.com/adfinis/openbao-plugin-secrets-sync
 CHECKSUM_FILE ?= $(DIST_DIR)/checksums.txt
 CHECKSUM ?= shasum -a 256
 RELEASE_TARGETS ?= linux/amd64 linux/arm64
@@ -35,7 +35,7 @@ PLUGIN_VERSION ?= $(if $(filter v%,$(VERSION)),$(VERSION),v$(VERSION))
 COMMIT ?= $(shell git rev-parse --short HEAD 2>/dev/null || printf '%s' unknown)
 BUILD_DATE ?= $(shell if [ -n "$${SOURCE_DATE_EPOCH:-}" ]; then date -u -r "$${SOURCE_DATE_EPOCH}" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date -u -d "@$${SOURCE_DATE_EPOCH}" +%Y-%m-%dT%H:%M:%SZ; else date -u +%Y-%m-%dT%H:%M:%SZ; fi)
 DIRTY ?= $(shell if [ -n "$$(git status --porcelain 2>/dev/null)" ]; then printf '%s' true; else printf '%s' false; fi)
-VERSION_PKG := github.com/adfinis/openbao-secret-sync/internal/version
+VERSION_PKG := github.com/adfinis/openbao-plugin-secrets-sync/internal/version
 GO_BUILD_FLAGS ?= -trimpath -buildvcs=false
 LDFLAGS := -s -w -X $(VERSION_PKG).version=$(PLUGIN_VERSION) -X $(VERSION_PKG).commit=$(COMMIT) -X $(VERSION_PKG).buildDate=$(BUILD_DATE) -X $(VERSION_PKG).dirty=$(DIRTY)
 
@@ -45,7 +45,7 @@ GOVULNCHECK_VERSION ?= v1.2.0
 GOLANGCI_LINT_VERSION ?= v2.11.4
 GO_LICENSES_VERSION ?= v2.0.1
 GO_LICENSES_ALLOWED ?= Apache-2.0 BSD-2-Clause BSD-3-Clause ISC MIT MPL-2.0 Unicode-DFS-2016
-GO_LICENSES_IGNORE ?= github.com/adfinis/openbao-secret-sync
+GO_LICENSES_IGNORE ?= github.com/adfinis/openbao-plugin-secrets-sync
 GO_LICENSES_PACKAGE_TARGETS ?= ./cmd/openbao-plugin-secrets-sync
 LICENSE_REPORT_DIR ?= dist/licenses
 go_licenses_empty :=

@@ -1,8 +1,8 @@
 version: 1
 
 project:
-  name: openbao-secret-sync
-  module: github.com/adfinis/openbao-secret-sync
+  name: openbao-plugin-secrets-sync
+  module: github.com/adfinis/openbao-plugin-secrets-sync
   binary: openbao-plugin-secrets-sync
 
 toolchain:
@@ -50,7 +50,7 @@ artifacts:
   provenanceIndex: provenance-index.json
   ociPluginImage:
     status: published
-    repositoryPattern: ghcr.io/${OWNER}/openbao-secret-sync
+    repositoryPattern: ghcr.io/${OWNER}/openbao-plugin-secrets-sync
     tagPattern: v${VERSION}
     binaryPath: /openbao-plugin-secrets-sync
   checksumAlgorithm: sha256

@@ -5,10 +5,10 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/adfinis/openbao-secret-sync/internal/domain"
-	"github.com/adfinis/openbao-secret-sync/internal/observability"
-	payloadpkg "github.com/adfinis/openbao-secret-sync/internal/payload"
-	"github.com/adfinis/openbao-secret-sync/internal/providers"
+	"github.com/adfinis/openbao-plugin-secrets-sync/internal/domain"
+	"github.com/adfinis/openbao-plugin-secrets-sync/internal/observability"
+	payloadpkg "github.com/adfinis/openbao-plugin-secrets-sync/internal/payload"
+	"github.com/adfinis/openbao-plugin-secrets-sync/internal/providers"
 	"github.com/openbao/openbao/sdk/v2/framework"
 	"github.com/openbao/openbao/sdk/v2/logical"
 )

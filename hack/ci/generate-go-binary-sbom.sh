@@ -191,11 +191,11 @@ doc = {
     "dataLicense": "CC0-1.0",
     "SPDXID": "SPDXRef-DOCUMENT",
     "name": f"{binary_name} {version} {goos}/{goarch}",
-    "documentNamespace": f"https://github.com/adfinis/openbao-secret-sync/sbom/{namespace_hash}",
+    "documentNamespace": f"https://github.com/adfinis/openbao-plugin-secrets-sync/sbom/{namespace_hash}",
     "creationInfo": {
         "created": created,
         "creators": [
-            "Tool: openbao-secret-sync-generate-go-binary-sbom",
+            "Tool: openbao-plugin-secrets-sync-generate-go-binary-sbom",
         ],
     },
     "packages": packages,

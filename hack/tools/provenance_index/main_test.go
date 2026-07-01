@@ -40,16 +40,16 @@ func TestBuildIndex(t *testing.T) {
 	mustWriteFile(t, checksumsPath, checksums)
 
 	idx, err := buildIndex(config{
-		repo:                      "adfinis/openbao-secret-sync",
+		repo:                      "adfinis/openbao-plugin-secrets-sync",
 		owner:                     "adfinis",
 		version:                   "0.1.0",
 		pluginVersion:             "v0.1.0",
 		sourceDateEpoch:           1_704_067_200,
 		binaryName:                "openbao-plugin-secrets-sync",
-		ociImageRef:               "ghcr.io/adfinis/openbao-secret-sync:v0.1.0",
+		ociImageRef:               "ghcr.io/adfinis/openbao-plugin-secrets-sync:v0.1.0",
 		ociImageDigest:            "sha256:0123456789abcdef",
 		ociImagePlatforms:         "linux/amd64,linux/arm64",
-		releaseWorkflow:           "adfinis/openbao-secret-sync/.github/workflows/release.yml",
+		releaseWorkflow:           "adfinis/openbao-plugin-secrets-sync/.github/workflows/release.yml",
 		checksumsPath:             checksumsPath,
 		checksumsBundlePath:       bundlePath,
 		sbomGlob:                  filepath.Join(releaseDir, "sbom-*.spdx.json"),
@@ -71,7 +71,7 @@ func TestBuildIndex(t *testing.T) {
 	assertTrue(t, "reproducibility should be verified", idx.Reproducible.Verified)
 	assertTrue(t, "attestations should be available", idx.Attestations.Available)
 	assertTrue(t, "OCI plugin image should be published", idx.OCIPluginImage.Published)
-	assertEqual(t, "OCI plugin image ref", idx.OCIPluginImage.Ref, "ghcr.io/adfinis/openbao-secret-sync:v0.1.0")
+	assertEqual(t, "OCI plugin image ref", idx.OCIPluginImage.Ref, "ghcr.io/adfinis/openbao-plugin-secrets-sync:v0.1.0")
 	assertEqual(t, "OCI plugin image digest", idx.OCIPluginImage.Digest, "sha256:0123456789abcdef")
 	assertEqual(t, "OCI plugin image platform count", len(idx.OCIPluginImage.Platforms), 2)
 }

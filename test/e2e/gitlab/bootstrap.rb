@@ -19,7 +19,7 @@ unless project
 end
 
 token_value = ENV.fetch("E2E_GITLAB_TOKEN")
-token_name = "openbao-secret-sync-e2e"
+token_name = "openbao-plugin-secrets-sync-e2e"
 expires_at = 30.days.from_now.to_date
 token = root.personal_access_tokens.active.find_by(name: token_name)
 token ||= root.personal_access_tokens.build(name: token_name, scopes: [:api], expires_at: expires_at)

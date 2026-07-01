@@ -6,8 +6,8 @@ import (
 	"strconv"
 	"testing"
 
-	"github.com/adfinis/openbao-secret-sync/internal/providers"
-	"github.com/adfinis/openbao-secret-sync/internal/providers/providertest"
+	"github.com/adfinis/openbao-plugin-secrets-sync/internal/providers"
+	"github.com/adfinis/openbao-plugin-secrets-sync/internal/providers/providertest"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"

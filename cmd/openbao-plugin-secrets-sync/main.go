@@ -4,7 +4,7 @@ package main
 import (
 	"os"
 
-	"github.com/adfinis/openbao-secret-sync/internal/backend"
+	"github.com/adfinis/openbao-plugin-secrets-sync/internal/backend"
 	"github.com/hashicorp/go-hclog"
 	"github.com/openbao/openbao/api/v2"
 	"github.com/openbao/openbao/sdk/v2/plugin"

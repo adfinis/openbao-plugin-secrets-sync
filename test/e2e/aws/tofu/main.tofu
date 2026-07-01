@@ -10,7 +10,7 @@ locals {
   external_id = (
     var.external_id != null && var.external_id != ""
     ? var.external_id
-    : "openbao-secret-sync-${random_id.external_id.hex}"
+    : "openbao-plugin-secrets-sync-${random_id.external_id.hex}"
   )
   trusted_principal_arns = (
     length(var.trusted_principal_arns) > 0
@@ -20,8 +20,8 @@ locals {
   secret_arn_prefix = "arn:${data.aws_partition.current.partition}:secretsmanager:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:secret:${var.secret_name_prefix}*"
   tags = merge(
     {
-      ManagedBy = "openbao-secret-sync-e2e"
-      Purpose   = "manual-openbao-secret-sync-test"
+      ManagedBy = "openbao-plugin-secrets-sync-e2e"
+      Purpose   = "manual-openbao-plugin-secrets-sync-test"
     },
     var.tags,
   )

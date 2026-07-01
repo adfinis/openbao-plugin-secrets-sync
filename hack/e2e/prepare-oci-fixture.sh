@@ -50,7 +50,7 @@ run_quiet openssl req \
 	-nodes \
 	-days 7 \
 	-sha256 \
-	-subj "/CN=openbao-secret-sync-e2e-ca" \
+	-subj "/CN=openbao-plugin-secrets-sync-e2e-ca" \
 	-keyout "${E2E_OCI_CERT_DIR}/ca.key" \
 	-out "${E2E_OCI_CERT_DIR}/ca.crt"
 

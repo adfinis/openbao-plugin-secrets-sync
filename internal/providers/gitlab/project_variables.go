@@ -16,7 +16,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/adfinis/openbao-secret-sync/internal/providers"
+	"github.com/adfinis/openbao-plugin-secrets-sync/internal/providers"
 )
 
 const (
@@ -57,7 +57,7 @@ const (
 	defaultHTTPTimeout          = 30 * time.Second
 	gitlabResponseMaxBytes      = 1024 * 1024
 
-	metadataManagedBy        = "openbao-secret-sync"
+	metadataManagedBy        = "openbao-plugin-secrets-sync"
 	metadataManagedByCompact = "1"
 )
 

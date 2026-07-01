@@ -14,7 +14,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/adfinis/openbao-secret-sync/internal/providers"
+	"github.com/adfinis/openbao-plugin-secrets-sync/internal/providers"
 	"github.com/aws/aws-sdk-go-v2/aws"
 	awsconfig "github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/credentials/stscreds"

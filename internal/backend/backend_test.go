@@ -7,12 +7,12 @@ import (
 	"testing"
 	"time"
 
-	"github.com/adfinis/openbao-secret-sync/internal/domain"
-	"github.com/adfinis/openbao-secret-sync/internal/outbox"
-	"github.com/adfinis/openbao-secret-sync/internal/providers"
-	"github.com/adfinis/openbao-secret-sync/internal/providers/awssecretsmanager"
-	"github.com/adfinis/openbao-secret-sync/internal/providers/gitlab"
-	"github.com/adfinis/openbao-secret-sync/internal/providers/kubernetessecrets"
+	"github.com/adfinis/openbao-plugin-secrets-sync/internal/domain"
+	"github.com/adfinis/openbao-plugin-secrets-sync/internal/outbox"
+	"github.com/adfinis/openbao-plugin-secrets-sync/internal/providers"
+	"github.com/adfinis/openbao-plugin-secrets-sync/internal/providers/awssecretsmanager"
+	"github.com/adfinis/openbao-plugin-secrets-sync/internal/providers/gitlab"
+	"github.com/adfinis/openbao-plugin-secrets-sync/internal/providers/kubernetessecrets"
 	"github.com/openbao/openbao/sdk/v2/helper/consts"
 	"github.com/openbao/openbao/sdk/v2/logical"
 )
@@ -502,7 +502,7 @@ func TestAWSDestinationConfigLifecycle(t *testing.T) {
 		awssecretsmanager.ConfigKeyEndpointURL:    "http://localhost:4566",
 		awssecretsmanager.ConfigKeyEndpointPolicy: awssecretsmanager.EndpointPolicyLocal,
 		awssecretsmanager.ConfigKeyAuthMode:       awssecretsmanager.AuthModeAssumeRole,
-		awssecretsmanager.ConfigKeyRoleARN:        "arn:aws:iam::123456789012:role/openbao-secret-sync",
+		awssecretsmanager.ConfigKeyRoleARN:        "arn:aws:iam::123456789012:role/openbao-plugin-secrets-sync",
 		awssecretsmanager.ConfigKeyExternalID:     "tenant-1",
 		awssecretsmanager.ConfigKeySessionName:    "openbao-sync",
 	})
@@ -707,7 +707,7 @@ func TestDestinationSensitiveConfigDeletion(t *testing.T) {
 
 	writeResp := handleRequest(t, b, storage, logical.UpdateOperation, "destinations/aws-sm/prod", map[string]interface{}{
 		awssecretsmanager.ConfigKeyAuthMode:   awssecretsmanager.AuthModeAssumeRole,
-		awssecretsmanager.ConfigKeyRoleARN:    "arn:aws:iam::123456789012:role/openbao-secret-sync",
+		awssecretsmanager.ConfigKeyRoleARN:    "arn:aws:iam::123456789012:role/openbao-plugin-secrets-sync",
 		awssecretsmanager.ConfigKeyExternalID: "tenant-1",
 	})
 	if writeResp != nil && writeResp.IsError() {
@@ -742,7 +742,7 @@ func TestDestinationWriteMigratesSensitiveKeysFromLegacyConfig(t *testing.T) {
 		Name: "prod",
 		Config: map[string]string{
 			awssecretsmanager.ConfigKeyAuthMode:   awssecretsmanager.AuthModeAssumeRole,
-			awssecretsmanager.ConfigKeyRoleARN:    "arn:aws:iam::123456789012:role/openbao-secret-sync",
+			awssecretsmanager.ConfigKeyRoleARN:    "arn:aws:iam::123456789012:role/openbao-plugin-secrets-sync",
 			awssecretsmanager.ConfigKeyExternalID: "tenant-legacy",
 		},
 	}); err != nil {
@@ -2302,7 +2302,7 @@ func TestPeriodicRejectsPayloadOverAWSProviderLimit(t *testing.T) {
 	associationResp := handleRequest(t, b, storage, logical.UpdateOperation, "associations/app/db", map[string]interface{}{
 		"destination_type": awssecretsmanager.ProviderType,
 		"destination_name": "prod",
-		"resolved_name":    "openbao-secret-sync/app/db",
+		"resolved_name":    "openbao-plugin-secrets-sync/app/db",
 		"granularity":      syncObjectIDSecretPath,
 		"format":           defaultAssociationFormat,
 	})

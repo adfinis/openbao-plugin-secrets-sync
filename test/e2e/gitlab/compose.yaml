@@ -8,9 +8,9 @@ services:
         external_url 'http://gitlab'
         gitlab_rails['initial_root_password'] = '${E2E_GITLAB_ROOT_PASSWORD:-R8vQ2mT6pL9sX4zC7nY3}'
         prometheus_monitoring['enable'] = false
-      E2E_GITLAB_PROJECT_PATH: ${E2E_GITLAB_PROJECT_PATH:-root/openbao-secret-sync-e2e}
+      E2E_GITLAB_PROJECT_PATH: ${E2E_GITLAB_PROJECT_PATH:-root/openbao-plugin-secrets-sync-e2e}
       E2E_GITLAB_ENVIRONMENT_SCOPE: ${E2E_GITLAB_ENVIRONMENT_SCOPE:-production}
-      E2E_GITLAB_TOKEN: ${E2E_GITLAB_TOKEN:-glpat-openbao-secret-sync-e2e-token-000000}
+      E2E_GITLAB_TOKEN: ${E2E_GITLAB_TOKEN:-glpat-openbao-plugin-secrets-sync-e2e-token-000000}
     ports:
       - "127.0.0.1:${E2E_GITLAB_PORT:-18080}:80"
     volumes:

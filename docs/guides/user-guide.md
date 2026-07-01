@@ -76,7 +76,7 @@ provider-specific required fields:
 bao write secret-sync/destinations/PROVIDER_TYPE/NAME \
   PROVIDER_SPECIFIC_FIELDS \
   allowed_source_path_prefixes=apps/team-a,shared/team-a \
-  allowed_resolved_name_prefixes=openbao-secret-sync/team-a/
+  allowed_resolved_name_prefixes=openbao-plugin-secrets-sync/team-a/
 ```
 
 `allowed_source_path_prefixes` uses OpenBao source path segment boundaries:

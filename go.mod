@@ -1,4 +1,4 @@
-module github.com/adfinis/openbao-secret-sync
+module github.com/adfinis/openbao-plugin-secrets-sync
 
 go 1.26.4
 

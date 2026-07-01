@@ -10,9 +10,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/adfinis/openbao-secret-sync/internal/payload"
-	"github.com/adfinis/openbao-secret-sync/internal/providers"
-	"github.com/adfinis/openbao-secret-sync/internal/providers/providertest"
+	"github.com/adfinis/openbao-plugin-secrets-sync/internal/payload"
+	"github.com/adfinis/openbao-plugin-secrets-sync/internal/providers"
+	"github.com/adfinis/openbao-plugin-secrets-sync/internal/providers/providertest"
 )
 
 const (
@@ -615,7 +615,7 @@ func unownedVariable() *gitlabVariable {
 	return &gitlabVariable{
 		Key:              testResolvedName,
 		EnvironmentScope: testEnvScope,
-		Description:      "created outside openbao-secret-sync",
+		Description:      "created outside openbao-plugin-secrets-sync",
 	}
 }
 

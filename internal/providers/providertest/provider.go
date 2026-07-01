@@ -6,7 +6,7 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/adfinis/openbao-secret-sync/internal/providers"
+	"github.com/adfinis/openbao-plugin-secrets-sync/internal/providers"
 )
 
 // Harness describes provider contract checks that are expected to pass.

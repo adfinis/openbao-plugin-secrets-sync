@@ -6,7 +6,7 @@ metadata:
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
-  name: openbao-secret-sync
+  name: openbao-plugin-secrets-sync
 rules:
   - apiGroups: [""]
     resources: ["secrets"]
@@ -15,11 +15,11 @@ rules:
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
 metadata:
-  name: openbao-secret-sync
+  name: openbao-plugin-secrets-sync
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: Role
-  name: openbao-secret-sync
+  name: openbao-plugin-secrets-sync
 subjects:
   - kind: ServiceAccount
     name: openbao
@@ -30,7 +30,7 @@ metadata:
   name: openbao
   labels:
     app.kubernetes.io/name: openbao
-    app.kubernetes.io/part-of: openbao-secret-sync-e2e
+    app.kubernetes.io/part-of: openbao-plugin-secrets-sync-e2e
 spec:
   replicas: 1
   selector:
@@ -40,7 +40,7 @@ spec:
     metadata:
       labels:
         app.kubernetes.io/name: openbao
-        app.kubernetes.io/part-of: openbao-secret-sync-e2e
+        app.kubernetes.io/part-of: openbao-plugin-secrets-sync-e2e
     spec:
       serviceAccountName: openbao
       securityContext:
@@ -52,7 +52,7 @@ spec:
           type: RuntimeDefault
       containers:
         - name: openbao
-          image: openbao-secret-sync-e2e:dev
+          image: openbao-plugin-secrets-sync-e2e:dev
           imagePullPolicy: IfNotPresent
           args:
             - server
@@ -101,7 +101,7 @@ metadata:
   name: openbao
   labels:
     app.kubernetes.io/name: openbao
-    app.kubernetes.io/part-of: openbao-secret-sync-e2e
+    app.kubernetes.io/part-of: openbao-plugin-secrets-sync-e2e
 spec:
   selector:
     app.kubernetes.io/name: openbao

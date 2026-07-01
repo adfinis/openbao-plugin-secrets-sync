@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/adfinis/openbao-secret-sync/internal/providers"
+	"github.com/adfinis/openbao-plugin-secrets-sync/internal/providers"
 )
 
 func TestRunExercisesHarnessContracts(t *testing.T) {

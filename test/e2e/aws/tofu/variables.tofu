@@ -1,13 +1,13 @@
 variable "name_prefix" {
   description = "Prefix for IAM resources created by this manual e2e fixture."
   type        = string
-  default     = "openbao-secret-sync-e2e"
+  default     = "openbao-plugin-secrets-sync-e2e"
 }
 
 variable "secret_name_prefix" {
   description = "Secrets Manager name prefix the manual test may create, update, read, and delete."
   type        = string
-  default     = "openbao-secret-sync-manual/"
+  default     = "openbao-plugin-secrets-sync-manual/"
 }
 
 variable "external_id" {

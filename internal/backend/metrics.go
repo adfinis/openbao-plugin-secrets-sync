@@ -4,8 +4,8 @@ import (
 	"context"
 	"time"
 
-	"github.com/adfinis/openbao-secret-sync/internal/observability"
-	"github.com/adfinis/openbao-secret-sync/internal/providers"
+	"github.com/adfinis/openbao-plugin-secrets-sync/internal/observability"
+	"github.com/adfinis/openbao-plugin-secrets-sync/internal/providers"
 )
 
 func (b *secretSyncBackend) recordReadinessCheck(

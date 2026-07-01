@@ -3,7 +3,7 @@ package backend
 import (
 	"context"
 
-	"github.com/adfinis/openbao-secret-sync/internal/observability"
+	"github.com/adfinis/openbao-plugin-secrets-sync/internal/observability"
 	"github.com/openbao/openbao/sdk/v2/framework"
 	"github.com/openbao/openbao/sdk/v2/logical"
 )

@@ -22,9 +22,9 @@ Use `auth_mode=assume_role` when OpenBao should assume a destination role:
 bao write secret-sync/destinations/aws-sm/prod \
   region=eu-central-1 \
   auth_mode=assume_role \
-  role_arn=arn:aws:iam::123456789012:role/openbao-secret-sync \
+  role_arn=arn:aws:iam::123456789012:role/openbao-plugin-secrets-sync \
   external_id=tenant-or-environment-id \
-  session_name=openbao-secret-sync
+  session_name=openbao-plugin-secrets-sync
 ```
 
 Static AWS access keys and session tokens are intentionally not supported yet.
@@ -49,7 +49,7 @@ Use `private` only for explicitly approved HTTPS private endpoint deployments:
 bao write secret-sync/destinations/aws-sm/private \
   region=eu-central-1 \
   auth_mode=assume_role \
-  role_arn=arn:aws:iam::123456789012:role/openbao-secret-sync \
+  role_arn=arn:aws:iam::123456789012:role/openbao-plugin-secrets-sync \
   external_id=tenant-or-environment-id \
   endpoint_url=https://vpce-1234567890abcdef.secretsmanager.eu-central-1.vpce.amazonaws.com \
   endpoint_policy=private
@@ -95,7 +95,7 @@ from the OpenBao source path:
 bao write secret-sync/associations/app/db \
   destination_type=aws-sm \
   destination_name=prod \
-  resolved_name=openbao-secret-sync/team-a/app-db
+  resolved_name=openbao-plugin-secrets-sync/team-a/app-db
 ```
 
 ## Troubleshoot endpoints

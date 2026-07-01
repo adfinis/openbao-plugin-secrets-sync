@@ -54,9 +54,9 @@ debugging the running OpenBao or GitLab services.
 
 The local fixture uses `gitlab-rails runner` to create:
 
-- project `root/openbao-secret-sync-e2e`;
+- project `root/openbao-plugin-secrets-sync-e2e`;
 - root personal access token
-  `glpat-openbao-secret-sync-e2e-token-000000`.
+  `glpat-openbao-plugin-secrets-sync-e2e-token-000000`.
 
 The default root password is intentionally random-looking because GitLab
 rejects common word combinations during first boot. If you override

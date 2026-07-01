@@ -3,8 +3,8 @@ package fake
 import (
 	"testing"
 
-	"github.com/adfinis/openbao-secret-sync/internal/providers"
-	"github.com/adfinis/openbao-secret-sync/internal/providers/providertest"
+	"github.com/adfinis/openbao-plugin-secrets-sync/internal/providers"
+	"github.com/adfinis/openbao-plugin-secrets-sync/internal/providers/providertest"
 )
 
 func TestProviderConformance(t *testing.T) {

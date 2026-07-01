@@ -37,7 +37,7 @@ Release. The draft must already exist before artifacts are built. It also
 publishes a multi-platform OCI plugin distribution image to:
 
 ```text
-ghcr.io/adfinis/openbao-secret-sync:v<version>
+ghcr.io/adfinis/openbao-plugin-secrets-sync:v<version>
 ```
 
 The OCI image is an extraction artifact for OpenBao, not a service container.
@@ -113,7 +113,7 @@ PRIMARY_DIR=dist/release REBUILD_DIR=dist/rebuild \
 After signing `checksums.txt`, generate the local provenance index:
 
 ```sh
-REPO=adfinis/openbao-secret-sync OWNER=adfinis \
+REPO=adfinis/openbao-plugin-secrets-sync OWNER=adfinis \
   VERSION=0.1.0-preview.1 PLUGIN_VERSION=v0.1.0-preview.1 \
   SOURCE_DATE_EPOCH="${SOURCE_DATE_EPOCH}" \
   bash hack/ci/generate-provenance-index.sh
@@ -205,7 +205,7 @@ Verify the checksum file signature with `cosign`:
 
 ```sh
 VERSION=0.1.0-preview.1
-REPO=adfinis/openbao-secret-sync
+REPO=adfinis/openbao-plugin-secrets-sync
 WORKFLOW_IDENTITY="https://github.com/${REPO}/.github/workflows/release.yml@refs/tags/${VERSION}"
 
 cosign verify-blob \
@@ -269,7 +269,7 @@ runs the binary as a normal external plugin process.
 The release workflow publishes the OCI plugin image as:
 
 ```text
-ghcr.io/adfinis/openbao-secret-sync:v0.1.0-preview.1
+ghcr.io/adfinis/openbao-plugin-secrets-sync:v0.1.0-preview.1
 ```
 
 Use the image digest from `provenance-index.json` for verification and
@@ -282,7 +282,7 @@ jq -r '.oci_plugin_image.ref, .oci_plugin_image.digest' provenance-index.json
 Verify the OCI image signature by digest:
 
 ```sh
-IMAGE_NAME=ghcr.io/adfinis/openbao-secret-sync
+IMAGE_NAME=ghcr.io/adfinis/openbao-plugin-secrets-sync
 IMAGE_DIGEST=sha256:<digest-from-provenance-index>
 
 cosign verify \
@@ -313,7 +313,7 @@ plugin_download_behavior = "fail"
 plugin_download_max_size = 134217728 # 128 MiB, expressed as bytes.
 
 plugin "secret" "openbao-plugin-secrets-sync" {
-  image       = "ghcr.io/adfinis/openbao-secret-sync"
+  image       = "ghcr.io/adfinis/openbao-plugin-secrets-sync"
   version     = "v0.1.0-preview.1"
   binary_name = "openbao-plugin-secrets-sync"
   sha256sum   = "<openbao_plugin_catalog_sha256 from provenance-index.json>"

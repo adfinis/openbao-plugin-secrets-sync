@@ -15,7 +15,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/adfinis/openbao-secret-sync/internal/providers/awssecretsmanager"
+	"github.com/adfinis/openbao-plugin-secrets-sync/internal/providers/awssecretsmanager"
 	"github.com/aws/aws-sdk-go-v2/aws"
 	awsconfig "github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/credentials/stscreds"
@@ -34,7 +34,7 @@ const (
 	testPollInterval    = 500 * time.Millisecond
 	testTimeout         = 45 * time.Second
 	defaultAWSRegion    = "us-east-1"
-	defaultSecretPrefix = "openbao-secret-sync-manual/"
+	defaultSecretPrefix = "openbao-plugin-secrets-sync-manual/"
 )
 
 func TestOpenBaoPluginSyncsToAWSSecretsManager(t *testing.T) {
@@ -128,7 +128,7 @@ func writeAWSDestination(t *testing.T, client *api.Client) {
 		awssecretsmanager.ConfigKeyAuthMode:    awssecretsmanager.AuthModeAssumeRole,
 		awssecretsmanager.ConfigKeyRoleARN:     requiredEnv(t, "E2E_AWS_ROLE_ARN"),
 		awssecretsmanager.ConfigKeyExternalID:  requiredEnv(t, "E2E_AWS_EXTERNAL_ID"),
-		awssecretsmanager.ConfigKeySessionName: "openbao-secret-sync-e2e",
+		awssecretsmanager.ConfigKeySessionName: "openbao-plugin-secrets-sync-e2e",
 	})
 }
 
@@ -206,7 +206,7 @@ func newAssumedSecretsManagerClient(t *testing.T, ctx context.Context) *secretsm
 		requiredEnv(t, "E2E_AWS_ROLE_ARN"),
 		func(options *stscreds.AssumeRoleOptions) {
 			options.ExternalID = aws.String(requiredEnv(t, "E2E_AWS_EXTERNAL_ID"))
-			options.RoleSessionName = "openbao-secret-sync-e2e-verify"
+			options.RoleSessionName = "openbao-plugin-secrets-sync-e2e-verify"
 		},
 	)
 	cfg.Credentials = aws.NewCredentialsCache(assumeRoleProvider)
@@ -531,8 +531,8 @@ func awsRegion(t *testing.T) string {
 func awsSecretPrefix(t *testing.T) string {
 	t.Helper()
 	prefix := env("E2E_AWS_SECRET_PREFIX", defaultSecretPrefix)
-	if !strings.Contains(prefix, "openbao-secret-sync") {
-		t.Fatalf("E2E_AWS_SECRET_PREFIX %q must contain openbao-secret-sync", prefix)
+	if !strings.Contains(prefix, "openbao-plugin-secrets-sync") {
+		t.Fatalf("E2E_AWS_SECRET_PREFIX %q must contain openbao-plugin-secrets-sync", prefix)
 	}
 	return prefix
 }

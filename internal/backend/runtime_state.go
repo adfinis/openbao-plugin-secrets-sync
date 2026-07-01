@@ -7,7 +7,7 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/adfinis/openbao-secret-sync/internal/providers"
+	"github.com/adfinis/openbao-plugin-secrets-sync/internal/providers"
 	"github.com/openbao/openbao/sdk/v2/logical"
 )
 

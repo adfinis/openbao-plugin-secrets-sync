@@ -14,7 +14,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/adfinis/openbao-secret-sync/internal/providers/kubernetessecrets"
+	"github.com/adfinis/openbao-plugin-secrets-sync/internal/providers/kubernetessecrets"
 	"github.com/openbao/openbao/api/v2"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -28,8 +28,8 @@ const (
 	pluginVersion    = "v0.0.0-dev"
 	mountPath        = "secret-sync"
 	rootToken        = "root"
-	defaultContext   = "kind-openbao-secret-sync-e2e"
-	defaultNamespace = "openbao-secret-sync-e2e"
+	defaultContext   = "kind-openbao-plugin-secrets-sync-e2e"
+	defaultNamespace = "openbao-plugin-secrets-sync-e2e"
 	dataKeyPayload   = "payload"
 	testPollInterval = 500 * time.Millisecond
 	testTimeout      = 45 * time.Second
@@ -42,7 +42,7 @@ func TestOpenBaoPluginSyncsToKubernetesSecrets(t *testing.T) {
 	baoClient := setupMountedOpenBao(t, ctx)
 	namespace := env("E2E_KIND_NAMESPACE", defaultNamespace)
 	kubeClient := newKubernetesClient(t)
-	remoteName := fmt.Sprintf("openbao-secret-sync-e2e-%d", time.Now().UnixNano())
+	remoteName := fmt.Sprintf("openbao-plugin-secrets-sync-e2e-%d", time.Now().UnixNano())
 	t.Cleanup(func() {
 		deleteKubernetesSecret(ctx, kubeClient, namespace, remoteName)
 	})
@@ -97,7 +97,7 @@ func TestOpenBaoPluginReportsKubernetesPolicyFailure(t *testing.T) {
 
 	baoClient := setupMountedOpenBao(t, ctx)
 	kubeClient := newKubernetesClient(t)
-	namespace := fmt.Sprintf("openbao-secret-sync-denied-%d", time.Now().UnixNano()%1_000_000)
+	namespace := fmt.Sprintf("openbao-plugin-secrets-sync-denied-%d", time.Now().UnixNano()%1_000_000)
 	createNamespace(t, ctx, kubeClient, namespace)
 
 	writeKubernetesDestination(t, baoClient, namespace)
@@ -111,7 +111,7 @@ func TestOpenBaoPluginReportsKubernetesPolicyFailure(t *testing.T) {
 	})
 	writeSource(t, baoClient, "initial")
 
-	remoteName := fmt.Sprintf("openbao-secret-sync-authz-%d", time.Now().UnixNano())
+	remoteName := fmt.Sprintf("openbao-plugin-secrets-sync-authz-%d", time.Now().UnixNano())
 	association := write(t, baoClient, mountPath+"/associations/app/db", associationRequest(remoteName))
 	if ids := stringSlice(t, association.Data["sync_operation_ids"]); len(ids) != 1 {
 		t.Fatalf("sync_operation_ids = %v, want one operation", ids)
@@ -127,7 +127,7 @@ func TestOpenBaoPluginReportsKubernetesOwnershipLoss(t *testing.T) {
 	baoClient := setupMountedOpenBao(t, ctx)
 	namespace := env("E2E_KIND_NAMESPACE", defaultNamespace)
 	kubeClient := newKubernetesClient(t)
-	remoteName := fmt.Sprintf("openbao-secret-sync-owner-%d", time.Now().UnixNano())
+	remoteName := fmt.Sprintf("openbao-plugin-secrets-sync-owner-%d", time.Now().UnixNano())
 	t.Cleanup(func() {
 		deleteKubernetesSecret(ctx, kubeClient, namespace, remoteName)
 	})
@@ -161,7 +161,7 @@ func TestOpenBaoPluginReportsKubernetesImmutableSecret(t *testing.T) {
 	baoClient := setupMountedOpenBao(t, ctx)
 	namespace := env("E2E_KIND_NAMESPACE", defaultNamespace)
 	kubeClient := newKubernetesClient(t)
-	remoteName := fmt.Sprintf("openbao-secret-sync-immutable-%d", time.Now().UnixNano())
+	remoteName := fmt.Sprintf("openbao-plugin-secrets-sync-immutable-%d", time.Now().UnixNano())
 	t.Cleanup(func() {
 		deleteKubernetesSecret(ctx, kubeClient, namespace, remoteName)
 	})

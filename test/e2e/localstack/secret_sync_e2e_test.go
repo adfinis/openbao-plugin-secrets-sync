@@ -14,7 +14,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/adfinis/openbao-secret-sync/internal/providers/awssecretsmanager"
+	"github.com/adfinis/openbao-plugin-secrets-sync/internal/providers/awssecretsmanager"
 	"github.com/aws/aws-sdk-go-v2/aws"
 	awsconfig "github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/credentials"
@@ -50,7 +50,7 @@ func TestOpenBaoPluginSyncsToLocalStackSecretsManager(t *testing.T) {
 	mountPlugin(t, baoClient)
 
 	awsClient := newSecretsManagerClient(t, ctx)
-	remoteName := fmt.Sprintf("openbao-secret-sync-e2e/%d", time.Now().UnixNano())
+	remoteName := fmt.Sprintf("openbao-plugin-secrets-sync-e2e/%d", time.Now().UnixNano())
 	t.Cleanup(func() {
 		forceDeleteSecret(ctx, awsClient, remoteName)
 	})
