@@ -1302,6 +1302,61 @@ func TestAssociationSecretKeyQueuesAndSyncsPerSourceKey(t *testing.T) {
 	assertOperationObjectIDs(t, storage, updateOperationIDs, 2, outboxStatePending, []string{"password", "username"})
 }
 
+func TestAssociationUpdateMergesOmittedFieldsFromExistingRecord(t *testing.T) {
+	b := Backend(&logical.BackendConfig{})
+	storage := &logical.InmemStorage{}
+
+	writeAppDBSecretData(t, b, storage, map[string]interface{}{
+		"password": "initial",
+	})
+	createFakeDestination(t, b, storage, "default")
+	initialResp := handleRequest(t, b, storage, logical.UpdateOperation, "associations/app/db", map[string]interface{}{
+		"destination_type": providerTypeFake,
+		"destination_name": "default",
+		"name_template":    "prod/{{ path }}/{{ key }}",
+		"granularity":      syncGranularitySecretKey,
+		"format":           defaultAssociationFormat,
+		"enabled":          false,
+	})
+	assertNoErrorResponse(t, initialResp)
+	associationID := associationIDFromResponse(t, initialResp)
+
+	updateResp := handleRequest(t, b, storage, logical.UpdateOperation, "associations/app/db", map[string]interface{}{
+		"destination_type": providerTypeFake,
+		"destination_name": "default",
+		"delete_mode":      deleteModeDelete,
+	})
+	assertNoErrorResponse(t, updateResp)
+	updateAssociationID := associationIDFromResponse(t, updateResp)
+	if updateAssociationID != associationID {
+		t.Fatalf("updated association ID = %s, want %s", updateAssociationID, associationID)
+	}
+	if operationIDs := operationIDsFromResponse(t, updateResp); len(operationIDs) != 0 {
+		t.Fatalf("update operation IDs = %v, want none", operationIDs)
+	}
+
+	records, err := listAssociationsForPath(context.Background(), storage, "app/db")
+	if err != nil {
+		t.Fatalf("list associations: %v", err)
+	}
+	if len(records) != 1 {
+		t.Fatalf("association count = %d, want 1", len(records))
+	}
+	record := records[0]
+	if got := record.Granularity; got != syncGranularitySecretKey {
+		t.Fatalf("granularity = %s, want %s", got, syncGranularitySecretKey)
+	}
+	if got := record.NameTemplate; got != "prod/{{ path }}/{{ key }}" {
+		t.Fatalf("name_template = %s, want original template", got)
+	}
+	if record.Enabled {
+		t.Fatal("association should remain disabled when enabled is omitted")
+	}
+	if got := record.DeleteMode; got != deleteModeDelete {
+		t.Fatalf("delete_mode = %s, want %s", got, deleteModeDelete)
+	}
+}
+
 func TestAssociationSecretKeyRawFormat(t *testing.T) {
 	b := Backend(&logical.BackendConfig{})
 	storage := &logical.InmemStorage{}

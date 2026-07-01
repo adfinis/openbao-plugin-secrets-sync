@@ -306,7 +306,11 @@ func (b *secretSyncBackend) pathAssociationWrite(
 	if err != nil {
 		return logical.ErrorResponse(err.Error()), nil
 	}
-	record, err := b.associationRecordFromFieldData(ctx, req.Storage, path, data)
+	baseRecord, err := associationUpdateBase(ctx, req, path, data)
+	if err != nil {
+		return nil, err
+	}
+	record, err := b.associationRecordFromFieldData(ctx, req.Storage, path, data, baseRecord)
 	if err != nil {
 		return logical.ErrorResponse(err.Error()), nil
 	}
@@ -378,7 +382,7 @@ func (b *secretSyncBackend) pathAssociationPlan(
 	if response != nil || err != nil {
 		return response, err
 	}
-	record, err := b.associationRecordFromFieldData(ctx, req.Storage, path, data)
+	record, err := b.associationRecordFromFieldData(ctx, req.Storage, path, data, nil)
 	if err != nil {
 		return logical.ErrorResponse(err.Error()), nil
 	}
@@ -1124,6 +1128,7 @@ func (b *secretSyncBackend) associationRecordFromFieldData(
 	storage logical.Storage,
 	path string,
 	data *framework.FieldData,
+	base *associationRecord,
 ) (associationRecord, error) {
 	destinationType := data.Get("destination_type").(string)
 	destinationName := data.Get("destination_name").(string)
@@ -1132,11 +1137,12 @@ func (b *secretSyncBackend) associationRecordFromFieldData(
 		return associationRecord{}, err
 	}
 
-	granularity := stringFromField(data, "granularity", syncGranularitySecretPath)
-	format := stringFromField(data, "format", defaultAssociationFormat)
-	deleteMode := stringFromField(data, "delete_mode", defaultDeleteMode)
-	nameTemplate := stringFromField(data, "name_template", defaultNameTemplateForGranularity(granularity))
-	resolvedName := stringFromField(data, "resolved_name", "")
+	granularity := stringFromField(data, "granularity", associationGranularityDefault(base))
+	baseMatchesGranularity := base != nil && base.Granularity == granularity
+	format := stringFromField(data, "format", associationFormatDefault(base, baseMatchesGranularity))
+	deleteMode := stringFromField(data, "delete_mode", associationDeleteModeDefault(base))
+	nameTemplate := stringFromField(data, "name_template", associationNameTemplateDefault(base, granularity, baseMatchesGranularity))
+	resolvedName := stringFromField(data, "resolved_name", associationResolvedNameDefault(base, baseMatchesGranularity))
 	resolvedName, reservationName, err := resolveAssociationNames(
 		path,
 		destinationType,
@@ -1170,10 +1176,87 @@ func (b *secretSyncBackend) associationRecordFromFieldData(
 		Granularity:     granularity,
 		Format:          format,
 		DeleteMode:      deleteMode,
-		Enabled:         boolFromField(data, "enabled", true),
+		Enabled:         boolFromField(data, "enabled", associationEnabledDefault(base)),
 		CreatedTime:     now,
 		UpdatedTime:     now,
 	}, nil
+}
+
+func associationUpdateBase(
+	ctx context.Context,
+	req *logical.Request,
+	path string,
+	data *framework.FieldData,
+) (*associationRecord, error) {
+	if req.Operation != logical.UpdateOperation {
+		return nil, nil
+	}
+	destinationType := strings.TrimSpace(data.Get("destination_type").(string))
+	destinationName := strings.TrimSpace(data.Get("destination_name").(string))
+	if destinationType == "" || destinationName == "" {
+		return nil, nil
+	}
+	records, err := listAssociationsForPath(ctx, req.Storage, path)
+	if err != nil {
+		return nil, err
+	}
+	var match *associationRecord
+	for i := range records {
+		if records[i].DestinationType != destinationType || records[i].DestinationName != destinationName {
+			continue
+		}
+		if match != nil {
+			return nil, nil
+		}
+		match = &records[i]
+	}
+	return match, nil
+}
+
+func associationGranularityDefault(base *associationRecord) string {
+	if base != nil && base.Granularity != "" {
+		return base.Granularity
+	}
+	return syncGranularitySecretPath
+}
+
+func associationFormatDefault(base *associationRecord, baseMatchesGranularity bool) string {
+	if baseMatchesGranularity && base.Format != "" {
+		return base.Format
+	}
+	return defaultAssociationFormat
+}
+
+func associationDeleteModeDefault(base *associationRecord) string {
+	if base != nil && base.DeleteMode != "" {
+		return base.DeleteMode
+	}
+	return defaultDeleteMode
+}
+
+func associationNameTemplateDefault(
+	base *associationRecord,
+	granularity string,
+	baseMatchesGranularity bool,
+) string {
+	if baseMatchesGranularity && base.NameTemplate != "" {
+		return base.NameTemplate
+	}
+	return defaultNameTemplateForGranularity(granularity)
+}
+
+func associationResolvedNameDefault(base *associationRecord, baseMatchesGranularity bool) string {
+	if baseMatchesGranularity {
+		return base.ResolvedName
+	}
+	return ""
+}
+
+func associationEnabledDefault(base *associationRecord) bool {
+	if base != nil {
+		return base.Enabled
+	}
+	return true
 }
 
 func (b *secretSyncBackend) associationProvider(
