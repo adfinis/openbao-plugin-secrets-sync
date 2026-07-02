@@ -1,0 +1,477 @@
+package backend
+
+import (
+	"context"
+	"fmt"
+	"testing"
+
+	"github.com/adfinis/openbao-plugin-secrets-sync/internal/providers"
+	"github.com/adfinis/openbao-plugin-secrets-sync/internal/providers/awssecretsmanager"
+	"github.com/adfinis/openbao-plugin-secrets-sync/internal/providers/gitlab"
+	"github.com/adfinis/openbao-plugin-secrets-sync/internal/providers/kubernetessecrets"
+)
+
+func TestDestinationValidateSupportsRead(t *testing.T) {
+	env := newBackendTestEnv(t)
+	env.createFakeDestination("default")
+
+	resp := env.read("destinations/fake/default/validate")
+	assertNoErrorResponse(t, resp)
+	assertResponseValue(t, resp, "valid", true)
+}
+
+func TestDestinationCheckReportsReady(t *testing.T) {
+	env := newBackendTestEnv(t)
+
+	env.createFakeDestination("primary")
+
+	readyResp := env.read("destinations/fake/primary/check")
+	assertNoErrorResponse(t, readyResp)
+	assertResponseValue(t, readyResp, "ready", true)
+	assertResponseValue(t, readyResp, "valid", true)
+	assertResponseValue(t, readyResp, "healthy", true)
+	assertResponseValue(t, readyResp, "health_checked", true)
+	assertStringSlice(t, readyResp.Data["blockers"].([]string), []string{})
+}
+
+func TestDestinationCheckReportsValidationFailure(t *testing.T) {
+	env := newBackendTestEnv(t)
+
+	now := nowUTC().Format(timeFormatRFC3339)
+	if err := putDestination(context.Background(), env.storage, destinationRecord{
+		Type:        providerTypeFake,
+		Name:        "invalid",
+		CreatedTime: now,
+		UpdatedTime: now,
+	}); err != nil {
+		t.Fatalf("write invalid destination fixture: %v", err)
+	}
+	invalidResp := env.read("destinations/fake/invalid/check")
+	assertNoErrorResponse(t, invalidResp)
+	assertResponseValue(t, invalidResp, "ready", false)
+	assertResponseValue(t, invalidResp, "valid", false)
+	assertResponseValue(t, invalidResp, "health_checked", false)
+	assertResponseValue(t, invalidResp, "validation_error_class", string(providers.ErrorClassValidation))
+	assertStringSlice(t, invalidResp.Data["blockers"].([]string), []string{"validation_failed"})
+}
+
+func TestDestinationCheckReportsHealthFailure(t *testing.T) {
+	env := newBackendTestEnv(t)
+
+	env.createFakeDestination("unhealthy")
+	unhealthyResp := env.read("destinations/fake/unhealthy/check")
+	assertNoErrorResponse(t, unhealthyResp)
+	assertResponseValue(t, unhealthyResp, "ready", false)
+	assertResponseValue(t, unhealthyResp, "valid", true)
+	assertResponseValue(t, unhealthyResp, "healthy", false)
+	assertResponseValue(t, unhealthyResp, "health_error_class", string(providers.ErrorClassUnavailable))
+	assertStringSlice(t, unhealthyResp.Data["blockers"].([]string), []string{"health_failed"})
+}
+
+func TestDestinationCheckReportsDisabled(t *testing.T) {
+	env := newBackendTestEnv(t)
+
+	disabledResp := env.update(
+		"destinations/fake/disabled",
+		map[string]interface{}{
+			"description": "disabled destination",
+			"disabled":    true,
+		},
+	)
+	if disabledResp != nil && disabledResp.IsError() {
+		t.Fatalf("unexpected disabled destination write error: %v", disabledResp.Error())
+	}
+	disabledCheckResp := env.read("destinations/fake/disabled/check")
+	assertNoErrorResponse(t, disabledCheckResp)
+	assertResponseValue(t, disabledCheckResp, "ready", false)
+	assertResponseValue(t, disabledCheckResp, "valid", true)
+	assertResponseValue(t, disabledCheckResp, "health_checked", false)
+	assertStringSlice(t, disabledCheckResp.Data["blockers"].([]string), []string{"destination_disabled"})
+}
+
+func TestDestinationWriteValidatesProviderConfig(t *testing.T) {
+	env := newBackendTestEnv(t)
+
+	resp := env.update("destinations/fake/invalid")
+	if resp == nil || !resp.IsError() {
+		t.Fatalf("invalid destination write response = %#v, want error", resp)
+	}
+	record, err := getDestination(context.Background(), env.storage, providerTypeFake, "invalid")
+	if err != nil {
+		t.Fatalf("read invalid destination: %v", err)
+	}
+	if record != nil {
+		t.Fatalf("invalid destination was stored: %#v", record)
+	}
+}
+
+func TestDestinationWriteRejectsCrossProviderConfig(t *testing.T) {
+	env := newBackendTestEnv(t)
+
+	resp := env.update("destinations/k8s/prod", map[string]interface{}{
+		kubernetessecrets.ConfigKeyNamespace: "apps",
+		gitlab.ConfigKeyToken:                "glpat-secret",
+	})
+	if resp == nil || !resp.IsError() {
+		t.Fatalf("cross-provider destination response = %#v, want error", resp)
+	}
+	record, err := getDestination(context.Background(), env.storage, kubernetessecrets.ProviderType, "prod")
+	if err != nil {
+		t.Fatalf("read rejected k8s destination: %v", err)
+	}
+	if record != nil {
+		t.Fatalf("cross-provider destination was stored: %#v", record)
+	}
+}
+
+func TestDestinationLifecycle(t *testing.T) {
+	env := newBackendTestEnv(t)
+
+	env.createFakeDestination("primary")
+	readResp := env.read("destinations/fake/primary")
+	assertNoErrorResponse(t, readResp)
+	assertResponseValue(t, readResp, "name", "primary")
+	if _, ok := readResp.Data["sensitive_config"]; !ok {
+		t.Fatal("destination read must include redacted sensitive_config")
+	}
+
+	listResp := env.list("destinations/fake")
+	assertNoErrorResponse(t, listResp)
+	keys := listResp.Data["keys"].([]string)
+	if len(keys) != 1 || keys[0] != "primary" {
+		t.Fatalf("destination keys = %v, want [primary]", keys)
+	}
+
+	deleteResp := env.delete("destinations/fake/primary")
+	if deleteResp != nil && deleteResp.IsError() {
+		t.Fatalf("unexpected destination delete error: %v", deleteResp.Error())
+	}
+	readDeletedResp := env.read("destinations/fake/primary")
+	if readDeletedResp != nil {
+		t.Fatalf("deleted destination response = %#v, want nil", readDeletedResp)
+	}
+}
+
+func TestDestinationListPagination(t *testing.T) {
+	env := newBackendTestEnv(t)
+
+	for _, name := range []string{"alpha", "bravo", "charlie"} {
+		env.createFakeDestination(name)
+	}
+
+	assertListKeys(t,
+		env.list("destinations/fake"),
+		[]string{"alpha", "bravo", "charlie"},
+	)
+	assertListKeys(t,
+		env.list("destinations/fake", map[string]interface{}{
+			"limit": 2,
+		}),
+		[]string{"alpha", "bravo"},
+	)
+	assertListKeys(t,
+		env.list("destinations/fake", map[string]interface{}{
+			"after": "alpha",
+			"limit": 1,
+		}),
+		[]string{"bravo"},
+	)
+	assertListKeys(t,
+		env.list("destinations/fake", map[string]interface{}{
+			"after": "alpha-missing",
+			"limit": 1,
+		}),
+		[]string{"bravo"},
+	)
+	assertListKeys(t,
+		env.list("destinations/fake", map[string]interface{}{
+			"limit": 0,
+		}),
+		[]string{"alpha", "bravo", "charlie"},
+	)
+}
+
+func TestDestinationPolicyPrefixesNormalizeAndRead(t *testing.T) {
+	env := newBackendTestEnv(t)
+
+	writeResp := env.update(
+		"destinations/fake/restricted",
+		map[string]interface{}{
+			destinationAllowedSourcePathPrefixesField:   "team/api, app ,team/api",
+			destinationAllowedResolvedNamePrefixesField: "prod/app/, team/api",
+		},
+	)
+	if writeResp != nil && writeResp.IsError() {
+		t.Fatalf("unexpected destination write error: %v", writeResp.Error())
+	}
+
+	readResp := env.read("destinations/fake/restricted")
+	assertNoErrorResponse(t, readResp)
+	sourcePrefixes, ok := readResp.Data["allowed_source_path_prefixes"].([]string)
+	if !ok {
+		t.Fatalf("allowed_source_path_prefixes = %T, want []string", readResp.Data["allowed_source_path_prefixes"])
+	}
+	assertStringSlice(t, sourcePrefixes, []string{"app", "team/api"})
+	namePrefixes, ok := readResp.Data["allowed_resolved_name_prefixes"].([]string)
+	if !ok {
+		t.Fatalf("allowed_resolved_name_prefixes = %T, want []string", readResp.Data["allowed_resolved_name_prefixes"])
+	}
+	assertStringSlice(t, namePrefixes, []string{"prod/app/", "team/api"})
+}
+
+func TestAWSDestinationConfigLifecycle(t *testing.T) {
+	env := newBackendTestEnv(t)
+
+	writeResp := env.update("destinations/aws-sm/prod", map[string]interface{}{
+		"description":                             "aws production",
+		awssecretsmanager.ConfigKeyRegion:         "eu-central-1",
+		awssecretsmanager.ConfigKeyEndpointURL:    "http://localhost:4566",
+		awssecretsmanager.ConfigKeyEndpointPolicy: awssecretsmanager.EndpointPolicyLocal,
+		awssecretsmanager.ConfigKeyAuthMode:       awssecretsmanager.AuthModeAssumeRole,
+		awssecretsmanager.ConfigKeyRoleARN:        "arn:aws:iam::123456789012:role/openbao-plugin-secrets-sync",
+		awssecretsmanager.ConfigKeyExternalID:     "tenant-1",
+		awssecretsmanager.ConfigKeySessionName:    "openbao-sync",
+	})
+	if writeResp != nil && writeResp.IsError() {
+		t.Fatalf("unexpected destination write error: %v", writeResp.Error())
+	}
+
+	assertStoredAWSDestinationConfig(t, env.storage)
+	assertReadAWSDestinationConfig(t, env.b, env.storage)
+
+	validateResp := env.update("destinations/aws-sm/prod/validate")
+	assertNoErrorResponse(t, validateResp)
+	assertResponseValue(t, validateResp, "valid", true)
+}
+
+func TestKubernetesDestinationConfigLifecycle(t *testing.T) {
+	env := newBackendTestEnv(t)
+
+	writeResp := env.update("destinations/k8s/prod", map[string]interface{}{
+		"description":                          "kubernetes production",
+		kubernetessecrets.ConfigKeyNamespace:   "apps",
+		kubernetessecrets.ConfigKeyAuthMode:    kubernetessecrets.AuthModeInCluster,
+		kubernetessecrets.ConfigKeyKubeContext: "",
+	})
+	if writeResp != nil && writeResp.IsError() {
+		t.Fatalf("unexpected destination write error: %v", writeResp.Error())
+	}
+
+	readResp := env.read("destinations/k8s/prod")
+	assertNoErrorResponse(t, readResp)
+	config := readResp.Data["config"].(map[string]interface{})
+	if got := config[kubernetessecrets.ConfigKeyNamespace]; got != "apps" {
+		t.Fatalf("k8s destination namespace = %v, want apps", got)
+	}
+	if got := config[kubernetessecrets.ConfigKeyAuthMode]; got != kubernetessecrets.AuthModeInCluster {
+		t.Fatalf("k8s auth_mode = %v, want %s", got, kubernetessecrets.AuthModeInCluster)
+	}
+	sensitiveConfig := readResp.Data["sensitive_config"].(map[string]interface{})
+	if got := sensitiveConfig["configured"]; got != false {
+		t.Fatalf("k8s sensitive_config configured = %v, want false", got)
+	}
+
+	validateResp := env.update("destinations/k8s/prod/validate")
+	assertNoErrorResponse(t, validateResp)
+	assertResponseValue(t, validateResp, "valid", true)
+	capabilities := validateResp.Data["capabilities"].(map[string]interface{})
+	if got := capabilities["supports_value_readback"]; got != true {
+		t.Fatalf("k8s supports_value_readback = %v, want true", got)
+	}
+}
+
+func TestGitLabDestinationConfigLifecycle(t *testing.T) {
+	env := newBackendTestEnv(t)
+
+	writeResp := env.update("destinations/gitlab/prod", map[string]interface{}{
+		"description":                     "gitlab production",
+		gitlab.ConfigKeyBaseURL:           "https://gitlab.example.com",
+		gitlab.ConfigKeyProjectID:         "platform/app",
+		gitlab.ConfigKeyEnvironmentScope:  "production",
+		gitlab.ConfigKeyProtected:         "true",
+		gitlab.ConfigKeyMasked:            "false",
+		gitlab.ConfigKeyHidden:            "false",
+		gitlab.ConfigKeyVariableRaw:       "true",
+		gitlab.ConfigKeyVariableType:      gitlab.VariableTypeEnvVar,
+		gitlab.ConfigKeyAllowInsecureHTTP: fmt.Sprint(true),
+		gitlab.ConfigKeyToken:             "glpat-secret",
+	})
+	if writeResp != nil && writeResp.IsError() {
+		t.Fatalf("unexpected destination write error: %v", writeResp.Error())
+	}
+
+	storedDestination, err := getDestination(context.Background(), env.storage, gitlab.ProviderType, "prod")
+	if err != nil {
+		t.Fatalf("read stored gitlab destination: %v", err)
+	}
+	if _, ok := storedDestination.Config[gitlab.ConfigKeyToken]; ok {
+		t.Fatal("gitlab token must not be stored in destination config")
+	}
+	if got := storedDestination.Config[gitlab.ConfigKeyProjectID]; got != "platform/app" {
+		t.Fatalf("gitlab project_id = %v, want platform/app", got)
+	}
+	assertStringMapValue(t, storedDestination.Config, gitlab.ConfigKeyAllowInsecureHTTP, fmt.Sprint(true))
+	storedSensitiveConfig, err := getDestinationSensitiveConfig(
+		context.Background(),
+		env.storage,
+		gitlab.ProviderType,
+		"prod",
+	)
+	if err != nil {
+		t.Fatalf("read gitlab sensitive config: %v", err)
+	}
+	if got := storedSensitiveConfig.Config[gitlab.ConfigKeyToken]; got != "glpat-secret" {
+		t.Fatalf("stored gitlab token = %v, want glpat-secret", got)
+	}
+
+	readResp := env.read("destinations/gitlab/prod")
+	assertNoErrorResponse(t, readResp)
+	config := readResp.Data["config"].(map[string]interface{})
+	if _, ok := config[gitlab.ConfigKeyToken]; ok {
+		t.Fatal("gitlab token must not be returned in config")
+	}
+	assertInterfaceMapValue(t, config, gitlab.ConfigKeyAllowInsecureHTTP, fmt.Sprint(true))
+	sensitiveConfig := readResp.Data["sensitive_config"].(map[string]interface{})
+	if got := sensitiveConfig["configured"]; got != true {
+		t.Fatalf("gitlab sensitive_config configured = %v, want true", got)
+	}
+	keys := sensitiveConfig["keys"].([]string)
+	if len(keys) != 1 || keys[0] != gitlab.ConfigKeyToken {
+		t.Fatalf("gitlab sensitive keys = %v, want [%s]", keys, gitlab.ConfigKeyToken)
+	}
+
+	validateResp := env.update("destinations/gitlab/prod/validate")
+	assertNoErrorResponse(t, validateResp)
+	assertResponseValue(t, validateResp, "valid", true)
+	capabilities := validateResp.Data["capabilities"].(map[string]interface{})
+	if got := capabilities["supports_secret_key"]; got != true {
+		t.Fatalf("gitlab supports_secret_key = %v, want true", got)
+	}
+}
+
+func TestDestinationSensitiveConfigDeletion(t *testing.T) {
+	env := newBackendTestEnv(t)
+
+	writeResp := env.update("destinations/aws-sm/prod", map[string]interface{}{
+		awssecretsmanager.ConfigKeyAuthMode:   awssecretsmanager.AuthModeAssumeRole,
+		awssecretsmanager.ConfigKeyRoleARN:    "arn:aws:iam::123456789012:role/openbao-plugin-secrets-sync",
+		awssecretsmanager.ConfigKeyExternalID: "tenant-1",
+	})
+	if writeResp != nil && writeResp.IsError() {
+		t.Fatalf("unexpected destination write error: %v", writeResp.Error())
+	}
+
+	clearResp := env.update("destinations/aws-sm/prod", map[string]interface{}{
+		awssecretsmanager.ConfigKeyExternalID: "",
+	})
+	if clearResp != nil && clearResp.IsError() {
+		t.Fatalf("unexpected destination update error: %v", clearResp.Error())
+	}
+	sensitiveConfig, err := getDestinationSensitiveConfig(
+		context.Background(),
+		env.storage,
+		awssecretsmanager.ProviderType,
+		"prod",
+	)
+	if err != nil {
+		t.Fatalf("read stored sensitive config: %v", err)
+	}
+	if sensitiveConfig != nil {
+		t.Fatalf("sensitive config after clear = %#v, want nil", sensitiveConfig)
+	}
+}
+
+func TestDestinationWriteMigratesSensitiveKeysFromLegacyConfig(t *testing.T) {
+	env := newBackendTestEnv(t)
+	if err := putDestination(context.Background(), env.storage, destinationRecord{
+		Type: awssecretsmanager.ProviderType,
+		Name: "prod",
+		Config: map[string]string{
+			awssecretsmanager.ConfigKeyAuthMode:   awssecretsmanager.AuthModeAssumeRole,
+			awssecretsmanager.ConfigKeyRoleARN:    "arn:aws:iam::123456789012:role/openbao-plugin-secrets-sync",
+			awssecretsmanager.ConfigKeyExternalID: "tenant-legacy",
+		},
+	}); err != nil {
+		t.Fatalf("write legacy destination: %v", err)
+	}
+
+	updateResp := env.update("destinations/aws-sm/prod", map[string]interface{}{
+		"description": "migrated",
+	})
+	if updateResp != nil && updateResp.IsError() {
+		t.Fatalf("unexpected destination update error: %v", updateResp.Error())
+	}
+	storedDestination, err := getDestination(context.Background(), env.storage, awssecretsmanager.ProviderType, "prod")
+	if err != nil {
+		t.Fatalf("read stored destination: %v", err)
+	}
+	if _, ok := storedDestination.Config[awssecretsmanager.ConfigKeyExternalID]; ok {
+		t.Fatal("legacy external_id must be removed from non-sensitive destination config")
+	}
+	storedSensitiveConfig, err := getDestinationSensitiveConfig(
+		context.Background(),
+		env.storage,
+		awssecretsmanager.ProviderType,
+		"prod",
+	)
+	if err != nil {
+		t.Fatalf("read stored sensitive config: %v", err)
+	}
+	if got := storedSensitiveConfig.Config[awssecretsmanager.ConfigKeyExternalID]; got != "tenant-legacy" {
+		t.Fatalf("migrated external_id = %q, want tenant-legacy", got)
+	}
+}
+
+func TestDestinationConfigResponseFiltersSensitiveKeys(t *testing.T) {
+	response := destinationConfigResponse(map[string]string{
+		awssecretsmanager.ConfigKeyRegion:          "eu-central-1",
+		awssecretsmanager.ConfigKeyExternalID:      "tenant-1",
+		awssecretsmanager.ConfigKeySecretAccessKey: "secret",
+	})
+	if got := response[awssecretsmanager.ConfigKeyRegion]; got != "eu-central-1" {
+		t.Fatalf("region = %v, want eu-central-1", got)
+	}
+	if _, ok := response[awssecretsmanager.ConfigKeyExternalID]; ok {
+		t.Fatal("response must not include external_id")
+	}
+	if _, ok := response[awssecretsmanager.ConfigKeySecretAccessKey]; ok {
+		t.Fatal("response must not include secret_access_key")
+	}
+}
+
+func TestDestinationValidateAndHealth(t *testing.T) {
+	env := newBackendTestEnv(t)
+
+	env.createFakeDestination("primary")
+	now := nowUTC().Format(timeFormatRFC3339)
+	if err := putDestination(context.Background(), env.storage, destinationRecord{
+		Type:        providerTypeFake,
+		Name:        "invalid",
+		CreatedTime: now,
+		UpdatedTime: now,
+	}); err != nil {
+		t.Fatalf("write invalid destination fixture: %v", err)
+	}
+	env.createFakeDestination("unhealthy")
+
+	validateResp := env.update("destinations/fake/primary/validate")
+	assertNoErrorResponse(t, validateResp)
+	assertResponseValue(t, validateResp, "valid", true)
+	if _, ok := validateResp.Data["capabilities"]; !ok {
+		t.Fatal("validate response must include capabilities")
+	}
+
+	invalidResp := env.update("destinations/fake/invalid/validate")
+	assertNoErrorResponse(t, invalidResp)
+	assertResponseValue(t, invalidResp, "valid", false)
+	assertResponseValue(t, invalidResp, "error_class", string(providers.ErrorClassValidation))
+
+	healthResp := env.read("destinations/fake/primary/health")
+	assertNoErrorResponse(t, healthResp)
+	assertResponseValue(t, healthResp, "healthy", true)
+
+	unhealthyResp := env.read("destinations/fake/unhealthy/health")
+	assertNoErrorResponse(t, unhealthyResp)
+	assertResponseValue(t, unhealthyResp, "healthy", false)
+	assertResponseValue(t, unhealthyResp, "error_class", string(providers.ErrorClassUnavailable))
+}

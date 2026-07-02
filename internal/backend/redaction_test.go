@@ -14,8 +14,7 @@ import (
 const redactionCanary = "secret-canary-redaction-boundary"
 
 func TestSecurityBoundaryDestinationReadRedactsSensitiveConfig(t *testing.T) {
-	b := Backend(&logical.BackendConfig{})
-	storage := &logical.InmemStorage{}
+	env := newBackendTestEnv(t)
 
 	testCases := []struct {
 		name              string
@@ -61,10 +60,10 @@ func TestSecurityBoundaryDestinationReadRedactsSensitiveConfig(t *testing.T) {
 
 	for _, testCase := range testCases {
 		t.Run(testCase.name, func(t *testing.T) {
-			resp := handleRequest(t, b, storage, logical.UpdateOperation, testCase.path, testCase.fields)
+			resp := env.update(testCase.path, testCase.fields)
 			assertNilOrNoErrorResponse(t, resp)
 
-			readResp := handleRequest(t, b, storage, logical.ReadOperation, testCase.path, nil)
+			readResp := env.read(testCase.path)
 			assertNoErrorResponse(t, readResp)
 			assertDoesNotContainRedactionCanary(t, readResp.Data)
 
@@ -86,24 +85,23 @@ func TestSecurityBoundaryDestinationReadRedactsSensitiveConfig(t *testing.T) {
 				t.Fatalf("sensitive_config.configured = %v, want true", got)
 			}
 			assertStringSlice(t, stringSliceFromMap(t, sensitiveConfig, "keys"), testCase.redactedKeyOrder)
-			assertSensitiveConfigStorageBoundary(t, storage, testCase.path, testCase.sensitiveValues)
+			assertSensitiveConfigStorageBoundary(t, env.storage, testCase.path, testCase.sensitiveValues)
 		})
 	}
 }
 
 func TestSecurityBoundarySourcePayloadDoesNotLeakThroughOperationalResponses(t *testing.T) {
-	b := Backend(&logical.BackendConfig{})
-	storage := &logical.InmemStorage{}
+	env := newBackendTestEnv(t)
 
-	writeAppDBSecret(t, b, storage, redactionCanary)
-	createFakeDestination(t, b, storage, "default")
-	markAppDBSyncable(t, b, storage)
+	env.writeAppDBSecret(redactionCanary)
+	env.createFakeDestination("default")
+	env.markAppDBSyncable()
 
-	planResp := planDefaultFakeAssociation(t, b, storage, "prod/app/db")
+	planResp := env.planDefaultFakeAssociation("prod/app/db")
 	assertNoErrorResponse(t, planResp)
 	assertDoesNotContainRedactionCanary(t, planResp.Data)
 
-	associationResp := handleRequest(t, b, storage, logical.UpdateOperation, "associations/app/db", map[string]interface{}{
+	associationResp := env.update("associations/app/db", map[string]interface{}{
 		"destination_type": providerTypeFake,
 		"destination_name": "default",
 		"resolved_name":    "prod/app/db",
@@ -115,34 +113,34 @@ func TestSecurityBoundarySourcePayloadDoesNotLeakThroughOperationalResponses(t *
 	assertDoesNotContainRedactionCanary(t, associationResp.Data)
 	operationID := requireSingleOperationID(t, operationIDsFromResponse(t, associationResp), "association")
 
-	queueResp := handleRequest(t, b, storage, logical.ReadOperation, "queue", nil)
+	queueResp := env.read("queue")
 	assertNoErrorResponse(t, queueResp)
 	assertDoesNotContainRedactionCanary(t, queueResp.Data)
 
-	operationResp := handleRequest(t, b, storage, logical.ReadOperation, "queue/"+operationID, nil)
+	operationResp := env.read("queue/" + operationID)
 	assertNoErrorResponse(t, operationResp)
 	assertDoesNotContainRedactionCanary(t, operationResp.Data)
 
-	statusPendingResp := handleRequest(t, b, storage, logical.ReadOperation, "status/app/db", nil)
+	statusPendingResp := env.read("status/app/db")
 	assertNoErrorResponse(t, statusPendingResp)
 	assertDoesNotContainRedactionCanary(t, statusPendingResp.Data)
 
-	acknowledgeRestoreGuard(t, b, storage)
-	drainResp := handleRequest(t, b, storage, logical.UpdateOperation, "queue/drain", map[string]interface{}{
+	env.acknowledgeRestoreGuard()
+	drainResp := env.update("queue/drain", map[string]interface{}{
 		"max_operations": 10,
 	})
 	assertNoErrorResponse(t, drainResp)
 	assertDoesNotContainRedactionCanary(t, drainResp.Data)
 
-	statusSyncedResp := handleRequest(t, b, storage, logical.ReadOperation, "status/app/db", nil)
+	statusSyncedResp := env.read("status/app/db")
 	assertNoErrorResponse(t, statusSyncedResp)
 	assertDoesNotContainRedactionCanary(t, statusSyncedResp.Data)
 
-	reconcilePlanResp := handleRequest(t, b, storage, logical.ReadOperation, "reconcile/app/db/plan", nil)
+	reconcilePlanResp := env.read("reconcile/app/db/plan")
 	assertNoErrorResponse(t, reconcilePlanResp)
 	assertDoesNotContainRedactionCanary(t, reconcilePlanResp.Data)
 
-	reconcileApplyResp := handleRequest(t, b, storage, logical.UpdateOperation, "reconcile/app/db", nil)
+	reconcileApplyResp := env.update("reconcile/app/db")
 	assertNoErrorResponse(t, reconcileApplyResp)
 	assertDoesNotContainRedactionCanary(t, reconcileApplyResp.Data)
 }
