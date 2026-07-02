@@ -744,22 +744,59 @@ func TestHealthPassesDestinationConfigToFactory(t *testing.T) {
 }
 
 func TestErrorClassification(t *testing.T) {
-	tests := map[string]providers.ErrorClass{
-		"ThrottlingException":         providers.ErrorClassRateLimit,
-		"TooManyRequestsException":    providers.ErrorClassRateLimit,
-		"InternalServiceError":        providers.ErrorClassUnavailable,
-		"ServiceUnavailableException": providers.ErrorClassUnavailable,
-		"UnrecognizedClientException": providers.ErrorClassAuthn,
-		"InvalidSignatureException":   providers.ErrorClassAuthn,
-		"AccessDeniedException":       providers.ErrorClassAuthz,
-		"InvalidParameterException":   providers.ErrorClassValidation,
-		"ResourceExistsException":     providers.ErrorClassCollision,
-		"SomethingUnexpected":         providers.ErrorClassInternal,
+	tests := map[string]struct {
+		err      error
+		expected providers.ErrorClass
+	}{
+		"ThrottlingException": {
+			err:      apiError("ThrottlingException"),
+			expected: providers.ErrorClassRateLimit,
+		},
+		"TooManyRequestsException": {
+			err:      apiError("TooManyRequestsException"),
+			expected: providers.ErrorClassRateLimit,
+		},
+		"InternalServiceError": {
+			err:      apiError("InternalServiceError"),
+			expected: providers.ErrorClassUnavailable,
+		},
+		"ServiceUnavailableException": {
+			err:      apiError("ServiceUnavailableException"),
+			expected: providers.ErrorClassUnavailable,
+		},
+		"context deadline exceeded": {
+			err:      context.DeadlineExceeded,
+			expected: providers.ErrorClassUnavailable,
+		},
+		"UnrecognizedClientException": {
+			err:      apiError("UnrecognizedClientException"),
+			expected: providers.ErrorClassAuthn,
+		},
+		"InvalidSignatureException": {
+			err:      apiError("InvalidSignatureException"),
+			expected: providers.ErrorClassAuthn,
+		},
+		"AccessDeniedException": {
+			err:      apiError("AccessDeniedException"),
+			expected: providers.ErrorClassAuthz,
+		},
+		"InvalidParameterException": {
+			err:      apiError("InvalidParameterException"),
+			expected: providers.ErrorClassValidation,
+		},
+		"ResourceExistsException": {
+			err:      apiError("ResourceExistsException"),
+			expected: providers.ErrorClassCollision,
+		},
+		"SomethingUnexpected": {
+			err:      apiError("SomethingUnexpected"),
+			expected: providers.ErrorClassInternal,
+		},
 	}
-	for code, expected := range tests {
-		t.Run(code, func(t *testing.T) {
-			if got := classifyAWSError(apiError(code)); got != expected {
-				t.Fatalf("classify = %s, want %s", got, expected)
+	for name, tt := range tests {
+		t.Run(name, func(t *testing.T) {
+			if got := classifyAWSError(tt.err); got != tt.expected {
+				t.Fatalf("classify = %s, want %s", got, tt.expected)
 			}
 		})
 	}

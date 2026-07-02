@@ -476,6 +476,10 @@ func TestErrorClassification(t *testing.T) {
 			err:           apierrors.NewServerTimeout(secretsResource, "get", 1),
 			expectedClass: providers.ErrorClassUnavailable,
 		},
+		"context deadline exceeded": {
+			err:           context.DeadlineExceeded,
+			expectedClass: providers.ErrorClassUnavailable,
+		},
 		"already exists": {
 			err:           apierrors.NewAlreadyExists(secretsResource, testResolvedName),
 			expectedClass: providers.ErrorClassCollision,
