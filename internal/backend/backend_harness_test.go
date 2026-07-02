@@ -142,6 +142,9 @@ func assertStoredAWSDestinationConfig(t *testing.T, storage logical.Storage) {
 	if _, ok := storedDestination.Config[awssecretsmanager.ConfigKeyExternalID]; ok {
 		t.Fatal("external_id must not be stored in non-sensitive destination config")
 	}
+	if got := storedDestination.Config[awssecretsmanager.ConfigKeyDeleteRecoveryWindowDays]; got != "14" {
+		t.Fatalf("stored delete_recovery_window_days = %q, want 14", got)
+	}
 	storedSensitiveConfig, err := getDestinationSensitiveConfig(
 		context.Background(),
 		storage,
@@ -183,6 +186,9 @@ func assertReadAWSDestinationConfig(t *testing.T, b *secretSyncBackend, storage 
 	}
 	if got := config[awssecretsmanager.ConfigKeyAuthMode]; got != awssecretsmanager.AuthModeAssumeRole {
 		t.Fatalf("aws auth_mode = %v, want %s", got, awssecretsmanager.AuthModeAssumeRole)
+	}
+	if got := config[awssecretsmanager.ConfigKeyDeleteRecoveryWindowDays]; got != "14" {
+		t.Fatalf("aws delete_recovery_window_days = %v, want 14", got)
 	}
 	if _, ok := config[awssecretsmanager.ConfigKeyExternalID]; ok {
 		t.Fatal("read config must not include external_id")

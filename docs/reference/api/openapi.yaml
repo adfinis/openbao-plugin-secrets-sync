@@ -869,6 +869,12 @@ components:
           description: AWS STS external id. Stored seal-wrapped and redacted on read.
         session_name:
           type: string
+        delete_recovery_window_days:
+          type: integer
+          minimum: 7
+          maximum: 30
+          default: 7
+          description: AWS Secrets Manager scheduled-delete recovery window in days.
         access_key_id:
           type: string
           writeOnly: true

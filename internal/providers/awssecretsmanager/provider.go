@@ -50,6 +50,8 @@ const (
 	// ConfigKeySessionToken configures the optional static AWS session token.
 	// Static auth is intentionally unsupported for now.
 	ConfigKeySessionToken = "session_token"
+	// ConfigKeyDeleteRecoveryWindowDays configures AWS Secrets Manager scheduled-delete recovery days.
+	ConfigKeyDeleteRecoveryWindowDays = "delete_recovery_window_days"
 
 	// AuthModeDefault uses the AWS SDK default credential chain.
 	AuthModeDefault = "default"
@@ -67,6 +69,8 @@ const (
 	secretValueMaxBytes = 65536
 
 	defaultDeleteRecoveryWindowDays = 7
+	minDeleteRecoveryWindowDays     = 7
+	maxDeleteRecoveryWindowDays     = 30
 	defaultHTTPTimeout              = 30 * time.Second
 	endpointResolutionTimeout       = 5 * time.Second
 
@@ -103,6 +107,11 @@ type secretsManagerClient interface {
 		*secretsmanager.DeleteSecretInput,
 		...func(*secretsmanager.Options),
 	) (*secretsmanager.DeleteSecretOutput, error)
+	RestoreSecret(
+		context.Context,
+		*secretsmanager.RestoreSecretInput,
+		...func(*secretsmanager.Options),
+	) (*secretsmanager.RestoreSecretOutput, error)
 	TagResource(
 		context.Context,
 		*secretsmanager.TagResourceInput,
@@ -164,16 +173,23 @@ func (p Provider) Plan(ctx context.Context, req providers.PlanRequest) (*provide
 		SecretId: aws.String(req.ResolvedName),
 	})
 	if isResourceNotFound(err) {
-		return &providers.PlanResult{Action: providers.PlanActionCreate}, nil
+		return &providers.PlanResult{
+			Action:  providers.PlanActionCreate,
+			Message: "aws-sm secret is missing and will be created",
+		}, nil
 	}
 	if err != nil {
 		return blockedPlan(classifyAWSError(err)), nil
 	}
-	if describe.DeletedDate != nil || !ownedByRequest(describe.Tags, ownershipIdentityFromPlan(req)) {
+	if !ownedByRequest(describe.Tags, ownershipIdentityFromPlan(req)) {
+		message := "aws-sm secret exists but is not owned by this association"
+		if describe.DeletedDate != nil {
+			message = "aws-sm secret is scheduled for deletion but is not owned by this association"
+		}
 		return &providers.PlanResult{
 			Action:     providers.PlanActionConflict,
 			ErrorClass: providers.ErrorClassCollision,
-			Message:    "aws-sm secret exists but is not owned by this association",
+			Message:    message,
 		}, nil
 	}
 	if remoteSourceVersionNewer(describe.Tags, req.SourceVersion) {
@@ -183,10 +199,28 @@ func (p Provider) Plan(ctx context.Context, req providers.PlanRequest) (*provide
 			Message:    "aws-sm secret has newer managed source version",
 		}, nil
 	}
-	if tagValue(describe.Tags, tagPayloadSHA256) == req.PayloadSHA256 {
-		return &providers.PlanResult{Action: providers.PlanActionNoop}, nil
+	if describe.DeletedDate != nil {
+		return &providers.PlanResult{
+			Action:  providers.PlanActionUpdate,
+			Message: "aws-sm secret is scheduled for deletion and will be restored before upsert",
+		}, nil
 	}
-	return &providers.PlanResult{Action: providers.PlanActionUpdate}, nil
+	if tagValue(describe.Tags, tagPayloadSHA256) == req.PayloadSHA256 {
+		if remoteSourceVersionMatches(describe.Tags, req.SourceVersion) {
+			return &providers.PlanResult{
+				Action:  providers.PlanActionNoop,
+				Message: "aws-sm secret already matches desired payload and metadata",
+			}, nil
+		}
+		return &providers.PlanResult{
+			Action:  providers.PlanActionUpdate,
+			Message: "aws-sm secret metadata differs and will be refreshed",
+		}, nil
+	}
+	return &providers.PlanResult{
+		Action:  providers.PlanActionUpdate,
+		Message: "aws-sm secret payload differs and will be updated",
+	}, nil
 }
 
 func (p Provider) Upsert(ctx context.Context, req providers.UpsertRequest) (*providers.SyncResult, error) {
@@ -206,13 +240,28 @@ func (p Provider) Upsert(ctx context.Context, req providers.UpsertRequest) (*pro
 	if err != nil {
 		return nil, providerError(classifyAWSError(err))
 	}
-	if describe.DeletedDate != nil || !ownedByRequest(describe.Tags, ownershipIdentityFromUpsert(req)) {
+	if !ownedByRequest(describe.Tags, ownershipIdentityFromUpsert(req)) {
 		return nil, providerError(providers.ErrorClassOwnership)
 	}
 	if remoteSourceVersionNewer(describe.Tags, req.SourceVersion) {
 		return nil, providerError(providers.ErrorClassDrift)
 	}
+	if describe.DeletedDate != nil {
+		if _, err := client.RestoreSecret(ctx, &secretsmanager.RestoreSecretInput{
+			SecretId: aws.String(req.ResolvedName),
+		}); err != nil {
+			return nil, providerError(classifyAWSError(err))
+		}
+	}
 	if tagValue(describe.Tags, tagPayloadSHA256) == req.PayloadSHA256 {
+		if !remoteSourceVersionMatches(describe.Tags, req.SourceVersion) {
+			if _, err := client.TagResource(ctx, &secretsmanager.TagResourceInput{
+				SecretId: aws.String(req.ResolvedName),
+				Tags:     ownershipTagsFromUpsert(req),
+			}); err != nil {
+				return nil, providerError(classifyAWSError(err))
+			}
+		}
 		return &providers.SyncResult{RemoteVersion: currentVersionID(describe)}, nil
 	}
 	payload := string(req.Payload)
@@ -234,6 +283,10 @@ func (p Provider) Upsert(ctx context.Context, req providers.UpsertRequest) (*pro
 }
 
 func (p Provider) Delete(ctx context.Context, req providers.DeleteRequest) (*providers.SyncResult, error) {
+	options, err := awsDestinationOptionsFromConfig(req.Destination)
+	if err != nil {
+		return nil, providerError(setupErrorClass(err))
+	}
 	client, err := p.clientFor(ctx, req.Destination)
 	if err != nil {
 		return nil, providerError(setupErrorClass(err))
@@ -247,18 +300,18 @@ func (p Provider) Delete(ctx context.Context, req providers.DeleteRequest) (*pro
 	if err != nil {
 		return nil, providerError(classifyAWSError(err))
 	}
-	if describe.DeletedDate != nil {
-		return &providers.SyncResult{RemoteVersion: "scheduled"}, nil
-	}
 	if !ownedByRequest(describe.Tags, ownershipIdentityFromDelete(req)) {
 		return nil, providerError(providers.ErrorClassOwnership)
+	}
+	if describe.DeletedDate != nil {
+		return &providers.SyncResult{RemoteVersion: "scheduled"}, nil
 	}
 	if remoteSourceVersionNewer(describe.Tags, req.SourceVersion) {
 		return nil, providerError(providers.ErrorClassDrift)
 	}
 	result, err := client.DeleteSecret(ctx, &secretsmanager.DeleteSecretInput{
 		SecretId:             aws.String(req.ResolvedName),
-		RecoveryWindowInDays: aws.Int64(defaultDeleteRecoveryWindowDays),
+		RecoveryWindowInDays: aws.Int64(int64(options.deleteRecoveryWindowDays)),
 	})
 	if err != nil {
 		return nil, providerError(classifyAWSError(err))
@@ -382,67 +435,102 @@ func defaultAWSHTTPClient() *http.Client {
 }
 
 type awsDestinationOptions struct {
-	region          string
-	endpointURL     string
-	endpointPolicy  string
-	authMode        string
-	roleARN         string
-	externalID      string
-	sessionName     string
-	accessKeyID     string
-	secretAccessKey string
-	sessionToken    string
+	region                   string
+	endpointURL              string
+	endpointPolicy           string
+	authMode                 string
+	roleARN                  string
+	externalID               string
+	sessionName              string
+	accessKeyID              string
+	secretAccessKey          string
+	sessionToken             string
+	deleteRecoveryWindowDays int
 }
 
 func awsDestinationOptionsFromConfig(cfg providers.DestinationConfig) (awsDestinationOptions, error) {
 	options := awsDestinationOptions{
-		region:          configValue(cfg, ConfigKeyRegion),
-		endpointURL:     configValue(cfg, ConfigKeyEndpointURL),
-		endpointPolicy:  configValue(cfg, ConfigKeyEndpointPolicy),
-		authMode:        normalizedAuthMode(cfg),
-		roleARN:         configValue(cfg, ConfigKeyRoleARN),
-		externalID:      configValue(cfg, ConfigKeyExternalID),
-		sessionName:     configValue(cfg, ConfigKeySessionName),
-		accessKeyID:     configValue(cfg, ConfigKeyAccessKeyID),
-		secretAccessKey: configValue(cfg, ConfigKeySecretAccessKey),
-		sessionToken:    configValue(cfg, ConfigKeySessionToken),
+		region:                   configValue(cfg, ConfigKeyRegion),
+		endpointURL:              configValue(cfg, ConfigKeyEndpointURL),
+		endpointPolicy:           configValue(cfg, ConfigKeyEndpointPolicy),
+		authMode:                 normalizedAuthMode(cfg),
+		roleARN:                  configValue(cfg, ConfigKeyRoleARN),
+		externalID:               configValue(cfg, ConfigKeyExternalID),
+		sessionName:              configValue(cfg, ConfigKeySessionName),
+		accessKeyID:              configValue(cfg, ConfigKeyAccessKeyID),
+		secretAccessKey:          configValue(cfg, ConfigKeySecretAccessKey),
+		sessionToken:             configValue(cfg, ConfigKeySessionToken),
+		deleteRecoveryWindowDays: defaultDeleteRecoveryWindowDays,
 	}
+	var err error
+	if options.deleteRecoveryWindowDays, err = deleteRecoveryWindowDaysFromConfig(cfg); err != nil {
+		return awsDestinationOptions{}, err
+	}
+	if err := validateEndpointOptions(options); err != nil {
+		return awsDestinationOptions{}, err
+	}
+	if err := validateAuthOptions(options); err != nil {
+		return awsDestinationOptions{}, err
+	}
+	return options, nil
+}
+
+func validateEndpointOptions(options awsDestinationOptions) error {
 	if options.endpointURL != "" {
 		if options.endpointPolicy == "" {
-			return awsDestinationOptions{}, validationError("aws-sm endpoint_url requires endpoint_policy")
+			return validationError("aws-sm endpoint_url requires endpoint_policy")
 		}
 		if err := validateEndpointURL(options.endpointURL, options.endpointPolicy); err != nil {
-			return awsDestinationOptions{}, err
+			return err
 		}
 	} else if options.endpointPolicy != "" {
-		return awsDestinationOptions{}, validationError("aws-sm endpoint_policy requires endpoint_url")
+		return validationError("aws-sm endpoint_policy requires endpoint_url")
 	}
+	return nil
+}
+
+func validateAuthOptions(options awsDestinationOptions) error {
 	switch options.authMode {
 	case AuthModeDefault:
 		if options.roleARN != "" || options.externalID != "" || options.sessionName != "" {
-			return awsDestinationOptions{}, validationError("aws-sm role fields require auth_mode assume_role")
+			return validationError("aws-sm role fields require auth_mode assume_role")
 		}
 		if options.hasStaticCredentials() {
-			return awsDestinationOptions{}, validationError("aws-sm static credential fields require auth_mode static")
+			return validationError("aws-sm static credential fields require auth_mode static")
 		}
 	case AuthModeAssumeRole:
 		if options.roleARN == "" {
-			return awsDestinationOptions{}, validationError("aws-sm auth_mode assume_role requires role_arn")
+			return validationError("aws-sm auth_mode assume_role requires role_arn")
 		}
 		if !isLikelyRoleARN(options.roleARN) {
-			return awsDestinationOptions{}, validationError("aws-sm role_arn must be an IAM role ARN")
+			return validationError("aws-sm role_arn must be an IAM role ARN")
 		}
 		if options.hasStaticCredentials() {
-			return awsDestinationOptions{}, validationError("aws-sm static credential fields require auth_mode static")
+			return validationError("aws-sm static credential fields require auth_mode static")
 		}
 	case AuthModeStatic:
-		return awsDestinationOptions{}, validationError("aws-sm auth_mode static is not supported yet")
+		return validationError("aws-sm auth_mode static is not supported yet")
 	default:
-		return awsDestinationOptions{}, validationError(
+		return validationError(
 			"aws-sm auth_mode must be default, assume_role, or static",
 		)
 	}
-	return options, nil
+	return nil
+}
+
+func deleteRecoveryWindowDaysFromConfig(cfg providers.DestinationConfig) (int, error) {
+	value := configValue(cfg, ConfigKeyDeleteRecoveryWindowDays)
+	if value == "" {
+		return defaultDeleteRecoveryWindowDays, nil
+	}
+	days, err := strconv.Atoi(value)
+	if err != nil {
+		return 0, validationError("aws-sm delete_recovery_window_days must be an integer")
+	}
+	if days < minDeleteRecoveryWindowDays || days > maxDeleteRecoveryWindowDays {
+		return 0, validationError("aws-sm delete_recovery_window_days must be between 7 and 30")
+	}
+	return days, nil
 }
 
 func (options awsDestinationOptions) hasStaticCredentials() bool {
@@ -728,11 +816,27 @@ func remoteSourceVersionNewer(tags []smtypes.Tag, sourceVersion int) bool {
 	if sourceVersion <= 0 {
 		return false
 	}
-	remoteVersion, err := strconv.Atoi(tagValue(tags, tagSourceVersion))
-	if err != nil {
+	remoteVersion, ok := remoteSourceVersion(tags)
+	if !ok {
 		return false
 	}
 	return remoteVersion > sourceVersion
+}
+
+func remoteSourceVersionMatches(tags []smtypes.Tag, sourceVersion int) bool {
+	if sourceVersion <= 0 {
+		return true
+	}
+	remoteVersion, ok := remoteSourceVersion(tags)
+	return ok && remoteVersion == sourceVersion
+}
+
+func remoteSourceVersion(tags []smtypes.Tag) (int, bool) {
+	remoteVersion, err := strconv.Atoi(tagValue(tags, tagSourceVersion))
+	if err != nil {
+		return 0, false
+	}
+	return remoteVersion, true
 }
 
 func tag(key string, value string) smtypes.Tag {

@@ -51,7 +51,9 @@ func TestOpenBaoPluginSyncsToAWSSecretsManager(t *testing.T) {
 	awsClient := newAssumedSecretsManagerClient(t, ctx)
 	remoteName := awsSecretPrefix(t) + fmt.Sprintf("%d", time.Now().UnixNano())
 	t.Cleanup(func() {
-		if err := forceDeleteSecret(ctx, awsClient, remoteName); err != nil {
+		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cleanupCancel()
+		if err := forceDeleteSecret(cleanupCtx, awsClient, remoteName); err != nil {
 			t.Logf("cleanup remote secret %s: %v", remoteName, err)
 		}
 	})
@@ -96,6 +98,19 @@ func TestOpenBaoPluginSyncsToAWSSecretsManager(t *testing.T) {
 	drainQueue(t, baoClient, 1)
 	assertRemoteDeleteScheduled(t, ctx, awsClient, remoteName)
 	assertStatus(t, baoClient, "REMOTE_MISSING")
+
+	writeSource(t, baoClient, "recovered")
+	recoveryPlan := write(t, baoClient, mountPath+"/associations/app/db/plan", associationRequest(remoteName))
+	if got := recoveryPlan.Data["action"]; got != "update" {
+		t.Fatalf("recovery plan action = %v, want update", got)
+	}
+	if got := recoveryPlan.Data["message"]; got != "aws-sm secret is scheduled for deletion and will be restored before upsert" {
+		t.Fatalf("recovery plan message = %v, want restore message", got)
+	}
+	drainQueue(t, baoClient, 1)
+	assertRemotePayload(t, ctx, awsClient, remoteName, "recovered")
+	assertStatus(t, baoClient, "SYNCED")
+	assertReconcilePlan(t, baoClient, "SYNCED")
 }
 
 func TestCleanupAWSSecrets(t *testing.T) {

@@ -194,6 +194,34 @@ func TestValidateDestinationConfig(t *testing.T) {
 			},
 			errorClass: providers.ErrorClassValidation,
 		},
+		{
+			name: "custom delete recovery window",
+			config: map[string]string{
+				ConfigKeyRegion:                   testRegion,
+				ConfigKeyDeleteRecoveryWindowDays: "30",
+			},
+		},
+		{
+			name: "invalid delete recovery window",
+			config: map[string]string{
+				ConfigKeyDeleteRecoveryWindowDays: "six",
+			},
+			errorClass: providers.ErrorClassValidation,
+		},
+		{
+			name: "delete recovery window below AWS minimum",
+			config: map[string]string{
+				ConfigKeyDeleteRecoveryWindowDays: "6",
+			},
+			errorClass: providers.ErrorClassValidation,
+		},
+		{
+			name: "delete recovery window above AWS maximum",
+			config: map[string]string{
+				ConfigKeyDeleteRecoveryWindowDays: "31",
+			},
+			errorClass: providers.ErrorClassValidation,
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -317,6 +345,18 @@ func TestPlanActions(t *testing.T) {
 			action:         providers.PlanActionUpdate,
 		},
 		{
+			name:           "update owned matching hash with stale metadata",
+			describeOutput: ownedDescribeOutputAtVersion(testPayloadSHANew, 0),
+			payloadSHA256:  testPayloadSHANew,
+			action:         providers.PlanActionUpdate,
+		},
+		{
+			name:           "update owned scheduled delete",
+			describeOutput: ownedDeletedDescribeOutput(testPayloadSHANew),
+			payloadSHA256:  testPayloadSHANew,
+			action:         providers.PlanActionUpdate,
+		},
+		{
 			name:           "blocked newer remote source version",
 			describeOutput: ownedDescribeOutputAtVersion(testPayloadSHAOld, 2),
 			payloadSHA256:  testPayloadSHANew,
@@ -329,6 +369,16 @@ func TestPlanActions(t *testing.T) {
 			payloadSHA256:  testPayloadSHANew,
 			action:         providers.PlanActionConflict,
 			errorClass:     providers.ErrorClassCollision,
+		},
+		{
+			name: "conflict unowned scheduled delete",
+			describeOutput: &secretsmanager.DescribeSecretOutput{
+				Name:        aws.String(testResolvedName),
+				DeletedDate: aws.Time(time.Unix(1700000000, 0)),
+			},
+			payloadSHA256: testPayloadSHANew,
+			action:        providers.PlanActionConflict,
+			errorClass:    providers.ErrorClassCollision,
 		},
 		{
 			name:          "blocked rate limit",
@@ -500,6 +550,61 @@ func TestUpsertUpdatesOwnedSecretAndTagsHash(t *testing.T) {
 	assertTag(t, client.tagResourceInput.Tags, tagRestoreEpoch, testRestoreEpoch)
 }
 
+func TestUpsertRestoresOwnedScheduledDeleteBeforeUpdate(t *testing.T) {
+	client := &mockSecretsManagerClient{
+		describeOutput:       ownedDeletedDescribeOutput(testPayloadSHAOld),
+		restoreSecretOutput:  &secretsmanager.RestoreSecretOutput{ARN: aws.String("arn:aws:secretsmanager:test")},
+		putSecretValueOutput: &secretsmanager.PutSecretValueOutput{VersionId: aws.String("restored-version")},
+		tagResourceOutput:    &secretsmanager.TagResourceOutput{},
+	}
+	result, err := (Provider{client: client}).Upsert(context.Background(), defaultUpsertRequest())
+	if err != nil {
+		t.Fatalf("upsert: %v", err)
+	}
+	if result.RemoteVersion != "restored-version" {
+		t.Fatalf("remote version = %s, want restored-version", result.RemoteVersion)
+	}
+	if client.restoreSecretInput == nil {
+		t.Fatal("RestoreSecret input must be captured")
+	}
+	if got := aws.ToString(client.restoreSecretInput.SecretId); got != testResolvedName {
+		t.Fatalf("restore secret id = %s, want %s", got, testResolvedName)
+	}
+	if client.putSecretValueInput == nil {
+		t.Fatal("PutSecretValue must be called after restoring scheduled-delete secret")
+	}
+	if client.tagResourceInput == nil {
+		t.Fatal("TagResource must refresh ownership metadata after restoring scheduled-delete secret")
+	}
+	assertTag(t, client.tagResourceInput.Tags, tagSourceVersion, "1")
+	assertTag(t, client.tagResourceInput.Tags, tagPayloadSHA256, testPayloadSHANew)
+}
+
+func TestUpsertRestoresOwnedScheduledDeleteWithMatchingPayload(t *testing.T) {
+	client := &mockSecretsManagerClient{
+		describeOutput:      ownedDeletedDescribeOutputAtVersion(testPayloadSHANew, 0),
+		restoreSecretOutput: &secretsmanager.RestoreSecretOutput{ARN: aws.String("arn:aws:secretsmanager:test")},
+		tagResourceOutput:   &secretsmanager.TagResourceOutput{},
+	}
+	result, err := (Provider{client: client}).Upsert(context.Background(), defaultUpsertRequest())
+	if err != nil {
+		t.Fatalf("upsert: %v", err)
+	}
+	if result.RemoteVersion != "current-version" {
+		t.Fatalf("remote version = %s, want current-version", result.RemoteVersion)
+	}
+	if client.restoreSecretInput == nil {
+		t.Fatal("RestoreSecret input must be captured")
+	}
+	if client.putSecretValueInput != nil {
+		t.Fatal("PutSecretValue must not be called when restored payload already matches")
+	}
+	if client.tagResourceInput == nil {
+		t.Fatal("TagResource must refresh stale source metadata")
+	}
+	assertTag(t, client.tagResourceInput.Tags, tagSourceVersion, "1")
+}
+
 func TestUpsertRejectsUnownedSecret(t *testing.T) {
 	client := &mockSecretsManagerClient{
 		describeOutput: &secretsmanager.DescribeSecretOutput{Name: aws.String(testResolvedName)},
@@ -508,6 +613,23 @@ func TestUpsertRejectsUnownedSecret(t *testing.T) {
 	assertProviderErrorClass(t, err, providers.ErrorClassOwnership)
 	if client.putSecretValueInput != nil {
 		t.Fatal("PutSecretValue must not be called for unowned secret")
+	}
+}
+
+func TestUpsertRejectsUnownedScheduledDelete(t *testing.T) {
+	client := &mockSecretsManagerClient{
+		describeOutput: &secretsmanager.DescribeSecretOutput{
+			Name:        aws.String(testResolvedName),
+			DeletedDate: aws.Time(time.Unix(1700000000, 0)),
+		},
+	}
+	_, err := (Provider{client: client}).Upsert(context.Background(), defaultUpsertRequest())
+	assertProviderErrorClass(t, err, providers.ErrorClassOwnership)
+	if client.restoreSecretInput != nil {
+		t.Fatal("RestoreSecret must not be called for unowned scheduled-delete secret")
+	}
+	if client.putSecretValueInput != nil {
+		t.Fatal("PutSecretValue must not be called for unowned scheduled-delete secret")
 	}
 }
 
@@ -607,7 +729,9 @@ func TestDeleteUsesOwnedRecoveryWindow(t *testing.T) {
 		describeOutput:     ownedDescribeOutput(testPayloadSHAOld),
 		deleteSecretOutput: &secretsmanager.DeleteSecretOutput{ARN: aws.String("arn:aws:secretsmanager:test")},
 	}
-	result, err := (Provider{client: client}).Delete(context.Background(), defaultDeleteRequest())
+	request := defaultDeleteRequest()
+	request.Destination.Config[ConfigKeyDeleteRecoveryWindowDays] = "14"
+	result, err := (Provider{client: client}).Delete(context.Background(), request)
 	if err != nil {
 		t.Fatalf("delete: %v", err)
 	}
@@ -620,8 +744,8 @@ func TestDeleteUsesOwnedRecoveryWindow(t *testing.T) {
 	if got := aws.ToString(client.deleteSecretInput.SecretId); got != testResolvedName {
 		t.Fatalf("delete secret id = %s, want %s", got, testResolvedName)
 	}
-	if got := aws.ToInt64(client.deleteSecretInput.RecoveryWindowInDays); got != defaultDeleteRecoveryWindowDays {
-		t.Fatalf("recovery window = %d, want %d", got, defaultDeleteRecoveryWindowDays)
+	if got := aws.ToInt64(client.deleteSecretInput.RecoveryWindowInDays); got != 14 {
+		t.Fatalf("recovery window = %d, want 14", got)
 	}
 }
 
@@ -633,6 +757,20 @@ func TestDeleteRejectsUnownedSecret(t *testing.T) {
 	assertProviderErrorClass(t, err, providers.ErrorClassOwnership)
 	if client.deleteSecretInput != nil {
 		t.Fatal("DeleteSecret must not be called for unowned secret")
+	}
+}
+
+func TestDeleteRejectsUnownedScheduledDelete(t *testing.T) {
+	client := &mockSecretsManagerClient{
+		describeOutput: &secretsmanager.DescribeSecretOutput{
+			Name:        aws.String(testResolvedName),
+			DeletedDate: aws.Time(time.Unix(1700000000, 0)),
+		},
+	}
+	_, err := (Provider{client: client}).Delete(context.Background(), defaultDeleteRequest())
+	assertProviderErrorClass(t, err, providers.ErrorClassOwnership)
+	if client.deleteSecretInput != nil {
+		t.Fatal("DeleteSecret must not be called for unowned scheduled-delete secret")
 	}
 }
 
@@ -973,6 +1111,19 @@ func ownedDescribeOutput(payloadSHA256 string) *secretsmanager.DescribeSecretOut
 	return ownedDescribeOutputAtVersion(payloadSHA256, 1)
 }
 
+func ownedDeletedDescribeOutput(payloadSHA256 string) *secretsmanager.DescribeSecretOutput {
+	return ownedDeletedDescribeOutputAtVersion(payloadSHA256, 1)
+}
+
+func ownedDeletedDescribeOutputAtVersion(
+	payloadSHA256 string,
+	sourceVersion int,
+) *secretsmanager.DescribeSecretOutput {
+	output := ownedDescribeOutputAtVersion(payloadSHA256, sourceVersion)
+	output.DeletedDate = aws.Time(time.Unix(1700000000, 0))
+	return output
+}
+
 func ownedDescribeOutputAtVersion(
 	payloadSHA256 string,
 	sourceVersion int,
@@ -1042,6 +1193,10 @@ type mockSecretsManagerClient struct {
 	deleteSecretOutput *secretsmanager.DeleteSecretOutput
 	deleteSecretError  error
 
+	restoreSecretInput  *secretsmanager.RestoreSecretInput
+	restoreSecretOutput *secretsmanager.RestoreSecretOutput
+	restoreSecretError  error
+
 	tagResourceInput  *secretsmanager.TagResourceInput
 	tagResourceOutput *secretsmanager.TagResourceOutput
 	tagResourceError  error
@@ -1083,6 +1238,15 @@ func (m *mockSecretsManagerClient) DeleteSecret(
 ) (*secretsmanager.DeleteSecretOutput, error) {
 	m.deleteSecretInput = input
 	return m.deleteSecretOutput, m.deleteSecretError
+}
+
+func (m *mockSecretsManagerClient) RestoreSecret(
+	_ context.Context,
+	input *secretsmanager.RestoreSecretInput,
+	_ ...func(*secretsmanager.Options),
+) (*secretsmanager.RestoreSecretOutput, error) {
+	m.restoreSecretInput = input
+	return m.restoreSecretOutput, m.restoreSecretError
 }
 
 func (m *mockSecretsManagerClient) TagResource(

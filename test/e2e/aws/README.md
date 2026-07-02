@@ -107,7 +107,8 @@ bao write secret-sync/destinations/aws-sm/prod \
   auth_mode=assume_role \
   role_arn="${E2E_AWS_ROLE_ARN}" \
   external_id="${E2E_AWS_EXTERNAL_ID}" \
-  session_name=openbao-plugin-secrets-sync-manual
+  session_name=openbao-plugin-secrets-sync-manual \
+  delete_recovery_window_days=7
 
 bao write -force secret-sync/destinations/aws-sm/prod/validate
 bao read secret-sync/destinations/aws-sm/prod/health

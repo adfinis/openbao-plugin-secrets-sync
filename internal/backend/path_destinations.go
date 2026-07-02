@@ -28,6 +28,7 @@ var destinationConfigFieldKeys = []string{
 	awssecretsmanager.ConfigKeyAuthMode,
 	awssecretsmanager.ConfigKeyRoleARN,
 	awssecretsmanager.ConfigKeySessionName,
+	awssecretsmanager.ConfigKeyDeleteRecoveryWindowDays,
 	gitlab.ConfigKeyBaseURL,
 	gitlab.ConfigKeyProjectID,
 	gitlab.ConfigKeyEnvironmentScope,
@@ -58,6 +59,7 @@ var destinationConfigFieldKeysByType = map[string][]string{
 		awssecretsmanager.ConfigKeyAuthMode,
 		awssecretsmanager.ConfigKeyRoleARN,
 		awssecretsmanager.ConfigKeySessionName,
+		awssecretsmanager.ConfigKeyDeleteRecoveryWindowDays,
 	},
 	gitlab.ProviderType: {
 		gitlab.ConfigKeyBaseURL,
@@ -230,6 +232,11 @@ func destinationRequestFields() map[string]*framework.FieldSchema {
 	fields[awssecretsmanager.ConfigKeySessionName] = &framework.FieldSchema{
 		Type:        framework.TypeString,
 		Description: "Optional STS session name for aws-sm assume_role destinations.",
+	}
+	fields[awssecretsmanager.ConfigKeyDeleteRecoveryWindowDays] = &framework.FieldSchema{
+		Type: framework.TypeString,
+		Description: "AWS Secrets Manager scheduled-delete recovery window in days for aws-sm destinations. " +
+			"Defaults to 7; AWS accepts 7 through 30.",
 	}
 	fields[awssecretsmanager.ConfigKeyAccessKeyID] = &framework.FieldSchema{
 		Type:        framework.TypeString,
