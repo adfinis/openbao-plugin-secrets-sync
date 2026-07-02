@@ -1,5 +1,4 @@
-# Testing And Hardening
-
+# Testing and hardening
 
 This document defines the hardening test lanes for the secret sync plugin. The
 goal is to keep evidence clear: unit tests prove local contracts, model tests
@@ -7,9 +6,9 @@ prove state-machine invariants, fuzz tests mutate narrow input boundaries, e2e
 tests prove OpenBao plugin behavior, and security checks cover dependency and
 static-analysis risk.
 
-## Local Gates
+## Local gates
 
-Use these gates while implementing:
+Use these gates while changing the plugin:
 
 ```sh
 go test ./...
@@ -34,15 +33,15 @@ Manual real-provider gates stay opt-in:
 E2E_AWS_CONFIRM=1 make test-e2e-aws
 ```
 
-## Test Lanes
+## Test lanes
 
-### Unit And Contract Tests
+### Unit and contract tests
 
-Unit tests cover package-local behavior and stable API contracts. They should
-stay fast, deterministic, and free of external services.
+Unit tests cover package-local behavior and stable API contracts. Keep them
+fast, deterministic, and free of external services.
 
 Provider contract tests live behind the shared `providertest` harness. Every
-provider should cover:
+provider covers:
 
 - capability flags;
 - config validation and sensitive-field redaction;
@@ -64,11 +63,11 @@ matrix:
 - stale remote state with a newer managed source version maps to `drift`;
 - delete semantics cover owned delete and idempotent missing-remote delete.
 
-### Model Tests
+### Model tests
 
 Model tests exercise state transitions across several operations and assert
 invariants after every transition. They are not random fuzz tests; each action
-sequence should be small enough to debug from the failure name.
+sequence is small enough to debug from the failure name.
 
 Core model invariants:
 
@@ -79,10 +78,10 @@ Core model invariants:
 - deleting a source replaces stale queued upserts with allowed delete work;
 - status, plan, and queue responses never include secret values.
 
-### Fuzz Tests
+### Fuzz tests
 
 Fuzz tests mutate narrow input boundaries where parser or canonicalization
-mistakes are likely. Current smoke targets cover:
+mistakes are likely. Smoke targets cover:
 
 - raw payload canonicalization;
 - JSON payload determinism and digest correctness;
@@ -100,13 +99,13 @@ Override `FUZZTIME` for longer local sweeps:
 FUZZTIME=60s make fuzz
 ```
 
-### E2E Tests
+### E2E tests
 
 Self-contained e2e tests prove the OpenBao plugin boundary, including plugin
 registration, mount, destination configuration, queue drain, provider API
 behavior, status transitions, and selected OpenBao lifecycle behavior.
 
-Current self-contained e2e coverage:
+Self-contained e2e coverage:
 
 - LocalStack-backed AWS Secrets Manager;
 - persistent OpenBao lifecycle resilience with three-node Raft storage, static
@@ -131,12 +130,12 @@ Documented provider validation paths:
 - Kubernetes Secrets: kind-backed real API-server path in
   `test/e2e/kind/README.md`;
 - GitLab project variables: Dockerized GitLab CE path in
-  `test/e2e/gitlab/README.md`. A real GitLab project fixture remains opt-in
-  future work.
+  `test/e2e/gitlab/README.md`. Real GitLab project validation is opt-in and
+  manual.
 - OCI plugin distribution: disposable TLS registry path in
   `test/e2e/oci/README.md`.
 
-### Security Checks
+### Security checks
 
 Security checks cover dependency vulnerabilities, licenses, and filesystem
 static analysis:
@@ -162,7 +161,7 @@ plugin behavior. Examples:
   refusal, and bounded response reads;
 - provider errors map to stable classes without leaking secret values.
 
-Current backend security-boundary coverage asserts that:
+Backend security-boundary coverage asserts that:
 
 - AWS and GitLab sensitive destination fields are stored separately from public
   destination metadata and redacted on read;
@@ -172,7 +171,7 @@ Current backend security-boundary coverage asserts that:
   queue summaries, queue operation reads, drain responses, status responses,
   or reconcile plan/apply responses.
 
-Current destination policy coverage asserts that:
+Destination policy coverage asserts that:
 
 - destination prefix constraints are normalized and visible on read;
 - source path validation rejects reserved storage/control segments;
@@ -181,7 +180,7 @@ Current destination policy coverage asserts that:
 - queued dispatch rechecks destination policy and blocks remote mutation if a
   destination policy is tightened after enqueue.
 
-Current queue hardening coverage asserts that:
+Queue hardening coverage asserts that:
 
 - concurrent source writes preserve monotonically increasing versions;
 - concurrent association writes reserve a remote name only once;
@@ -220,16 +219,6 @@ Current queue hardening coverage asserts that:
 - periodic processing skips unsafe OpenBao replication states;
 - manual drain returns an operator-visible error on unsafe replication states.
 
-Current source lifecycle coverage asserts that current-version `delete/` and
+Source lifecycle coverage asserts that current-version `delete/` and
 `destroy/` use the durable delete workflow, and current-version `undelete/`
 queues replacement upserts when a remote delete has completed.
-
-## Hardening Order
-
-Hardening should proceed in this order:
-
-1. Test architecture baseline and first core model invariants.
-2. Provider-agnostic state model expansion.
-3. Security boundary tests for redaction, SSRF, auth, and restore guard.
-4. Provider conformance expansion across AWS, Kubernetes, and GitLab.
-5. Retry and real-provider resilience e2e coverage.
