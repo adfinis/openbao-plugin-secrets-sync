@@ -25,6 +25,7 @@ const (
 	testObjectID        = "secret-path"
 	testPayloadSHAOld   = "sha256:old"
 	testPayloadSHANew   = "sha256:new"
+	testDriftedValue    = "drifted"
 	testRegion          = "eu-central-1"
 	testEndpointURL     = "http://localhost:4566"
 	testRoleARN         = "arn:aws:iam::123456789012:role/openbao-plugin-secrets-sync"
@@ -44,6 +45,7 @@ func TestProviderConformance(t *testing.T) {
 		Provider:         Provider{client: client},
 		ValidDestination: providers.DestinationConfig{Name: testDestinationName},
 		RequiredCapabilities: providertest.CapabilityExpectations{
+			ValueReadback:       true,
 			MetadataReadback:    true,
 			SecretPath:          true,
 			UpdateIfOwned:       true,
@@ -200,6 +202,19 @@ func TestValidateDestinationConfig(t *testing.T) {
 				ConfigKeyRegion:                   testRegion,
 				ConfigKeyDeleteRecoveryWindowDays: "30",
 			},
+		},
+		{
+			name: "value drift detection enabled",
+			config: map[string]string{
+				ConfigKeyValueDriftDetection: "true",
+			},
+		},
+		{
+			name: "invalid value drift detection",
+			config: map[string]string{
+				ConfigKeyValueDriftDetection: "sometimes",
+			},
+			errorClass: providers.ErrorClassValidation,
 		},
 		{
 			name: "invalid delete recovery window",
@@ -407,6 +422,87 @@ func TestPlanActions(t *testing.T) {
 	}
 }
 
+func TestPlanDefaultDoesNotReadSecretValue(t *testing.T) {
+	client := &mockSecretsManagerClient{
+		describeOutput:      ownedDescribeOutput(testPayloadSHANew),
+		getSecretValueError: apiError("AccessDeniedException"),
+	}
+	result, err := runtimeWithClient(t, client).Plan(context.Background(), defaultPlanRequest(testPayloadSHANew))
+	if err != nil {
+		t.Fatalf("plan: %v", err)
+	}
+	if result.Action != providers.PlanActionNoop {
+		t.Fatalf("action = %s, want %s", result.Action, providers.PlanActionNoop)
+	}
+	if client.getSecretValueInput != nil {
+		t.Fatal("GetSecretValue must not be called unless value drift detection is enabled")
+	}
+}
+
+func TestPlanValueDriftDetection(t *testing.T) {
+	request := defaultUpsertRequest()
+	request.PayloadSHA256 = payloadSHA256(request.Payload)
+	tests := []struct {
+		name                  string
+		describePayloadSHA256 string
+		getSecretValueOutput  *secretsmanager.GetSecretValueOutput
+		getSecretValueError   error
+		action                string
+		errorClass            providers.ErrorClass
+	}{
+		{
+			name:                  "noop matching tag and value",
+			describePayloadSHA256: request.PayloadSHA256,
+			getSecretValueOutput:  secretStringOutput(string(request.Payload)),
+			action:                providers.PlanActionNoop,
+		},
+		{
+			name:                  "update matching tag with drifted value",
+			describePayloadSHA256: request.PayloadSHA256,
+			getSecretValueOutput:  secretStringOutput(testDriftedValue),
+			action:                providers.PlanActionUpdate,
+		},
+		{
+			name:                  "update stale tag with matching value",
+			describePayloadSHA256: testPayloadSHAOld,
+			getSecretValueOutput:  secretStringOutput(string(request.Payload)),
+			action:                providers.PlanActionUpdate,
+		},
+		{
+			name:                  "blocked when value read is denied",
+			describePayloadSHA256: request.PayloadSHA256,
+			getSecretValueError:   apiError("AccessDeniedException"),
+			action:                providers.PlanActionBlocked,
+			errorClass:            providers.ErrorClassAuthz,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			client := &mockSecretsManagerClient{
+				describeOutput:       ownedDescribeOutput(tt.describePayloadSHA256),
+				getSecretValueOutput: tt.getSecretValueOutput,
+				getSecretValueError:  tt.getSecretValueError,
+			}
+			result, err := runtimeWithValueDriftDetection(t, client).Plan(
+				context.Background(),
+				defaultPlanRequest(request.PayloadSHA256),
+			)
+			if err != nil {
+				t.Fatalf("plan: %v", err)
+			}
+			if result.Action != tt.action {
+				t.Fatalf("action = %s, want %s", result.Action, tt.action)
+			}
+			if result.ErrorClass != tt.errorClass {
+				t.Fatalf("error class = %s, want %s", result.ErrorClass, tt.errorClass)
+			}
+			if client.getSecretValueInput == nil {
+				t.Fatal("GetSecretValue must be called when value drift detection is enabled")
+			}
+		})
+	}
+}
+
 func TestReadStateReportsRemoteMetadata(t *testing.T) {
 	tests := []struct {
 		name           string
@@ -494,6 +590,49 @@ func TestReadStateReportsRemoteMetadata(t *testing.T) {
 	}
 }
 
+func TestReadStateReportsLiveValueWhenDetectionEnabled(t *testing.T) {
+	client := &mockSecretsManagerClient{
+		describeOutput:       ownedDescribeOutput(testPayloadSHAOld),
+		getSecretValueOutput: secretStringOutput(testDriftedValue),
+	}
+	state, err := runtimeWithValueDriftDetection(t, client).ReadState(
+		context.Background(),
+		defaultReadStateRequest(),
+	)
+	if err != nil {
+		t.Fatalf("read state: %v", err)
+	}
+	if state.PayloadSHA256 != payloadSHA256([]byte(testDriftedValue)) {
+		t.Fatalf("payload sha = %q, want live value hash", state.PayloadSHA256)
+	}
+	if client.getSecretValueInput == nil {
+		t.Fatal("GetSecretValue must be called for owned secrets when value drift detection is enabled")
+	}
+}
+
+func TestReadStateValueDriftDetectionSkipsUnownedSecret(t *testing.T) {
+	client := &mockSecretsManagerClient{
+		describeOutput:      &secretsmanager.DescribeSecretOutput{Name: aws.String(testResolvedName)},
+		getSecretValueError: apiError("AccessDeniedException"),
+	}
+	state, err := runtimeWithValueDriftDetection(t, client).ReadState(
+		context.Background(),
+		defaultReadStateRequest(),
+	)
+	if err != nil {
+		t.Fatalf("read state: %v", err)
+	}
+	if state.Owned {
+		t.Fatal("unowned secret must not be reported as owned")
+	}
+	if state.PayloadSHA256 != "" {
+		t.Fatalf("payload sha = %q, want empty for unowned secret", state.PayloadSHA256)
+	}
+	if client.getSecretValueInput != nil {
+		t.Fatal("GetSecretValue must not be called for unowned secrets")
+	}
+}
+
 func TestUpsertCreatesMissingSecretWithOwnershipTags(t *testing.T) {
 	client := &mockSecretsManagerClient{
 		describeError:      apiError("ResourceNotFoundException"),
@@ -548,6 +687,75 @@ func TestUpsertUpdatesOwnedSecretAndTagsHash(t *testing.T) {
 	assertTag(t, client.tagResourceInput.Tags, tagPayloadSHA256, testPayloadSHANew)
 	assertTag(t, client.tagResourceInput.Tags, tagPluginInstance, testPluginInstance)
 	assertTag(t, client.tagResourceInput.Tags, tagRestoreEpoch, testRestoreEpoch)
+}
+
+func TestUpsertRepairsValueDriftWhenDetectionEnabled(t *testing.T) {
+	request := defaultUpsertRequest()
+	request.PayloadSHA256 = payloadSHA256(request.Payload)
+	client := &mockSecretsManagerClient{
+		describeOutput:       ownedDescribeOutput(request.PayloadSHA256),
+		getSecretValueOutput: secretStringOutput(testDriftedValue),
+		putSecretValueOutput: &secretsmanager.PutSecretValueOutput{VersionId: aws.String("updated-version")},
+		tagResourceOutput:    &secretsmanager.TagResourceOutput{},
+	}
+	result, err := runtimeWithValueDriftDetection(t, client).Upsert(context.Background(), request)
+	if err != nil {
+		t.Fatalf("upsert: %v", err)
+	}
+	if result.RemoteVersion != "updated-version" {
+		t.Fatalf("remote version = %s, want updated-version", result.RemoteVersion)
+	}
+	if client.getSecretValueInput == nil {
+		t.Fatal("GetSecretValue must be called when value drift detection is enabled")
+	}
+	if client.putSecretValueInput == nil {
+		t.Fatal("PutSecretValue must repair live value drift")
+	}
+	if client.tagResourceInput == nil {
+		t.Fatal("TagResource must refresh ownership metadata after repairing drift")
+	}
+	assertTag(t, client.tagResourceInput.Tags, tagPayloadSHA256, request.PayloadSHA256)
+}
+
+func TestUpsertRefreshesMetadataOnlyWhenValueMatchesWithDetectionEnabled(t *testing.T) {
+	request := defaultUpsertRequest()
+	request.PayloadSHA256 = payloadSHA256(request.Payload)
+	client := &mockSecretsManagerClient{
+		describeOutput:       ownedDescribeOutput(testPayloadSHAOld),
+		getSecretValueOutput: secretStringOutput(string(request.Payload)),
+		tagResourceOutput:    &secretsmanager.TagResourceOutput{},
+	}
+	result, err := runtimeWithValueDriftDetection(t, client).Upsert(context.Background(), request)
+	if err != nil {
+		t.Fatalf("upsert: %v", err)
+	}
+	if result.RemoteVersion != "current-version" {
+		t.Fatalf("remote version = %s, want current-version", result.RemoteVersion)
+	}
+	if client.putSecretValueInput != nil {
+		t.Fatal("PutSecretValue must not be called when the live value already matches")
+	}
+	if client.tagResourceInput == nil {
+		t.Fatal("TagResource must refresh stale payload metadata")
+	}
+	assertTag(t, client.tagResourceInput.Tags, tagPayloadSHA256, request.PayloadSHA256)
+}
+
+func TestUpsertValueDriftDetectionClassifiesGetFailure(t *testing.T) {
+	request := defaultUpsertRequest()
+	request.PayloadSHA256 = payloadSHA256(request.Payload)
+	client := &mockSecretsManagerClient{
+		describeOutput:      ownedDescribeOutput(request.PayloadSHA256),
+		getSecretValueError: apiError("AccessDeniedException"),
+	}
+	_, err := runtimeWithValueDriftDetection(t, client).Upsert(context.Background(), request)
+	assertProviderErrorClass(t, err, providers.ErrorClassAuthz)
+	if client.putSecretValueInput != nil {
+		t.Fatal("PutSecretValue must not be called when value readback fails")
+	}
+	if client.tagResourceInput != nil {
+		t.Fatal("TagResource must not be called when value readback fails")
+	}
 }
 
 func TestUpsertRestoresOwnedScheduledDeleteBeforeUpdate(t *testing.T) {
@@ -1083,6 +1291,13 @@ func runtimeWithClient(t *testing.T, client secretsManagerClient) providers.Dest
 	return runtimeWithDestination(t, Provider{client: client}, defaultDestinationConfig())
 }
 
+func runtimeWithValueDriftDetection(t *testing.T, client secretsManagerClient) providers.DestinationRuntime {
+	t.Helper()
+	cfg := defaultDestinationConfig()
+	cfg.Config[ConfigKeyValueDriftDetection] = "true"
+	return runtimeWithDestination(t, Provider{client: client}, cfg)
+}
+
 func runtimeWithDestination(
 	t *testing.T,
 	provider Provider,
@@ -1154,6 +1369,10 @@ func ownedDescribeOutputAtVersion(
 	}
 }
 
+func secretStringOutput(value string) *secretsmanager.GetSecretValueOutput {
+	return &secretsmanager.GetSecretValueOutput{SecretString: aws.String(value)}
+}
+
 func assertProviderErrorClass(t *testing.T, err error, expected providers.ErrorClass) {
 	t.Helper()
 	if err == nil {
@@ -1189,6 +1408,10 @@ type mockSecretsManagerClient struct {
 	describeOutput *secretsmanager.DescribeSecretOutput
 	describeError  error
 
+	getSecretValueInput  *secretsmanager.GetSecretValueInput
+	getSecretValueOutput *secretsmanager.GetSecretValueOutput
+	getSecretValueError  error
+
 	createSecretInput  *secretsmanager.CreateSecretInput
 	createSecretOutput *secretsmanager.CreateSecretOutput
 	createSecretError  error
@@ -1219,6 +1442,15 @@ func (m *mockSecretsManagerClient) DescribeSecret(
 	...func(*secretsmanager.Options),
 ) (*secretsmanager.DescribeSecretOutput, error) {
 	return m.describeOutput, m.describeError
+}
+
+func (m *mockSecretsManagerClient) GetSecretValue(
+	_ context.Context,
+	input *secretsmanager.GetSecretValueInput,
+	_ ...func(*secretsmanager.Options),
+) (*secretsmanager.GetSecretValueOutput, error) {
+	m.getSecretValueInput = input
+	return m.getSecretValueOutput, m.getSecretValueError
 }
 
 func (m *mockSecretsManagerClient) CreateSecret(

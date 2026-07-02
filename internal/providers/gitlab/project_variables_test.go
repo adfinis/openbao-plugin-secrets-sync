@@ -24,11 +24,12 @@ const (
 	testAssociationID   = "assoc-1"
 	testSourcePath      = "app/db"
 	testObjectID        = "APP_PASSWORD"
-	testPayloadSHAOld   = "sha256:old"
-	testPayloadSHANew   = "sha256:new"
+	testPayloadSHAOld   = "sha256:cba06b5736faf67e54b07b561eae94395e774c517a7d910a54369e1263ccfbd4"
+	testPayloadSHANew   = "sha256:11507a0e2f5e69d5dfa40a62a1bd7b6ee57e6bcd85c67c9b8431b36fff21c437"
 	testPluginInstance  = "inst-test"
 	testRestoreEpoch    = "epoch-test"
 	testBoolTrue        = "true"
+	testDriftedValue    = "drifted"
 )
 
 func TestProviderConformance(t *testing.T) {
@@ -37,6 +38,7 @@ func TestProviderConformance(t *testing.T) {
 		Provider:         Provider{client: client},
 		ValidDestination: defaultDestinationConfig(),
 		RequiredCapabilities: providertest.CapabilityExpectations{
+			ValueReadback:       true,
 			MetadataReadback:    true,
 			SecretPath:          true,
 			SecretKey:           true,
@@ -287,6 +289,27 @@ func TestPlanDetectsConflictAndDrift(t *testing.T) {
 	}
 }
 
+func TestPlanUpdatesWhenValueDriftsWithMatchingMetadata(t *testing.T) {
+	variable := ownedVariable(variableMetadata{
+		ManagedBy:     metadataManagedBy,
+		AssociationID: testAssociationID,
+		SourcePath:    testSourcePath,
+		ObjectID:      testObjectID,
+		SourceVersion: 1,
+		PayloadSHA256: testPayloadSHAOld,
+	})
+	variable.Value = testDriftedValue
+	client := gitlabClientWithVariable(variable)
+
+	plan, err := runtimeWithClient(t, client).Plan(context.Background(), defaultPlanRequest(testPayloadSHAOld, 1))
+	if err != nil {
+		t.Fatalf("plan: %v", err)
+	}
+	if plan.Action != providers.PlanActionUpdate {
+		t.Fatalf("plan action = %s, want %s", plan.Action, providers.PlanActionUpdate)
+	}
+}
+
 func TestPlanRejectsKnownIncompatibleMaskedPayloads(t *testing.T) {
 	tests := []struct {
 		name       string
@@ -425,6 +448,58 @@ func TestUpsertCreatesCompatibleHiddenVariable(t *testing.T) {
 	}
 	if !variable.Hidden {
 		t.Fatal("created variable hidden = false, want true")
+	}
+}
+
+func TestUpsertRepairsValueDriftWithMatchingMetadata(t *testing.T) {
+	variable := ownedVariable(variableMetadata{
+		ManagedBy:     metadataManagedBy,
+		AssociationID: testAssociationID,
+		SourcePath:    testSourcePath,
+		ObjectID:      testObjectID,
+		SourceVersion: 1,
+		PayloadSHA256: testPayloadSHAOld,
+	})
+	variable.Value = testDriftedValue
+	client := gitlabClientWithVariable(variable)
+
+	_, err := runtimeWithClient(t, client).Upsert(
+		context.Background(),
+		defaultUpsertRequest(testPayloadSHAOld, []byte("old"), 1),
+	)
+	if err != nil {
+		t.Fatalf("upsert: %v", err)
+	}
+	updated, err := client.GetVariable(context.Background(), defaultOptions(), testResolvedName)
+	if err != nil {
+		t.Fatalf("get variable: %v", err)
+	}
+	if updated.Value != "old" {
+		t.Fatalf("variable value = %q, want old", updated.Value)
+	}
+}
+
+func TestReadStateReportsValueDriftDespiteMatchingMetadata(t *testing.T) {
+	variable := ownedVariable(variableMetadata{
+		ManagedBy:     metadataManagedBy,
+		AssociationID: testAssociationID,
+		SourcePath:    testSourcePath,
+		ObjectID:      testObjectID,
+		SourceVersion: 1,
+		PayloadSHA256: testPayloadSHAOld,
+	})
+	variable.Value = testDriftedValue
+	client := gitlabClientWithVariable(variable)
+
+	state, err := runtimeWithClient(t, client).ReadState(
+		context.Background(),
+		defaultReadStateRequest(testPayloadSHAOld, 1),
+	)
+	if err != nil {
+		t.Fatalf("read state: %v", err)
+	}
+	if got, want := state.PayloadSHA256, payloadSHA256([]byte(testDriftedValue)); got != want {
+		t.Fatalf("payload sha = %q, want %q", got, want)
 	}
 }
 

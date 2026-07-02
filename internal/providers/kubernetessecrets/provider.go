@@ -788,9 +788,6 @@ func payloadSHA256ForMode(secret *corev1.Secret, dataMap bool) string {
 }
 
 func payloadSHA256(secret *corev1.Secret) string {
-	if value := annotationValue(secret.Annotations, annotationPayloadSHA256); value != "" {
-		return value
-	}
 	if secret.Data == nil {
 		return ""
 	}
@@ -798,14 +795,10 @@ func payloadSHA256(secret *corev1.Secret) string {
 	if !ok {
 		return ""
 	}
-	sum := sha256.Sum256(payload)
-	return "sha256:" + hex.EncodeToString(sum[:])
+	return payloadSHA256Bytes(payload)
 }
 
 func dataMapPayloadSHA256(secret *corev1.Secret) string {
-	if value := annotationValue(secret.Annotations, annotationPayloadSHA256); value != "" {
-		return value
-	}
 	keys, err := managedDataKeys(secret)
 	if err != nil || len(keys) == 0 {
 		return ""
@@ -826,6 +819,11 @@ func dataMapPayloadSHA256(secret *corev1.Secret) string {
 		return ""
 	}
 	return payload.SHA256
+}
+
+func payloadSHA256Bytes(payload []byte) string {
+	sum := sha256.Sum256(payload)
+	return "sha256:" + hex.EncodeToString(sum[:])
 }
 
 func validateDataMap(data map[string][]byte) error {
