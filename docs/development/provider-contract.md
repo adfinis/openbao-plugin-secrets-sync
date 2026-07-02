@@ -1,40 +1,57 @@
-# Provider Contract
-
-
-## Purpose
+# Provider contract
 
 Providers adapt the core sync engine to destination-specific APIs. The core
 engine owns OpenBao storage, authorization shape, queueing, status, payload
-construction, and safety policy evaluation. Providers own destination API
-validation, remote state inspection, idempotent mutation, and error
-classification.
+construction, redaction, and safety policy evaluation. Providers own
+destination API validation, client construction, remote state inspection,
+idempotent mutation, ownership metadata, and error classification.
 
-Providers must be deliberately constrained. They are not plugins inside the
-plugin in the MVP; they are Go packages compiled into the external OpenBao
-plugin binary.
+Providers are Go packages compiled into the external OpenBao plugin binary.
+They are not separate plugin processes.
 
 ## Interface
 
-```go
-type Registry interface {
-    Get(providerType string) (Provider, bool)
-    MustGet(providerType string) (Provider, error)
-}
+The backend resolves providers through a concrete registry:
 
+```go
+func NewRegistry(providerList ...Provider) (*Registry, error)
+func MustNewRegistry(providerList ...Provider) *Registry
+func (r *Registry) Get(providerType string) (Provider, bool)
+func (r *Registry) MustGet(providerType string) (Provider, error)
+```
+
+Each provider validates destination configuration and opens a configured
+runtime:
+
+```go
 type Provider interface {
     Type() string
     Capabilities() Capabilities
-    Validate(ctx context.Context, cfg DestinationConfig) error
-    Plan(ctx context.Context, req PlanRequest) (*PlanResult, error)
-    Upsert(ctx context.Context, req UpsertRequest) (*SyncResult, error)
-    Delete(ctx context.Context, req DeleteRequest) (*SyncResult, error)
-    ReadState(ctx context.Context, req ReadStateRequest) (*RemoteState, error)
-    Health(ctx context.Context, cfg DestinationConfig) (*HealthResult, error)
+    ValidateConfig(context.Context, DestinationConfig) error
+    OpenDestination(context.Context, DestinationConfig) (DestinationRuntime, error)
 }
 ```
 
-Resolved destination config is deliberately split into a stable name and a
-provider-owned string map:
+The configured runtime owns provider API calls:
+
+```go
+type DestinationRuntime interface {
+    Health(context.Context) (*HealthResult, error)
+    Plan(context.Context, PlanRequest) (*PlanResult, error)
+    Upsert(context.Context, UpsertRequest) (*SyncResult, error)
+    Delete(context.Context, DeleteRequest) (*SyncResult, error)
+    ReadState(context.Context, ReadStateRequest) (*RemoteState, error)
+    Close(context.Context) error
+}
+```
+
+The backend caches destination runtimes by destination identity and config.
+Destination updates and backend cleanup invalidate or close cached runtimes.
+
+## Destination config
+
+Resolved destination config is deliberately split into a stable destination
+name and a provider-owned string map:
 
 ```go
 type DestinationConfig struct {
@@ -43,29 +60,33 @@ type DestinationConfig struct {
 }
 ```
 
-Persistent destination metadata must keep sensitive fields out of the
+Persistent destination metadata keeps sensitive fields out of the
 non-sensitive storage record. The backend stores sensitive fields under a
-seal-wrapped destination secret prefix, redacts reads, and merges them into the
-resolved provider config only for validation, health, planning, and dispatch.
+seal-wrapped destination secret prefix, redacts reads, and merges sensitive
+fields into the resolved provider config only for validation, health, planning,
+dispatch, and reconcile.
 
-The core engine resolves provider implementations through the registry. Route
-handlers, association validation, and the dispatcher must use the same registry
-so capability checks and remote mutation cannot drift.
+Provider config validation rejects unsupported auth modes, unsupported
+sensitive fields, unsafe endpoints, invalid names, and provider-specific
+configuration conflicts before the backend stores the destination.
 
-Provider rules:
+## Provider rules
 
-- Providers receive resolved destination config and prepared payloads.
-- Providers never receive OpenBao request objects.
-- Providers never perform OpenBao policy decisions.
-- Providers must classify errors into stable classes.
-- Providers must avoid logging secret values.
-- Providers must support context cancellation and timeouts.
-- Providers must implement ownership metadata where the target supports it.
-- Providers must report partial success precisely.
+Providers:
+
+- receive resolved destination config and prepared payloads;
+- never receive OpenBao request objects;
+- never read OpenBao storage;
+- never perform OpenBao policy decisions;
+- classify errors into stable classes;
+- avoid logging secret values and credentials;
+- support context cancellation and timeouts;
+- write ownership metadata where the destination supports it;
+- report partial success precisely.
 
 ## Capabilities
 
-Each provider must declare capabilities before associations are accepted.
+Each provider declares capabilities before associations are accepted:
 
 ```go
 type Capabilities struct {
@@ -76,55 +97,45 @@ type Capabilities struct {
     SupportsDeleteIfOwned       bool
     SupportsSecretPath          bool
     SupportsSecretKey           bool
+    SupportsDataMap             bool
     MaxPayloadBytes             int
 }
 ```
 
-The core engine uses capabilities to decide whether a requested association is
-valid. For example, `overwrite_owned_only` requires some combination of
-metadata readback and provider-specific conditional update semantics. If a
-provider cannot prove ownership, the association must either be rejected or
-forced into a weaker explicitly acknowledged safety mode.
+The backend uses capabilities to validate association granularity, data
+mapping, delete mode, and payload size before provider mutation. A provider
+must advertise only behavior it implements and tests.
 
-Future capability fields such as explicit name requirements, binary payload
-support, soft-delete semantics, and provider rate-limit models should be added
-when the first provider needs them and the core engine can enforce them.
+## Runtime identity
 
-## Safety Modes
+Provider mutation and read-state requests include runtime identity:
 
-Required collision policies:
+```go
+type RuntimeIdentity struct {
+    PluginInstanceID string
+    RestoreEpoch     string
+}
+```
 
-- `fail_if_exists`: create only when the remote object does not exist.
-- `overwrite_owned_only`: update only when remote ownership metadata matches
-  the plugin association.
-- `overwrite_any`: update regardless of existing remote ownership; operator
-  only and never the default.
+Providers include these values in remote ownership metadata where the
+destination supports metadata. On later mutations, populated ownership metadata
+must match the current mount identity before the provider updates or deletes a
+remote object.
 
-Required delete modes:
+## Plan input
 
-- `retain`: stop local management and leave remote object intact.
-- `delete`: delete only when ownership can be proven.
-- `orphan`: remove association and stop managing remote object.
-
-Providers must return `ownership` or `collision` error classes when they cannot
-honor the requested safety mode.
-
-The core engine owns delete-mode selection. Providers only receive delete
-requests when the selected mode requires remote deletion and provider
-capabilities declare owned delete support.
-
-## Plan And Diagnostics
-
-Plan requests use the same resolved name and canonical payload metadata that
-dispatch uses, but never include secret values in the response:
+Plan requests describe the same remote object that dispatch would mutate, but
+the response must not include secret payload values:
 
 ```go
 type PlanRequest struct {
-    Destination   DestinationConfig
+    Runtime       RuntimeIdentity
     ResolvedName  string
     Format        string
     PayloadSHA256 string
     PayloadBytes  int
+    DataMap       bool
+    DataMapKeys   []string
     SourcePath    string
     SourceVersion int
     AssociationID string
@@ -138,24 +149,28 @@ type PlanResult struct {
 }
 ```
 
-Provider actions are stable strings: `create`, `update`, `noop`, `conflict`,
-and `blocked`.
+Provider plan actions are stable strings:
 
-Destination validation and health endpoints are diagnostic surfaces. Provider
-validation or health failures should be returned as structured response fields
-with an error class, not as leaked raw provider responses.
+- `create`
+- `update`
+- `noop`
+- `conflict`
+- `blocked`
 
-## Upsert Input
+Plan operations must not mutate remote state.
 
-Providers receive prepared payload bytes, not source secret maps:
+## Upsert input
+
+Upsert requests receive prepared payload bytes and payload metadata:
 
 ```go
 type UpsertRequest struct {
-    Destination   DestinationConfig
+    Runtime       RuntimeIdentity
     ResolvedName  string
     Format        string
     Payload       []byte
     PayloadSHA256 string
+    DataMap       map[string][]byte
     SourcePath    string
     SourceVersion int
     AssociationID string
@@ -164,22 +179,22 @@ type UpsertRequest struct {
 ```
 
 The core engine builds `Payload`, enforces `MaxPayloadBytes`, and computes
-`PayloadSHA256` before the provider is called. Providers must not reformat the
-payload before writing if they also persist or compare the payload hash.
-`SourcePath`, `SourceVersion`, `AssociationID`, and `ObjectID` let providers
-persist ownership metadata without reaching back into OpenBao storage. Providers
-with metadata readback should reject stale mutations when the remote managed
+`PayloadSHA256` before calling the provider. Providers must not reformat the
+payload before writing it when they also persist or compare the payload hash.
+
+Providers with metadata readback reject stale mutations when the remote managed
 source version is newer than the request source version.
 
-## Delete Input
+## Delete input
 
-Providers receive resolved delete requests after the core engine has validated
-association policy and destination capability:
+Delete requests are sent only when the association uses `delete_mode=delete`
+and the provider advertises owned delete support:
 
 ```go
 type DeleteRequest struct {
-    Destination   DestinationConfig
+    Runtime       RuntimeIdentity
     ResolvedName  string
+    DataMap       bool
     SourcePath    string
     SourceVersion int
     AssociationID string
@@ -187,20 +202,21 @@ type DeleteRequest struct {
 }
 ```
 
-Provider delete implementations must only delete owned objects. If ownership
-cannot be proven, return `ownership` rather than deleting. Delete requests carry
-the same ownership identity as upsert requests so providers can prove that the
-remote object belongs to the association that requested deletion.
+Provider delete implementations delete only owned objects. If ownership cannot
+be proven, the provider returns the `ownership` error class instead of
+deleting.
 
-## Read-State Input
+## Read-state input
 
-Remote state reads receive the same destination config as mutating calls:
+Read-state requests use the same remote identity and payload hash as mutation
+requests:
 
 ```go
 type ReadStateRequest struct {
-    Destination   DestinationConfig
+    Runtime       RuntimeIdentity
     ResolvedName  string
     PayloadSHA256 string
+    DataMap       bool
     SourcePath    string
     SourceVersion int
     AssociationID string
@@ -208,28 +224,27 @@ type ReadStateRequest struct {
 }
 
 type RemoteState struct {
-    Exists          bool
-    OwnershipKnown  bool
-    Owned           bool
-    PayloadSHA256   string
-    SourceVersion   int
-    RemoteVersion   string
+    Exists         bool
+    OwnershipKnown bool
+    Owned          bool
+    PayloadSHA256  string
+    SourceVersion  int
+    RemoteVersion  string
 }
 ```
 
-`OwnershipKnown=false` means the provider could not prove ownership either
-way. The core must not treat that as `SYNCED` unless another comparable field,
-such as the provider payload hash metadata, matches the desired state.
+`OwnershipKnown=false` means the provider cannot prove ownership either way.
+The core does not treat that state as `SYNCED` unless another comparable field,
+such as provider payload-hash metadata, proves the desired remote state.
 
-## Ownership Metadata
+## Ownership metadata
 
-Providers should write destination metadata where possible:
+Providers write destination metadata where possible:
 
 ```text
 openbao-sync=true
 openbao-sync-plugin-instance=<plugin-instance-id>
 openbao-sync-restore-epoch=<restore-epoch>
-openbao-sync-mount=<mount-accessor-or-name>
 openbao-sync-association=<association-id>
 openbao-sync-path=<source-path>
 openbao-sync-version=<source-version>
@@ -237,26 +252,18 @@ openbao-sync-object=<object-id>
 openbao-sync-payload-sha256=<hash>
 ```
 
-If a provider cannot store all fields, it must document the reduced ownership
-proof. The core engine should surface reduced guarantees in plan and status
-responses.
+Provider-specific docs describe reduced ownership proof when the destination
+cannot store all fields.
 
-## Name Templates
+## Name templates
 
-The template engine should be intentionally small. Supported values:
+The template engine is intentionally small. Supported values:
 
 ```text
-mount
-mount_accessor
 path
-path_segments
-basename
-dirname
-version
 key
 destination_type
 destination_name
-metadata.<name>
 ```
 
 Supported functions:
@@ -270,70 +277,50 @@ sha256
 dns1123
 ```
 
-Templates must be validated at association creation and revalidated during
-sync. The core engine must maintain a reservation index for resolved names so
-two associations do not accidentally manage the same remote object after
-normalization, truncation, or provider-specific character conversion.
+Templates are validated at association creation and revalidated during sync.
+The backend maintains a reservation index for resolved names so two
+associations do not manage the same remote object for one destination.
 
-Template changes must not silently rename existing remote objects. Required
-behavior:
+Template changes do not silently rename existing remote objects. Operators
+must review the plan and choose the desired cleanup behavior.
 
-- plan shows old and new resolved names;
-- operator chooses retain, delete-owned, or orphan old remote objects;
-- status tracks old objects until cleanup is complete.
+## Payload formats
 
-## Payload Formats
+Supported formats:
 
-MVP formats:
+- `json`: canonical JSON object;
+- `raw`: one selected source key as raw string or bytes;
+- `data-map`: canonical internal format used for destination-native data maps.
 
-- `json`: full secret data as a canonical JSON object.
-- `raw`: one selected key as raw string or bytes.
+Supported association shapes:
 
-Later format:
+- `granularity=secret-path` with `format=json`;
+- `granularity=secret-key` with `format=json`;
+- `granularity=secret-key` with `format=raw`;
+- `granularity=secret-path` with `data_mapping=source-keys` when the provider
+  advertises data-map support.
 
-- `env`: postponed because escaping and multiline handling are easy to misuse.
+For `secret-key` and `json`, each remote payload is canonical JSON containing
+only the selected source key. Source keys used as `secret-key` object IDs must
+be non-empty, have no surrounding whitespace, and must not contain `/`, `.`, or
+`..`.
 
-Granularity:
+For `secret-key` and `raw`, the remote payload is the exact string or byte
+value of the selected source key. Structured values are rejected before a
+provider call. `raw` is invalid for `secret-path` because there is no single
+selected key.
 
-- `secret-path`: one destination secret per OpenBao secret path.
-- `secret-key`: one destination secret per top-level key in OpenBao secret
-  data.
-- `data_mapping=source-keys`: one destination object per OpenBao secret path,
-  with top-level source keys mapped into destination-native data keys. This is
-  separate from `secret-key` granularity and requires an explicit provider
-  capability.
+For `data_mapping=source-keys`, the core sends providers a
+`map[string][]byte` keyed by rendered destination data keys. Providers receive
+the destination-native data map and must not derive it by reparsing JSON
+payload bytes.
 
-Core dispatch supports both granularities when the destination provider
-advertises the matching capability. For `secret-key` and `json` format, each
-remote payload is canonical JSON containing only that source key. Source keys
-used as `secret-key` object identifiers must be non-empty, have no surrounding
-whitespace, and must not contain `/`, `.`, or `..`.
+The payload hash is always computed over the exact bytes intended for provider
+comparison.
 
-For `secret-key` and `raw` format, the remote payload is the exact string or
-byte value of the selected source key. Structured values are rejected before a
-provider call. `raw` is intentionally invalid for `secret-path` because there
-is no single selected key.
+## Error classification
 
-For `data_mapping=source-keys`, the core sends a canonical data-map payload
-with deterministic bytes and a payload hash over the rendered key/value map.
-Providers receive the destination-native `map[string][]byte` and must not
-derive it by reparsing JSON payload bytes.
-
-Canonical JSON requirements:
-
-- stable key ordering;
-- UTF-8 output;
-- no provider-specific whitespace changes in the payload hash;
-- explicit behavior for non-string values;
-- explicit behavior for null values;
-- deterministic hash input shared by plan, upsert, and drift detection.
-
-The payload hash must be over the exact bytes intended for the destination
-payload, not over the original Go map representation.
-
-## Error Classification
-
-Provider errors must map to:
+Provider errors map to stable classes:
 
 ```go
 type ErrorClass string
@@ -352,21 +339,15 @@ const (
 )
 ```
 
-Automatically retry only `rate_limit` and `unavailable` errors. A later
-provider-contract extension may add an explicit retryable-internal marker, but
-plain `internal` errors are terminal for now. Validation, authentication,
-authorization, ownership, collision, and provider policy errors should remain
-terminal until configuration changes.
+The core automatically retries only `rate_limit` and `unavailable` errors.
+Validation, authentication, authorization, ownership, collision, drift,
+capacity, and internal failures remain terminal until an operator changes
+configuration or retries manually.
 
-## Provider Conformance Tests
+## Provider conformance tests
 
-Use [Provider implementation guide](provider-implementation.md) for the
-practical provider development workflow. This section defines the shared
-contract expectations.
-
-Every provider package should use the shared provider conformance harness before
-it is registered in the backend. The harness is not a replacement for
-provider-specific tests, but it locks down the common contract:
+Every registered provider uses the shared provider conformance harness. The
+harness locks down the common contract:
 
 - stable non-empty provider type;
 - declared capability bits and payload limits;
@@ -376,135 +357,82 @@ provider-specific tests, but it locks down the common contract:
 - upsert and delete success results where implemented;
 - read-state behavior where implemented;
 - provider error-class mapping for retry and terminal failures;
-- maturity matrix coverage for ownership loss, authentication failure,
-  throttling, payload limits, partial-success behavior, stale remote state, and
-  delete semantics.
+- ownership loss, authentication failure, throttling, payload limits,
+  partial-success behavior, stale remote state, and delete semantics.
 
-New providers may start with only type, capability, validation, health, and
-plan checks. Backend registration should wait until upsert, owned delete, and
-error classification are implemented for the provider.
+Provider-specific tests cover request shape, ownership metadata layout, stale
+source-version rejection, provider naming rules, provider auth behavior, and
+destination API edge cases.
 
-The maturity matrix treats partial success as an explicit provider property.
-Providers whose remote API writes payload and ownership metadata atomically
-should declare the atomic mode and keep lifecycle coverage for that mutation.
-Providers with multi-step writes must include a case where a later metadata or
-cleanup step fails after an earlier remote mutation and the provider returns a
-stable error class with no successful `SyncResult`.
+## Registered providers
 
-## Provider MVP Choices
+### Fake provider
 
-### Fake Provider
-
-The fake provider is required in Phase 0. It should support all capability
-combinations needed by unit and integration tests, including:
-
-- success;
-- deterministic plan actions for create, update, noop, conflict, and blocked;
-- validation, authentication, authorization, rate-limit, unavailable,
-  ownership, collision, and validation error classes;
-- unhealthy destination diagnostics;
-- `secret-path` and `secret-key` granularity;
-- delayed read-after-write consistency in a later slice.
+The fake provider supports backend tests and local contract checks. It provides
+deterministic plan actions, mutation responses, error classes, and both
+`secret-path` and `secret-key` granularity.
 
 ### AWS Secrets Manager
 
-AWS Secrets Manager is a strong MVP provider because it has common customer
-demand and a useful ownership model through tags and version metadata.
+AWS Secrets Manager uses destination type `aws-sm`.
 
-Current status: package has provider type `aws-sm`, conservative capabilities,
-backend registration, destination config for SDK default auth and STS
-assume-role auth, seal-wrapped external ID handling, explicit custom endpoint
-policies, an SDK-backed client boundary, LocalStack e2e coverage, and mocked
-behavior tests for health, plan, upsert, owned delete, read-state, ownership
-checks, AWS error classification, and the shared provider maturity matrix.
+Supported auth modes:
 
-Current granularity support: `secret-path` only. The provider advertises
-`SupportsSecretKey: false` until AWS naming, collision, and cleanup semantics
-are implemented and covered by tests.
+- AWS SDK default credential chain;
+- STS assume role.
 
-Required implementation behavior:
+Supported association shape:
 
-- support workload identity or role assumption before static keys;
-- validate auth mode, assume-role fields, sensitive static credential fields,
-  endpoint URL shape, and endpoint policy;
-- write ownership tags for association id, source path, source version, object
-  id, and payload hash;
-- enforce max payload size before remote calls;
-- classify AWS throttling and service errors;
-- reject stale update or delete attempts when the remote managed source version
-  is newer than the request source version;
-- detect ownership loss before update or delete;
-- avoid logging AWS responses that may include secret material.
+- `granularity=secret-path` with `format=json`.
 
-Static access keys are intentionally not supported yet. The backend now has the
-seal-wrapped storage and redaction surface needed for them, but static auth
-still requires explicit credential construction, rotation semantics, and opt-in
-tests before it should be enabled.
+The provider writes ownership tags, uses metadata readback, rejects ownership
+loss, rejects stale remote source versions, classifies AWS and transport
+errors, supports scheduled-delete recovery for owned secrets, and avoids
+`GetSecretValue`.
+
+Static AWS access keys, secret access keys, and session tokens are recognized
+as sensitive fields but are not supported auth material.
 
 ### Kubernetes Secrets
 
-Kubernetes Secrets are a strong MVP provider because OpenBao users commonly run
-Kubernetes and local integration testing is practical.
+Kubernetes Secrets uses destination type `k8s`.
 
-Required implementation behavior:
+Supported auth modes:
 
-- support in-cluster, kubeconfig, and service-account auth where appropriate;
-- validate namespace and name using Kubernetes rules;
-- write labels and annotations for ownership metadata;
-- support `Opaque` secrets first;
-- handle per-key partial failures clearly;
-- test with envtest or kind.
+- in-cluster service account;
+- kubeconfig;
+- bearer token with API server and CA config.
 
-Current status: package has provider type `k8s`, conservative capabilities,
-backend registration, destination config for namespace, in-cluster auth, and
-kubeconfig auth, token auth, a client-go-backed client boundary, Opaque Secret
-create/update/delete/read-state/health behavior, ownership labels and
-annotations, payload hash metadata, source-key data mapping into Secret
-`.data`, Kubernetes API error classification, and a provider conformance
-lifecycle and maturity test using the client-go fake client.
+Supported association shapes:
 
-Current granularity support: `secret-path` only. The provider supports
-`data_mapping=source-keys` for Kubernetes-native `.data` entries without
-turning on `secret-key` fan-out. Kubernetes Secret `secret-key` support remains
-later work because it would require separate remote object naming and cleanup
-semantics.
+- `granularity=secret-path` with `format=json`;
+- `granularity=secret-path` with `data_mapping=source-keys`.
 
-### GitLab Project Variables
+The provider writes `Opaque` Secrets, ownership labels and annotations, payload
+hash metadata, and source-version metadata. It supports owned update, owned
+delete, read-state, health checks, and Kubernetes API error classification.
 
-GitLab project variables are a useful third provider because they exercise a
-non-secret-manager destination shape: one CI/CD variable key/value per remote
-object.
+The provider does not advertise `secret-key` fan-out.
 
-Current status: package has provider type `gitlab`, backend registration,
-project-level destination config, seal-wrapped API token storage, standard HTTP
-client boundary, provider conformance coverage, project variable plan/upsert,
-owned update, owned delete, read-state, health, and HTTP error classification.
-The provider passes the shared maturity matrix. Self-contained Docker GitLab
-e2e coverage is opt-in because a full GitLab CE container is heavy. Real GitLab
-e2e coverage remains a later opt-in/manual fixture because it requires an
-external project and token.
+### GitLab project variables
 
-Current granularity support: `secret-path` and `secret-key`. For CI/CD
-variables, `secret-key` with `format=raw` is the recommended shape. The
-provider validates rendered variable names against GitLab's variable key rules.
-Ownership and payload hash metadata are stored in the variable description;
-the provider does not need to read variable values back for drift status.
+GitLab project variables use destination type `gitlab`.
+
+Supported auth mode:
+
+- GitLab API token.
+
+Supported association shapes:
+
+- `granularity=secret-key` with `format=raw`;
+- `granularity=secret-key` with `format=json`;
+- `granularity=secret-path` with `format=json`.
+
+The provider writes project CI/CD variables, stores ownership metadata in the
+variable description, validates variable attributes and masked payloads,
+repairs attribute drift, supports owned update, owned delete, read-state,
+health checks, and HTTP error classification.
+
 Non-local `http://` GitLab base URLs are rejected by default and require
 `allow_insecure_http=true`, which is intended for local Docker or private test
 networks rather than production destinations.
-
-## Provider Test Expectations
-
-Every provider must have tests for:
-
-- config validation;
-- redaction of sensitive fields;
-- name validation and normalization;
-- payload size limits;
-- create/update/delete success;
-- fail-if-exists behavior;
-- overwrite-owned-only behavior;
-- ownership loss;
-- rate limit and transient retry mapping;
-- terminal authn/authz/policy failures;
-- no secret values in logs, errors, or status fixtures.

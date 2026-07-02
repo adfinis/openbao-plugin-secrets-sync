@@ -1,463 +1,325 @@
 # Architecture
 
+This page describes the maintained architecture of
+`openbao-plugin-secrets-sync`. Use it when you review backend behavior, storage
+records, provider boundaries, or consistency rules.
 
-## Plugin Boundary
+## Plugin boundary
 
-The design assumes the current OpenBao external plugin model:
+Secret Sync is an OpenBao external secret-engine plugin. OpenBao runs the
+plugin as a separate process and routes logical backend requests to it.
 
-- the plugin is a separate process managed by OpenBao;
-- the plugin receives a mount-scoped storage view, not a global storage view;
-- the plugin is invoked through logical backend request paths;
-- OpenBao core remains responsible for authentication, authorization, audit
-  request handling, plugin lifecycle, routing, and sealing;
-- the plugin cannot transparently observe writes to unrelated mounts.
+OpenBao remains responsible for:
 
-This boundary is deliberate. The project is a sync-aware secret engine, not a
-drop-in implementation of `/sys/sync`.
+- authentication and authorization;
+- audit request handling;
+- plugin lifecycle and routing;
+- seal and storage encryption;
+- replication and active-node routing.
 
-The plugin should use `ServeMultiplex` so a single plugin binary can serve
-multiple mounts. All per-mount state remains scoped by backend UUID, mount
-identity, and OpenBao storage.
+The plugin receives a mount-scoped storage view. It does not receive global
+storage and cannot observe writes to unrelated mounts. Secret Sync therefore
+stores source data in its own mount and synchronizes that source data to
+external destinations. It is not a drop-in implementation of `/sys/sync`.
+
+The plugin uses the OpenBao framework backend with `logical.TypeLogical`.
+Backend setup registers path handlers, seal-wrapped storage prefixes,
+invalidation hooks, cleanup hooks, and periodic work.
 
 ### Future cross-plugin communication
 
-OpenBao has an early
+OpenBao has a
 [cross-plugin communication RFC](https://gist.github.com/cipherboy/eb2dfa598615ac5c510c534ca383d3ba)
 that proposes hook-driven and internal request paths between plugins. If that
-API becomes stable, Secret Sync could use it as an optional source-ingest path
+API becomes stable, Secret Sync can use it as an optional source-ingest path
 from other OpenBao secret engines.
 
-The current architecture must not depend on that RFC. Secret Sync should keep
-owning its source data, outbox, provider interface, reconcile model, and
-confused-deputy controls inside its own mount. A future integration should add
-cross-plugin source adapters at the boundary, and should not use localhost API
-clients, manually managed tokens, or network loopback calls between plugins.
+The architecture does not depend on that RFC. Secret Sync owns its source data,
+outbox, provider interface, reconcile model, and confused-deputy controls
+inside its own mount. A future integration should add cross-plugin source
+adapters at the boundary and should not use localhost API clients, manually
+managed tokens, or network loopback calls between plugins.
 
-## Component Model
+## Component model
 
 ```text
 +--------------------------------------------------------------------------+
 | openbao-plugin-secrets-sync                                              |
 |                                                                          |
 | API paths                                                                |
-|   data/*, metadata/*, destinations/*, associations/*, status/*, queue/*  |
+|   config, sources, data, metadata, destinations, associations, queue,    |
+|   status, reconcile                                                      |
 |                                                                          |
 | Core services                                                            |
-|   KV store                  Version metadata store                       |
+|   Source store              Source metadata store                        |
 |   Destination registry      Association registry                         |
 |   Outbox queue              Sync dispatcher                              |
 |   Reconciler                Status store                                 |
-|   Provider registry         Validation and planning service              |
-|   Capability evaluator      Redaction and error classifier               |
-|                                                                          |
-| Storage                                                                  |
-|   config, schema, identity, source versions, associations, outbox, status |
+|   Provider registry         Runtime cache                                |
+|   Capability validation     Redaction and error classification           |
+|   Observability recorder    Runtime identity                             |
 +------+------------------+---------------------+-------------------------+
        |                  |                     |
        v                  v                     v
- AWS Secrets Manager   Kubernetes Secrets   Future providers
+ AWS Secrets Manager   Kubernetes Secrets   GitLab project variables
 ```
 
-Providers receive prepared requests and resolved destination configuration.
-They never receive OpenBao request objects and must never log secret values.
+Providers receive resolved destination configuration, runtime identity, remote
+names, ownership fields, and prepared payloads. Providers never receive OpenBao
+request objects and never make OpenBao policy decisions.
 
-## Storage Model
+## Storage records
 
-All paths are relative to the plugin storage view.
+All keys are relative to the plugin storage view.
 
 ```text
-config/global
-config/limits
+config
 schema/version
 identity/plugin-instance
 identity/restore-epoch
 
 data/<path>/versions/<version>
 metadata/<path>
-metadata_index/<prefix>
 
 destinations/<type>/<name>
 destinations_secrets/<type>/<name>
 
-associations/<normalized-path>/<association-id>
+associations/<path>/<association-id>
 associations_by_destination/<type>/<name>/<association-id>
-association_names/<destination-ref>/<resolved-name>/<association-id>
+association_names/<destination-ref>/<reservation>/<association-id>
+
+enqueue_intent/<path>/<version>
 
 outbox/<operation-id>
 outbox_by_due/<timestamp>/<operation-id>
-outbox_by_path/<normalized-path>/<operation-id>
+outbox_by_path/<path>/<operation-id>
 outbox_by_state/<state>/<operation-id>
-enqueue_intent/<normalized-path>/<version>
 
-status/<normalized-path>/<association-id>/<object-id>
-status_by_destination/<type>/<name>/<association-id>/<object-id>
-
-reconcile_cursors/<scope>
-locks/<lock-name>
+status/<path>/<association-id>/<object-id>
 ```
 
-Destination writes accept only the public and sensitive config keys for the
-selected provider type. The backend validates the merged destination config
-with the provider before storing either public or seal-wrapped sensitive data.
+Destination writes split public and sensitive configuration. Public fields are
+stored in `destinations/<type>/<name>`. Sensitive fields are stored under
+`destinations_secrets/<type>/<name>`, which is listed in
+`PathsSpecial.SealWrapStorage`.
 
-### Schema And Identity
+Source version records are also stored under a seal-wrapped prefix. Status,
+queue, and association records can include operational metadata such as source
+paths, association IDs, remote names, versions, operation IDs, and error
+classes, but they must not include source payload values.
 
-`schema/version` records the storage schema understood by the plugin binary. The
-backend initializes this record on first storage-backed request. If the stored
-schema requires a newer incompatible plugin, request handling and periodic
-processing fail closed with a clear operator error before source or remote
-mutation.
+## Runtime identity
 
-`identity/plugin-instance` is generated once per mount and exposed through
-`config` reads. Provider requests carry it, and providers include it in
-ownership metadata where supported. This helps distinguish two OpenBao mounts
-using the same remote destination.
+`schema/version` records the storage schema understood by the plugin binary.
+The backend initializes the schema on the first storage-backed request. If a
+stored schema requires a newer incompatible plugin, request handling and
+periodic processing fail closed before source or remote mutation.
+
+`identity/plugin-instance` is generated once per mount. Provider requests carry
+this ID so providers can write and verify ownership metadata for the OpenBao
+mount that produced a remote object.
 
 `identity/restore-epoch` is generated once per mount and rotates when an active
-restore guard is acknowledged. Provider requests carry it, and providers
-include it in remote ownership metadata where supported.
+restore guard is acknowledged. Providers include the restore epoch in ownership
+metadata where the destination supports it. This helps distinguish restored or
+cloned mounts that might otherwise manage the same remote object.
 
 Each source metadata record carries a random generation. Operation IDs and
-provider idempotency keys include that generation alongside path, source
-version, association, object, and operation type. Deleting and recreating a
-source path therefore cannot reuse historical operation IDs even when version
-numbers restart at 1.
+idempotency keys include that generation so deleting and recreating a source
+path does not reuse historical operation IDs when version numbers restart.
 
-### Secret Version Record
+## Source lifecycle
 
-```json
-{
-  "version": 4,
-  "created_time": "2026-06-30T12:00:00Z",
-  "created_by": {
-    "entity_id": "entity-id",
-    "display_name": "user"
-  },
-  "data": {
-    "username": "app",
-    "password": "secret"
-  },
-  "deletion_time": "",
-  "destroyed": false
-}
-```
+Source data is KV-v2-like but not wire-compatible with the OpenBao KV-v2
+engine. Each source write creates a new version under
+`data/<path>/versions/<version>` and updates metadata under `metadata/<path>`.
 
-### Metadata Record
+Source metadata controls:
 
-```json
-{
-  "current_version": 4,
-  "oldest_version": 1,
-  "max_versions": 10,
-  "cas_required": true,
-  "delete_version_after": "0s",
-  "custom_metadata": {
-    "owner": "platform",
-    "syncable": "true"
-  }
-}
-```
+- the current version;
+- the oldest retained version;
+- maximum retained versions;
+- CAS requirements;
+- custom metadata such as `syncable=true`;
+- per-version deletion and destroy state.
 
-### Association Record
+Source writes that can enqueue sync work reserve queue capacity before they
+commit the new source version. If the queue is full, the write returns an
+error before accepting the new version.
 
-```json
-{
-  "id": "assoc_01",
-  "path": "app/db",
-  "destination": {
-    "type": "aws-sm",
-    "name": "prod"
-  },
-  "name_template": "{{ path }}",
-  "resolved_name": "sync-kv/app/db",
-  "granularity": "secret-path",
-  "format": "json",
-  "enabled": true,
-  "created_time": "2026-06-30T12:00:00Z",
-  "source_eligibility": {
-    "mode": "metadata",
-    "require_custom_metadata": {
-      "syncable": "true"
-    }
-  }
-}
-```
+Source delete, soft-delete, destroy, and undelete operations participate in
+sync. Current-version delete and destroy operations cancel stale queued upserts
+and enqueue remote deletes for associations that use `delete_mode=delete`.
+Undeleting the current source version enqueues replacement upserts for enabled
+associations.
 
-### Outbox Record
+## Association lifecycle
 
-```json
-{
-  "id": "op_01",
-  "type": "upsert",
-  "path": "app/db",
-  "version": 4,
-  "association_id": "assoc_01",
-  "object_id": "secret-path",
-  "destination": {
-    "type": "aws-sm",
-    "name": "prod"
-  },
-  "state": "pending",
-  "attempts": 0,
-  "not_before": "2026-06-30T12:00:00Z",
-  "last_error_class": "",
-  "last_error": "",
-  "created_time": "2026-06-30T12:00:00Z",
-  "updated_time": "2026-06-30T12:00:00Z",
-  "idempotency_key": "sync-kv:app/db:4:assoc_01:secret-path:upsert"
-}
-```
+An association links one source path to one destination. It defines:
 
-### Status Record
+- the destination type and name;
+- the resolved remote name or name template;
+- granularity;
+- payload format;
+- destination-native data mapping;
+- delete mode;
+- enabled state.
 
-```json
-{
-  "path": "app/db",
-  "version": 4,
-  "association_id": "assoc_01",
-  "object_id": "secret-path",
-  "destination": {
-    "type": "aws-sm",
-    "name": "prod"
-  },
-  "resolved_name": "sync-kv/app/db",
-  "state": "SYNCED",
-  "remote_version": "provider-version",
-  "last_operation_id": "op_01",
-  "last_success_time": "2026-06-30T12:00:03Z",
-  "last_error_class": "",
-  "last_error": ""
-}
-```
+Enabled associations require source eligibility. The default eligibility check
+requires source custom metadata `syncable=true`.
 
-`object_id` is required because a single association can produce many remote
-objects when using `secret-key` granularity.
+The backend validates association requests against provider capabilities before
+it accepts them. Capability checks cover secret-path support, secret-key
+support, destination-native data mapping, owned delete support, and provider
+payload limits.
 
-## Write Consistency
+Association records reserve the destination and remote-name identity they
+manage. This prevents two associations from managing the same remote object for
+the same destination.
 
-The write path must avoid a gap where the local version is committed but sync
-intent is lost. If OpenBao storage transactions are available for the target
-minimum version, use them for metadata, version, enqueue intent, and outbox
-creation.
+## Payload model
 
-If transactions are not available, use a recoverable state:
+The core backend builds canonical payloads before calling a provider.
 
-1. acquire per-path write lock;
-2. validate CAS and compute next version;
-3. compute expected outbox records and stale inactive upserts they supersede;
-4. reserve queue capacity after accounting for superseded work;
-5. write `enqueue_intent/<path>/<version>` with expected associations;
-6. write version record;
-7. cancel superseded queued upsert records;
-8. create outbox records;
-9. remove the enqueue intent after outbox records are durable;
-10. update metadata current version;
-11. release lock.
+Supported payload forms are:
 
-The reconciler must scan incomplete enqueue intents and committed versions to
-recreate missing outbox records. Enqueue intents store structured operation
-descriptors, including operation IDs and source generation. Completed enqueue
-intents are removed after the corresponding outbox records are durable. This
-makes crash recovery explicit without retaining unbounded completed intent
-history.
+- `format=json` with `granularity=secret-path`, which sends the whole source
+  data map as deterministic JSON;
+- `format=json` with `granularity=secret-key`, which sends one deterministic
+  JSON object per top-level source key;
+- `format=raw` with `granularity=secret-key`, which sends the selected source
+  key as raw string or byte data;
+- `data_mapping=source-keys` with `granularity=secret-path`, which maps
+  top-level source keys into destination-native data keys when the provider
+  advertises data-map support.
 
-Source metadata writes, source version mutations, and association lifecycle
-mutations use the same source-path lock. Association writes also lock the
-destination-name reservation identity and destination identity so concurrent
-association creation cannot reserve the same remote object or race destination
-deletion. Destination writes and deletes take the destination identity lock.
-Queue capacity checks and outbox replacement writes are serialized across
-enqueue paths.
+The payload hash is computed over the exact bytes that the provider receives.
+Providers must not reformat the payload before writing it when they also store
+or compare the payload hash.
 
-## Operation State Machine
+## Queue and dispatch
+
+The outbox stores durable remote-mutation intent. Queue records are indexed by
+state, due time, and source path.
+
+Supported operation states are:
 
 ```text
-pending -> claimed -> applying -> status_persisted -> pruned
-                     -> retry_wait
-                     -> failed_terminal
-
-retry_wait -> pending
-claimed    -> pending        when claim expires
-applying   -> pending        when claim expires and provider operation is idempotent
+pending
+retry_wait
+failed_terminal
 ```
 
-The dispatcher persists claim owner, expiry, and attempt metadata directly on
-the outbox record rather than exposing `claimed` as a separate public operation
-state. Due `pending` and `retry_wait` records with an unexpired claim are
-skipped; expired claims are reclaimable. Successful operations write object
-status first and are then pruned from the outbox, so success evidence lives in
-`status/` rather than durable queue history. Automatic retry is reserved for
-provider `rate_limit` and `unavailable` classes, with a bounded attempt budget
-and `not_before` delay. Manual queue retry moves retry-wait or terminal failed
-work back to `pending` and resets the attempt counter. Manual queue cancel and
-automatic supersede/delete cancellation discard pending or retry-wait records.
-Lifecycle paths that cancel queued work refuse operations with active claims.
-The dispatcher serializes claim writes with enqueue/cancel paths, then releases
-that lock before provider I/O; active work must finish or expire before
-association disable/delete or source delete can discard it.
+Dispatch claims are stored on the outbox record with a claim owner, expiry
+time, and attempt number. Unexpired claims are skipped. Expired claims are
+reclaimable.
 
-The `queue/drain` path runs the same due-operation dispatcher as background
-work with a request-bounded operation limit. It first checks global mutation
-safety gates, including `disabled`, `restore_guard`, and OpenBao replication
-state, then recovers incomplete enqueue intents and returns a queue summary
-without exposing source payload data. The path exists for deterministic tests,
-operator-controlled catch-up, and break-glass workflows; normal progress should
-come from the periodic function.
+The dispatcher processes due `pending` and `retry_wait` records. For each
+operation it:
 
-Source delete uses the same durable outbox model. Deleting, soft-deleting, or
-destroying the current local version cancels queued upsert work for that
-version. Associations with `delete_mode=delete` enqueue provider delete
-operations; other delete modes leave the remote object untouched. Undeleting
-the current version enqueues replacement upserts for enabled associations.
-Delete enqueue intent recovery is type-aware: upsert intents recover only while
-the source version is live, delete intents recover only after the source version
-is deleted.
+1. claims the operation;
+2. loads the association and destination;
+3. validates provider capabilities and destination policy;
+4. loads the source version when the operation is an upsert;
+5. builds the canonical payload;
+6. calls the provider;
+7. writes per-object status;
+8. prunes successful outbox work or schedules retry/terminal failure.
 
-Claims include owner, expiry, and attempt number. In-memory locks are only an
-optimization. Correctness comes from durable claims, idempotency keys, and
-provider-side version or ownership checks.
+Only provider errors classified as `rate_limit` or `unavailable` retry
+automatically. Authentication, authorization, validation, ownership, collision,
+drift, capacity, and internal failures remain terminal until an operator
+changes configuration or retries the operation manually.
+
+## Enqueue recovery
+
+Source writes and source lifecycle mutations write enqueue intents before they
+write outbox records. Enqueue intents contain the expected operation IDs,
+operation types, association IDs, object IDs, and destination references.
+
+Periodic work and queue drains recover incomplete enqueue intents before
+processing due outbox records. Upsert intents recover only while the source
+version is live. Delete intents recover only when the referenced source version
+is deleted or unavailable.
 
 ## Ordering
 
-For a single association and object, operations must not allow an older source
-version to overwrite a newer source version.
+For a single association and object, an older source version must not overwrite
+a newer source version.
 
-Allowed strategies:
+The backend enforces this with three layers:
 
-- block processing of version N+1 until version N is terminal;
-- allow newer versions to supersede older pending operations before dispatch;
-- provider compares desired source version metadata before upserting.
+- source writes supersede older inactive queued upserts for the same
+  association object;
+- dispatch rechecks the current source version before mutating a stale upsert;
+- status writes reject older versions when newer status already exists.
 
-The current implementation supersedes older inactive pending upserts before
-dispatch and keeps provider-side version checks where supported. Active claims
-are allowed to finish or expire because provider mutation may already be in
-flight. When an older claimed upsert becomes dispatchable again after claim
-expiry, dispatch rechecks the current source version and cancels the stale
-upsert before provider mutation. Status writes are guarded by source version so
-older operations cannot overwrite newer object status.
+Providers that can read ownership metadata also reject stale mutations when
+the remote object carries a newer managed source version.
 
-## Queue Capacity And Backpressure
+## Destination policy
 
-Global configuration must define queue capacity. When the queue is full, the
-write path must return a clear error before accepting a new source version, or
-must accept the version only if enqueue intent recovery guarantees later queue
-creation. The MVP should fail the write before committing the source version
-when capacity is known to be exceeded. `queue_capacity=0` intentionally closes
-the queue to new enqueues while leaving reads, status inspection, and existing
-queue processing available.
+Destinations can restrict the source paths and remote names that may use them.
 
-Queue capacity checks and queue summaries start from the `outbox_by_state/`
-index. Dispatch starts from the `outbox_by_due/` index, which contains only
-pending and retry-wait operations.
+The backend checks destination policy during:
 
-Queue listing should expose:
+- association planning;
+- association activation;
+- manual association sync;
+- association enable;
+- queued dispatch.
 
-- total pending operations;
-- oldest pending operation age;
-- retry-wait operation count;
-- terminal failure count;
-- per-destination counts;
-- capacity and remaining capacity.
-
-## Background Work
-
-Periodic function pseudo-flow:
-
-```text
-if global disabled:
-  return
-if restore guard active:
-  return
-if not writable cluster state:
-  return
-
-recover_incomplete_enqueue_intents(limit=A)
-process_due_outbox(limit=B)
-enqueue_reconciliation_work_if_due(limit=C)
-process_due_reconciliation(limit=D)
-```
-
-The current implementation bounds enqueue-intent recovery and due outbox
-processing per periodic tick. Reconciliation is manual per path until cursor
-storage and limits C/D are implemented.
-
-Outbox processing:
-
-```text
-load due operation
-claim operation
-load association
-load destination
-load provider capabilities
-load source version and metadata
-build canonical payload
-plan or read remote state if safety policy requires it
-apply provider upsert or delete
-write per-object status
-mark operation done, retry, or terminal
-```
+This means a tightened destination policy blocks already queued work before the
+provider mutates remote state.
 
 ## Reconciliation
 
-Reconciliation is bounded and resumable:
+Reconciliation reads provider remote state and reports local status. It does
+not mutate destination secrets.
 
-- per-destination cursor;
-- per-path narrow reconcile;
-- per-mount limits;
-- configurable concurrency;
-- operator-triggered dry-run plan.
+The per-path reconcile plan path reads provider state and returns the computed
+state without changing local status. The per-path reconcile apply path writes
+local status from provider read-state results.
 
-The first implementation provides manual per-path reconcile. The plan path only
-reads provider state; the apply path writes local status but still does not
-mutate destination objects. Reconciliation should detect missing outbox entries
-and stale or missing remote
-objects. It should enqueue operations rather than mutating many remote objects
-inside the scan.
+## HA and replication
 
-## HA And Replication
+Secret Sync assumes OpenBao routes writes to an active node. Periodic and
+manual remote mutation paths check OpenBao replication state before writing
+queue or status records or calling providers.
 
-The plugin should assume:
+Remote mutation is blocked on unsafe replication states, including performance
+secondary, performance standby, performance bootstrapping, DR secondary, and
+DR bootstrapping states. Local mounts are allowed to proceed.
 
-- writes route to the active OpenBao node;
-- storage writes can return read-only errors on non-active nodes;
-- periodic work should run only where writes are safe;
-- performance secondary and DR secondary behavior must be guarded using
-  OpenBao replication state.
+The lifecycle e2e fixture covers a three-node Raft deployment with static seal
+self-unseal, HA failover, queued work, status persistence, and operator seal
+recovery.
 
-Periodic processing should check `System().ReplicationState()` and
-`System().LocalMount()` before writing queue or status records.
+## Runtime caches
 
-## Backend Construction
+The backend caches provider destination runtimes in memory. Cache entries are
+keyed by destination identity and invalidated when destination public or
+sensitive configuration changes. Backend cleanup also closes cached runtimes.
 
-The backend should use the OpenBao framework backend.
+Runtime caches are an optimization. Correctness comes from durable storage,
+queue claims, provider idempotency, and provider ownership checks.
 
-Key construction choices:
+## Safety invariants
 
-- `BackendType: logical.TypeLogical`
-- `RunningVersion: pluginVersion`
-- `PathsSpecial.SealWrapStorage`: destination sensitive config and optional
-  local secret data prefixes
-- `PathsSpecial.LocalStorage`: runtime locks only if they must not replicate
-- `PeriodicFunc`: outbox processing and reconciliation scheduler
-- `WALRollback`: only where provider operations need explicit compensation
-- `Invalidate`: clear destination, association, and credential caches
+Preserve these invariants:
 
-## Storage Abstraction
-
-Create a small internal store layer over `logical.Storage`:
-
-```go
-type Store struct {
-    storage logical.Storage
-}
-
-func (s *Store) PutSecretVersion(ctx context.Context, path string, rec VersionRecord) error
-func (s *Store) GetSecretVersion(ctx context.Context, path string, version int) (*VersionRecord, error)
-func (s *Store) PutMetadata(ctx context.Context, path string, rec MetadataRecord) error
-func (s *Store) ListMetadata(ctx context.Context, prefix string) ([]string, error)
-func (s *Store) PutOutbox(ctx context.Context, op Operation) error
-func (s *Store) ClaimDueOperations(ctx context.Context, now time.Time, limit int) ([]Operation, error)
-```
-
-Use structured JSON records initially. Avoid ad hoc string parsing except for
-normalized storage key construction.
+- Source payload values appear only in source read responses and provider
+  mutation requests.
+- Destination sensitive config is stored separately from public destination
+  metadata and is redacted on reads.
+- Providers mutate only through prepared payloads and resolved destination
+  config.
+- Association activation requires source eligibility and destination authority.
+- Queue capacity errors occur before a new source version is accepted.
+- Remote deletes require `delete_mode=delete` and provider-owned delete
+  support.
+- Restore guard blocks background and manual-drain remote mutation until an
+  operator acknowledges it.
+- Reconcile reads provider state and updates local status only.
+- Older operations cannot overwrite newer per-object status.
+- Provider capability flags must match implemented and tested behavior.

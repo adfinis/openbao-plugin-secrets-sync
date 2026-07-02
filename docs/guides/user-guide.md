@@ -1,11 +1,11 @@
 # User guide
 
 
-This guide shows the current operator workflow for the OpenBao Secret Sync
-plugin. The plugin stores source secrets in its own mount, then synchronizes
-eligible source paths to configured external destinations.
+This guide shows the operator workflow for the OpenBao Secret Sync plugin. The
+plugin stores source secrets in its own mount, then synchronizes eligible
+source paths to configured external destinations.
 
-The current implementation supports:
+The plugin supports:
 
 - KV-v2-like source storage under `data/*` and `metadata/*`;
 - source opt-in through `sources/<path>/enable` or
@@ -80,7 +80,7 @@ source paths or associations.
 
 Destinations can restrict which source paths and remote object names may use
 them. These fields are useful when delegated app owners can create
-associations but should only sync their own path and remote prefix.
+associations that only sync their own path and remote prefix.
 
 Add these fields when you configure a destination. This fragment omits
 provider-specific required fields:
@@ -252,7 +252,7 @@ Read per-source status:
 bao read secret-sync/status/app/db
 ```
 
-Common states in the current implementation include:
+Common states include:
 
 - `SYNCED`: remote state was updated successfully;
 - `PENDING`: sync work is queued or waiting;
@@ -318,9 +318,9 @@ bao write -force secret-sync/associations/app/db/<association-id>/sync
 
 Destination config writes validate and store the new provider settings, but do
 not enqueue existing associations by themselves. If a destination config change
-should update remote object attributes, run an association plan to review the
-desired state, then use manual association sync or write a new source version to
-enqueue work.
+needs to update remote object attributes, run an association plan to review the
+desired state. Then use manual association sync or write a new source version
+to enqueue work.
 
 Delete an association:
 
@@ -343,6 +343,6 @@ If sync does not happen:
 - inspect `queue` and the returned operation IDs;
 - inspect `status/<path>`;
 - verify the association is enabled and the destination is not disabled;
-- verify remote names are not already owned by another association.
+- verify remote names are not already owned by another association;
 - use the relevant provider guide for provider-specific validation and naming
   rules.

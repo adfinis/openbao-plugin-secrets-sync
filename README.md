@@ -1,16 +1,15 @@
 # OpenBao Secret Sync
 
-`openbao-plugin-secrets-sync` is an early-stage OpenBao secret engine plugin
-for one-way synchronization from OpenBao-managed source data to external
-destinations.
+`openbao-plugin-secrets-sync` is an OpenBao secret engine plugin for one-way
+synchronization from OpenBao-managed source data to external destinations.
 
 ## Status
 
-This repository is under active implementation. APIs, storage records, provider
-behavior, and operational guidance may still change before a stable release.
-Do not treat the current state as production-ready.
+This repository is in preview. APIs, storage records, provider behavior, and
+operational guidance can change before a stable release. Do not treat preview
+releases as production-ready.
 
-Current implementation work includes:
+The plugin supports:
 
 - KV-v2-like source storage in the plugin mount;
 - explicit source opt-in and association-based sync;

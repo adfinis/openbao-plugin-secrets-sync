@@ -1,14 +1,13 @@
-# Provider Implementation Guide
-
+# Provider implementation guide
 
 This guide explains the practical workflow for adding or reviewing a destination
 provider. The normative interface and safety rules remain in
 [Provider contract](provider-contract.md).
 
 Providers are Go packages compiled into the external OpenBao plugin binary.
-They are not separate plugin processes in the current architecture.
+They are not separate plugin processes.
 
-## Provider Boundary
+## Provider boundary
 
 The core backend owns:
 
@@ -29,10 +28,10 @@ The provider owns:
 - provider-specific ownership metadata;
 - provider error classification.
 
-Providers must not receive OpenBao request objects, read OpenBao storage, make
+Providers do not receive OpenBao request objects, read OpenBao storage, make
 authorization decisions, or log secret payloads.
 
-## Implementation Steps
+## Implementation steps
 
 1. Add a package under `internal/providers/<name>`.
 2. Implement `providers.Provider`.
@@ -52,7 +51,7 @@ authorization decisions, or log secret payloads.
 15. Add local or opt-in e2e coverage when the provider has an API surface that
     cannot be trusted from mocks alone.
 
-## Capability Rules
+## Capability rules
 
 Start with the weakest accurate capability set. Do not advertise a capability
 because the provider could support it later.
@@ -73,15 +72,15 @@ If ownership proof is partial, document the reduced guarantee in
 [Provider contract](provider-contract.md) and make plan/status diagnostics
 clear.
 
-## Destination Config
+## Destination config
 
-Provider config should distinguish sensitive and non-sensitive fields.
+Provider config distinguishes sensitive and non-sensitive fields.
 
 Non-sensitive fields may be stored in the destination record and returned by
-read endpoints. Sensitive fields must be stored under the seal-wrapped
-destination secret prefix and redacted on reads.
+read endpoints. Store sensitive fields under the seal-wrapped destination
+secret prefix and redact them on reads.
 
-Validation should reject:
+Validation rejects:
 
 - missing required fields;
 - unsupported auth modes;
@@ -94,13 +93,13 @@ Validation should reject:
 Prefer workload identity, default SDK chains with explicit opt-in, or
 short-lived federation over static keys.
 
-HTTP providers should use bounded clients: request timeout, constrained or
-disabled redirects, bounded response-body reads, and explicit validation for
-custom or insecure endpoints.
+HTTP providers use bounded clients: request timeout, constrained or disabled
+redirects, bounded response-body reads, and explicit validation for custom or
+insecure endpoints.
 
-## Plan, Upsert, Delete, Read-State
+## Plan, upsert, delete, and read-state
 
-Plan must not mutate remote state. It should return one of the stable provider
+Plan does not mutate remote state. It returns one of the stable provider
 actions:
 
 - `create`
@@ -109,18 +108,18 @@ actions:
 - `conflict`
 - `blocked`
 
-Upsert receives prepared payload bytes and the payload hash. It must not
-reformat the payload before writing if the provider stores or compares that
+Upsert receives prepared payload bytes and the payload hash. It does not
+reformat the payload before writing when the provider stores or compares that
 hash.
 
-Delete must only delete owned objects. If ownership cannot be proven, return
-the `ownership` error class instead of deleting.
+Delete only removes owned objects. If ownership cannot be proven, return the
+`ownership` error class instead of deleting.
 
-Read-state should return remote existence, ownership, payload hash, source
-version, and remote version where the provider can know them. Reconcile and
+Read-state returns remote existence, ownership, payload hash, source version,
+and remote version where the provider can know them. Reconcile and
 drift status depend on this being precise.
 
-## Error Classification
+## Error classification
 
 Map provider errors into stable classes:
 
@@ -135,19 +134,19 @@ Map provider errors into stable classes:
 - `capacity`
 - `internal`
 
-Only `rate_limit` and `unavailable` are automatically retried by the current
-core retry policy. Treat auth, policy, validation, ownership, collision, drift,
-and capacity failures as terminal until the operator changes configuration or
+Only `rate_limit` and `unavailable` are automatically retried by the core retry
+policy. Treat auth, policy, validation, ownership, collision, drift, and
+capacity failures as terminal until the operator changes configuration or
 manually retries.
 
 Provider errors must not expose secret values, credentials, tokens, raw
 provider responses containing secret material, or high-cardinality payload
 data.
 
-## Test Expectations
+## Test expectations
 
-Every provider should use `internal/providers/providertest` for shared
-contract coverage. The conformance harness should cover:
+Every provider uses `internal/providers/providertest` for shared contract
+coverage. The conformance harness covers:
 
 - provider type and capabilities;
 - valid and invalid destination config;
@@ -159,7 +158,7 @@ contract coverage. The conformance harness should cover:
   payload limits, partial-success behavior, stale remote state, and delete
   semantics.
 
-Provider-specific tests should cover behavior the shared harness cannot know:
+Provider-specific tests cover behavior the shared harness cannot know:
 
 - provider API request shape;
 - ownership metadata layout;
@@ -173,20 +172,20 @@ Provider-specific tests should cover behavior the shared harness cannot know:
 - redaction of sensitive config fields.
 
 Partial success is provider-specific. Providers with atomic value+metadata
-mutations should declare that in the maturity matrix and keep lifecycle tests
-covering the atomic mutation. Providers with multi-step mutations must include
-a classified failure case where an earlier remote mutation can succeed but the
-overall provider call still returns no `SyncResult` and a stable error class.
+mutations declare that in the maturity matrix and keep lifecycle tests covering
+the atomic mutation. Providers with multi-step mutations include a classified
+failure case where an earlier remote mutation can succeed but the overall
+provider call still returns no `SyncResult` and a stable error class.
 
-Backend tests should prove the provider is registered and that destination
-config flows through validation, health, plan, queue dispatch, delete, and
-reconcile paths.
+Backend tests prove the provider is registered and that destination config
+flows through validation, health, plan, queue dispatch, delete, and reconcile
+paths.
 
-E2E tests should be self-contained where practical. Use opt-in real-provider
-tests only for IAM, token, or managed-service behavior that local stacks cannot
+Keep E2E tests self-contained where practical. Use opt-in real-provider tests
+only for IAM, token, or managed-service behavior that local stacks cannot
 prove.
 
-## Documentation Checklist
+## Documentation checklist
 
 When adding or materially changing a provider, update:
 

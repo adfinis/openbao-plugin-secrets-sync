@@ -1,7 +1,6 @@
-# Security And Operations
+# Security and operations
 
-
-## Threat Model
+## Threat model
 
 Primary assets:
 
@@ -17,7 +16,7 @@ Threats in scope:
 - destination outage causing lost or duplicated sync operations;
 - compromised destination credential being reused outside the plugin;
 - accidental overwrite of existing remote secrets;
-- app writer causing sync to a destination they should not control;
+- app writer causing sync to an unauthorized destination;
 - SSRF through custom destination endpoints;
 - secret value leakage through logs, status, metrics, errors, or tests;
 - stale restore data overwriting newer remote destination state;
@@ -31,9 +30,9 @@ Threats out of scope for the plugin:
 - malicious OpenBao core binary;
 - full compromise of destination provider control planes.
 
-## Authorization Model
+## Authorization model
 
-OpenBao policies remain the primary authorization layer. The plugin must expose
+OpenBao policies remain the primary authorization layer. The plugin exposes
 separate path surfaces so operators can delegate safely:
 
 ```text
@@ -47,8 +46,10 @@ status/*                  app/team readers or platform operators
 config                    platform operators
 ```
 
+Use [Policy examples](policies.md) for concrete OpenBao policy snippets.
+
 Association creation is the highest-risk authorization operation because it
-causes a secret to leave OpenBao. It must require source eligibility and
+causes a secret to leave OpenBao. It requires source eligibility and
 destination authority.
 
 Source eligibility can be proven through:
@@ -66,69 +67,62 @@ Destination authority can be proven through:
 - optional required metadata such as team, environment, or owner.
 
 `queue/drain` is an operator action because it can execute remote mutations for
-all due operations in the durable queue. It must be policy-gated like retry and
+all due operations in the durable queue. It is policy-gated like retry and
 cancel operations, honors the global disabled flag and restore guard, refuses
 unsafe OpenBao replication states, recovers incomplete enqueue intents before
-dispatch, and must not expose source payload data in responses.
+dispatch, and does not expose source payload data in responses.
 
-## Confused-Deputy Controls
+## Confused-deputy controls
 
-Current controls:
+Implemented controls:
 
 - `custom_metadata.syncable=true` before enabled association activation;
 - destination-level allowed source path prefixes;
 - destination-level allowed resolved remote-name prefixes;
 - required ownership metadata;
-- plan output that clearly shows remote object names and destination scope.
+- plan output that shows remote object names and destination scope.
 
-Still planned:
-
-- maximum destinations per secret;
-- maximum secret size;
-- provider-specific forbidden path patterns beyond the backend's normalized
-  OpenBao source path validation.
-
-Delegated app owners should not be able to use a broad platform destination to
+Delegated app owners must not be able to use a broad platform destination to
 write arbitrary remote names. Destination records can constrain source paths and
 resolved remote-name prefixes. These constraints are checked during association
 plan, association activation, manual sync, enable, and queued dispatch, so a
 destination policy tightened after enqueue still blocks remote mutation.
 
-## Source Secret Protection
+## Source secret protection
 
 - Secret values are stored only in plugin storage under the OpenBao barrier.
 - Reads return only requested secret data, following OpenBao policy.
-- Secret payloads never appear in logs, status records, metrics, or error
+- Secret payloads do not appear in logs, status records, metrics, or error
   strings.
-- Status records may include payload hashes, versions, destination names, and
+- Status records can include versions, destination names, and
   remote object identifiers, but not values.
-- Tests must include canary secret values and assert they do not appear in
+- Tests include canary secret values and assert they do not appear in
   logs, errors, status, plan output, or metrics.
 
-Open question: local source versions may optionally be seal-wrapped. Destination
-credentials must be seal-wrapped.
+Source secret versions and destination credentials are stored under
+seal-wrapped storage prefixes.
 
-## Destination Credential Protection
+## Destination credential protection
 
-- Destination credential paths must be listed in `SealWrapStorage`.
-- Sensitive fields must be split from non-sensitive destination metadata.
-- Reads of destination config must redact sensitive values.
-- Credential rotation must be possible without recreating associations.
+- Destination credential paths are listed in `SealWrapStorage`.
+- Sensitive fields are split from non-sensitive destination metadata.
+- Reads of destination config redact sensitive values.
+- Credential rotation is possible without recreating associations.
 - Prefer workload identity and federated identity over static keys where the
   destination supports it.
-- Current AWS support stores assume-role `external_id` in seal-wrapped
-  sensitive config. Static access keys and session tokens are recognized as
-  sensitive fields but intentionally remain unsupported auth material.
+- AWS destinations store assume-role `external_id` in seal-wrapped sensitive
+  config. Static access keys and session tokens are recognized as sensitive
+  fields but intentionally remain unsupported auth material.
 - GitLab API tokens and Kubernetes bearer tokens are stored in seal-wrapped
   sensitive config and redacted on destination reads.
-- Derived short-lived tokens should be cached only in memory and invalidated on
+- Derived short-lived tokens are cached only in memory and invalidated on
   destination config updates.
-- Provider SDK default credential chains must be explicitly allowed or disabled
+- Provider SDK default credential chains are explicitly allowed or disabled
   by destination config; no surprising ambient credentials.
 
-## SSRF And Network Controls
+## SSRF and network controls
 
-Destination configs that include custom endpoints must be explicit and
+Destination configs that include custom endpoints are explicit and
 validated:
 
 - `endpoint_url` requires an `endpoint_policy`;
@@ -146,15 +140,15 @@ validated:
   configuration;
 - GitLab provider redirects are disabled by the default provider HTTP client.
 
-Provider clients should use context timeouts and must not allow unbounded
-response bodies. AWS and GitLab providers use bounded default HTTP clients;
-GitLab provider requests also use bounded response-body reads.
+Provider clients use context timeouts and bounded network behavior where the
+provider owns HTTP transport. AWS and GitLab providers use bounded default HTTP
+clients; GitLab provider requests also use bounded response-body reads.
 
-## Ownership And Collision Controls
+## Ownership and collision controls
 
 Default safety mode is `overwrite_owned_only`.
 
-Remote ownership metadata should include the fields supported by the provider:
+Remote ownership metadata includes the fields supported by the provider:
 
 ```text
 openbao-sync=true
@@ -177,7 +171,7 @@ If ownership metadata is absent or conflicts, the plugin reports
 `REMOTE_OWNERSHIP_LOST` or `DRIFTED` and does not overwrite unless policy
 explicitly allows weaker behavior.
 
-Current delete behavior:
+Delete behavior:
 
 - association `delete_mode` defaults to `retain`;
 - remote delete is enqueued only for `delete_mode=delete`;
@@ -187,13 +181,13 @@ Current delete behavior:
 - undeleting the current local source version queues replacement upserts for
   enabled associations.
 
-## Audit Model
+## Audit model
 
 OpenBao audit devices capture requests to plugin paths according to normal
-OpenBao audit behavior. The plugin must not add secret values to responses
+OpenBao audit behavior. The plugin does not add secret values to responses
 beyond the explicit `data/*` read path.
 
-For remote operations, the plugin should persist and log correlation metadata:
+For remote operations, the plugin persists and logs correlation metadata:
 
 - OpenBao mount accessor or mount name;
 - source path;
@@ -208,13 +202,13 @@ For remote operations, the plugin should persist and log correlation metadata:
 This gives operators enough evidence to correlate OpenBao audit logs with
 destination-side audit logs without recording secret payloads.
 
-## Restore And Clone Protection
+## Restore and clone protection
 
 OpenBao backup/restore captures local secret versions, destination configs,
 associations, queue, and status. After restore, blind reconciliation could
 overwrite newer remote state.
 
-The plugin needs a safe mode:
+The plugin uses a restore guard:
 
 - `restore_guard=true` after detected or operator-declared restore;
 - background and manual-drain remote mutations disabled while the guard is
@@ -225,20 +219,15 @@ The plugin needs a safe mode:
 - persisted restore epoch rotated on acknowledgement and included in provider
   ownership metadata where possible.
 
-Operators should be able to choose how to handle existing outbox operations
-after restore:
-
-- cancel all pending operations;
-- re-plan all pending operations;
-- resume only operations that still match current local source versions.
+Use the operator runbook for restore review.
 
 ## Metrics
 
 Instrument metrics through the OpenTelemetry metric API where practical. The
-plugin must not store exporter credentials in plugin storage; exporter and
-collector setup should remain a deployment concern.
+plugin must not store exporter credentials in plugin storage. Keep exporter and
+collector setup as a deployment concern.
 
-Initial OpenTelemetry instruments:
+OpenTelemetry instruments:
 
 ```text
 openbao.secret_sync.queue.depth{state}
@@ -252,13 +241,13 @@ openbao.secret_sync.restore_guard.active
 Prometheus exporters may translate instrument names and units into Prometheus
 series such as `openbao_secret_sync_operations_total`.
 
-Metric labels must not include secret values, high-cardinality source paths,
+Metric labels do not include secret values, high-cardinality source paths,
 resolved remote names, destination names, association ids, operation ids,
 payload hashes, ARNs, or cloud account ids by default.
 
 ## Logs
 
-Logs should include:
+Logs include:
 
 - operation ID;
 - association ID;
@@ -268,16 +257,16 @@ Logs should include:
 - error class;
 - retry schedule.
 
-Logs must not include:
+Logs do not include:
 
 - secret payloads;
 - destination credential material;
 - authorization tokens;
 - full provider responses when they may contain secret data.
 
-## Health And Readiness
+## Health and readiness
 
-Health should be layered:
+Health is layered:
 
 - plugin process healthy;
 - mount configured;
@@ -287,21 +276,20 @@ Health should be layered:
 - destination authorized;
 - restore guard state visible.
 
-Destination outages should degrade sync status, not local secret read/write
-availability, unless a future explicit synchronous mode is enabled.
+Destination outages degrade sync status, not local secret read/write
+availability, unless a separate synchronous mode is enabled.
 
-## Rate Limiting
+## Rate limiting
 
-Rate limits should exist at three levels:
+Rate limits are tracked at these levels for production readiness:
 
 - global plugin concurrency;
 - per-destination concurrency;
 - per-provider API rate.
 
-Retries should use jitter to avoid synchronized bursts after external outages.
-Rate-limit state must be visible in status and queue output.
+Rate-limit state is visible in status and queue output.
 
-Current automatic retry policy:
+Automatic retry policy:
 
 - retry provider `rate_limit` and `unavailable` errors only;
 - use a bounded attempt budget before marking the operation terminal;
@@ -311,30 +299,30 @@ Current automatic retry policy:
 - manual queue retry resets the attempt counter and schedules the operation
   immediately.
 
-## Packaging And Release
+## Packaging and release
 
-The plugin should be shipped like other OpenBao external plugins:
+The plugin is shipped like other OpenBao external plugins:
 
 - reproducible Go builds where practical;
 - checksums for every release artifact;
 - SBOM and dependency vulnerability scan;
-- signed release artifacts if the release process supports it;
+- signed release artifacts;
 - documented `bao plugin register` flow;
 - documented minimum OpenBao version;
 - documented plugin file ownership and permissions;
 - changelog with migration notes for storage schema changes.
 
-Storage schema changes must be explicit and backward compatible where possible.
-If a migration is required, the plugin should fail closed with a clear error
-until an operator runs an explicit migration or mounts a compatible version.
+Storage schema changes are explicit and backward compatible where possible.
+If a migration is required, the plugin fails closed with a clear error until an
+operator runs an explicit migration or mounts a compatible version.
 
 ## Runbooks
 
 The practical operator workflow lives in
-[Operator runbook](../operations/operator-runbook.md). This document records the security and
-operations requirements that the runbook should continue to satisfy.
+[Operator runbook](../operations/operator-runbook.md). This document records
+the security and operations requirements that the runbook satisfies.
 
-MVP runbooks should cover:
+Runbooks cover:
 
 - install, register, and mount;
 - configure destination;

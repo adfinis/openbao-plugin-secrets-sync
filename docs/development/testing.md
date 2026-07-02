@@ -1,235 +1,132 @@
-# Testing And Hardening
+# Testing and maintainer evidence
 
+Use this page to choose the evidence needed for a change. Keep the evidence
+close to the risk: small docs and local code changes need the fast gate;
+provider, queue, security, release, and storage changes need the matching
+specialized lanes.
 
-This document defines the hardening test lanes for the secret sync plugin. The
-goal is to keep evidence clear: unit tests prove local contracts, model tests
-prove state-machine invariants, fuzz tests mutate narrow input boundaries, e2e
-tests prove OpenBao plugin behavior, and security checks cover dependency and
-static-analysis risk.
+## Local gates
 
-## Local Gates
-
-Use these gates while implementing:
+Run the fast gate while developing:
 
 ```sh
-go test ./...
-go test -race ./...
-make fuzz
-make lint
-git diff --check
+make ci-fast
 ```
 
-Use provider e2e gates only when the relevant runtime is available:
+`ci-fast` runs tidy checks, docs checks, version checks, formatting checks,
+`go vet`, unit tests, and a build.
+
+Run the core local gate before opening or merging a non-trivial change:
 
 ```sh
-make test-e2e
-make test-e2e-resilience
-make test-e2e-kind
-E2E_GITLAB_CONFIRM=1 make test-e2e-gitlab
+make ci-core
 ```
 
-Manual real-provider gates stay opt-in:
+`ci-core` runs tidy checks, lint, security checks, unit tests, race tests, fuzz
+smoke targets, a build, and release artifact generation.
 
-```sh
-E2E_AWS_CONFIRM=1 make test-e2e-aws
-```
+Use `git diff --check` before committing documentation or generated text.
 
-## Test Lanes
+## Test lanes
 
-### Unit And Contract Tests
+| Lane | Commands | Evidence |
+| --- | --- | --- |
+| Unit and contract tests | `go test ./...` | Package-local behavior, backend path contracts, provider conformance, payload construction, redaction, and error classification. |
+| Race tests | `go test -race ./...` or `make test-race` | Concurrent source writes, association updates, queue claims, runtime cache use, and dispatcher behavior are free of detected data races. |
+| Fuzz tests | `make fuzz` | Payload canonicalization and destination name-template rendering tolerate malformed or unusual inputs. |
+| Security checks | `make security-ci` | Dependency vulnerabilities, license policy, and filesystem static-analysis rules pass. |
+| Release artifacts | `make release-artifacts` | Linux plugin binaries, SBOMs, and checksums build from the current tree. |
+| Self-contained e2e | `make test-e2e`, `make test-e2e-kind`, `make test-e2e-resilience` | OpenBao plugin registration, mount behavior, provider API behavior, queue drain, status transitions, restore/HA behavior, and real Kubernetes API behavior. |
+| Opt-in provider e2e | `E2E_GITLAB_CONFIRM=1 make test-e2e-gitlab`, `E2E_AWS_CONFIRM=1 make test-e2e-aws` | Dockerized GitLab API behavior or real AWS IAM and Secrets Manager behavior. |
 
-Unit tests cover package-local behavior and stable API contracts. They should
-stay fast, deterministic, and free of external services.
+## Provider-specific e2e
 
-Provider contract tests live behind the shared `providertest` harness. Every
-provider should cover:
+Run provider e2e tests when a change touches the provider, its destination
+config, payload shape, ownership metadata, error classification, or fixture.
 
-- capability flags;
-- config validation and sensitive-field redaction;
-- plan/create/update/delete/read-state lifecycle;
-- authn, authz, rate-limit, validation, capacity, collision, drift, and
-  ownership error classes.
+| Provider or area | Command | Run when |
+| --- | --- | --- |
+| AWS Secrets Manager with LocalStack | `make test-e2e` | AWS provider behavior, ownership tags, LocalStack fixture, queue/status behavior for AWS. |
+| Real AWS Secrets Manager | `E2E_AWS_CONFIRM=1 make test-e2e-aws` | IAM, STS assume-role, AWS API behavior, or delete recovery behavior needs real AWS evidence. |
+| Kubernetes Secrets | `make test-e2e-kind` | Kubernetes auth, RBAC, Secret metadata, data mapping, read-state, owned delete, or immutable Secret behavior changes. |
+| GitLab project variables | `E2E_GITLAB_CONFIRM=1 make test-e2e-gitlab` | GitLab variable attributes, masked/hidden variables, ownership descriptions, read-state, or GitLab HTTP behavior changes. |
+| OpenBao lifecycle resilience | `make test-e2e-resilience` | Queue durability, status persistence, restore guard, HA failover, seal recovery, or replication-safety behavior changes. |
+| OCI plugin distribution | `make test-e2e-oci-localstack` | OCI plugin image layout, OpenBao plugin download, auto-registration, or release OCI behavior changes. |
 
-Registered production providers must also pass the shared provider maturity
-matrix:
+Manual real-provider tests stay opt-in and sandbox-scoped. They must not be
+required for normal CI.
 
-- ownership loss rejects update/delete instead of overwriting or removing a
-  foreign object;
-- authentication failures map to `authn`;
-- throttling or rate limits map to `rate_limit`;
-- payload-size failures map to `capacity` before or at the provider boundary;
-- partial-success behavior is explicit: atomic providers document the atomic
-  mutation, while multi-step providers classify post-write failures and return
-  no successful `SyncResult`;
-- stale remote state with a newer managed source version maps to `drift`;
-- delete semantics cover owned delete and idempotent missing-remote delete.
+## Evidence by change type
 
-### Model Tests
+### Provider changes
 
-Model tests exercise state transitions across several operations and assert
-invariants after every transition. They are not random fuzz tests; each action
-sequence should be small enough to debug from the failure name.
+Provider changes need:
 
-Core model invariants:
+- provider unit tests for config validation, request shape, provider API edge
+  cases, and error classification;
+- shared `internal/providers/providertest` conformance coverage;
+- ownership loss, stale remote state, payload-size, authn, authz,
+  rate-limit, capacity, and delete semantics tests where the provider supports
+  those behaviors;
+- the matching provider guide and capability matrix updates;
+- the matching provider e2e lane when mocks cannot prove the behavior.
 
-- remote mutation intent requires an eligible source and an association;
-- queued upserts reference an available source version;
-- queued deletes reference a deleted or unavailable source version;
-- disabling an association cancels queued work and records disabled status;
-- deleting a source replaces stale queued upserts with allowed delete work;
-- status, plan, and queue responses never include secret values.
+### Queue and dispatcher changes
 
-### Fuzz Tests
+Queue, dispatcher, periodic work, and enqueue-intent changes need:
 
-Fuzz tests mutate narrow input boundaries where parser or canonicalization
-mistakes are likely. Current smoke targets cover:
+- unit tests for operation state transitions, due indexes, path indexes,
+  claim expiry, retry scheduling, cancellation, and pruning;
+- race tests for concurrent source writes, association writes, runtime cache
+  use, and dispatch paths;
+- model-style tests that assert invariants across several operations;
+- lifecycle resilience e2e when persistence, restart, HA, restore guard, or
+  replication-safety behavior changes.
 
-- raw payload canonicalization;
-- JSON payload determinism and digest correctness;
-- destination name-template rendering.
+### Security and authorization changes
 
-Run them with:
+Security-sensitive changes need:
 
-```sh
-make fuzz
-```
+- tests proving source payload values do not appear in plan, queue, status,
+  reconcile, logs, metrics, or errors;
+- tests proving sensitive destination config is stored separately and redacted
+  on reads;
+- destination policy tests for source path and resolved-name prefix checks;
+- provider tests for custom endpoint validation, bounded HTTP behavior, and
+  authn/authz error mapping;
+- `make security-ci`;
+- updates to the security model, policy examples, provider docs, or runbook
+  when operator behavior changes.
 
-Override `FUZZTIME` for longer local sweeps:
+### API and storage changes
 
-```sh
-FUZZTIME=60s make fuzz
-```
+API and storage changes need:
 
-### E2E Tests
+- path tests that lock request fields, response fields, defaults, and error
+  classes;
+- pagination tests for public `LIST` endpoints when listing behavior changes;
+- storage compatibility tests when schema handling changes;
+- OpenAPI inspection artifact updates when path shape or field names change;
+- updates to API surface and compatibility docs when user-visible behavior
+  changes.
 
-Self-contained e2e tests prove the OpenBao plugin boundary, including plugin
-registration, mount, destination configuration, queue drain, provider API
-behavior, status transitions, and selected OpenBao lifecycle behavior.
+### Release and artifact changes
 
-Current self-contained e2e coverage:
+Release workflow, artifact, provenance, and OCI changes need:
 
-- LocalStack-backed AWS Secrets Manager;
-- persistent OpenBao lifecycle resilience with three-node Raft storage, static
-  seal self-unseal, HA failover, queued work, status persistence, and operator
-  seal recovery;
-- kind-backed Kubernetes Secrets;
-- Dockerized GitLab CE project variables;
-- OCI plugin distribution through a disposable TLS registry, OpenBao
-  declarative plugin download, OpenBao declarative plugin registration, and the
-  LocalStack-backed AWS Secrets Manager flow.
+- `make ci-core`;
+- release artifact generation;
+- OCI e2e when plugin image layout or OpenBao OCI download behavior changes;
+- release engineering and install/verify documentation updates when operator
+  verification steps change.
 
-Manual real-provider e2e tests prove cloud-specific IAM and API behavior, but
-must stay explicit and sandbox-scoped.
+## Merge evidence
 
-Documented provider validation paths:
+Before a non-trivial PR is ready:
 
-- AWS Secrets Manager: LocalStack self-contained path in
-  `test/e2e/localstack/README.md` and opt-in real AWS path in
-  `test/e2e/aws/README.md`;
-- OpenBao lifecycle resilience: persistent self-contained path in
-  `test/e2e/resilience/README.md`;
-- Kubernetes Secrets: kind-backed real API-server path in
-  `test/e2e/kind/README.md`;
-- GitLab project variables: Dockerized GitLab CE path in
-  `test/e2e/gitlab/README.md`. A real GitLab project fixture remains opt-in
-  future work.
-- OCI plugin distribution: disposable TLS registry path in
-  `test/e2e/oci/README.md`.
-
-### Security Checks
-
-Security checks cover dependency vulnerabilities, licenses, and filesystem
-static analysis:
-
-```sh
-make security-ci
-```
-
-Runtime security assertions belong in unit/model/e2e tests when they depend on
-plugin behavior. Examples:
-
-- no secret values in status, plan, logs, or metrics;
-- sensitive destination fields stored separately and redacted on read;
-- destination policy constraints reject disallowed source path prefixes and
-  resolved remote-name prefixes before provider mutation;
-- custom endpoints require explicit policy;
-- AWS private custom endpoints reject unsafe DNS answers at client creation
-  time;
-- AWS and GitLab provider-owned HTTP clients use bounded timeouts and do not
-  inherit ambient proxy configuration;
-- non-local HTTP destinations require explicit insecure opt-in;
-- GitLab provider HTTP client tests cover timeout configuration, redirect
-  refusal, and bounded response reads;
-- provider errors map to stable classes without leaking secret values.
-
-Current backend security-boundary coverage asserts that:
-
-- AWS and GitLab sensitive destination fields are stored separately from public
-  destination metadata and redacted on read;
-- destination writes validate provider config before storage and reject
-  non-empty config fields for other provider types;
-- source payload canaries do not appear in association plan/create responses,
-  queue summaries, queue operation reads, drain responses, status responses,
-  or reconcile plan/apply responses.
-
-Current destination policy coverage asserts that:
-
-- destination prefix constraints are normalized and visible on read;
-- source path validation rejects reserved storage/control segments;
-- association create and plan reject disallowed source paths and resolved
-  remote names with exact or slash-boundary prefix matching;
-- queued dispatch rechecks destination policy and blocks remote mutation if a
-  destination policy is tightened after enqueue.
-
-Current queue hardening coverage asserts that:
-
-- concurrent source writes preserve monotonically increasing versions;
-- concurrent association writes reserve a remote name only once;
-- association writes lock destination identity and enqueue when an existing
-  association transitions from disabled to enabled;
-- unexpired outbox claims are skipped by manual drain and block operator cancel;
-- unexpired outbox claims block association disable/delete and source delete
-  cancellation paths;
-- dispatcher context cancellation leaves the claimed operation for lease-based
-  recovery instead of marking terminal failure;
-- newer source writes supersede older inactive queued upserts for the same
-  association object;
-- expired claims on stale upserts are pruned before provider mutation;
-- older operations cannot overwrite newer per-object status records;
-- incomplete enqueue intents recover missing outbox work and completed enqueue
-  intents are pruned;
-- periodic work processes bounded enqueue-intent and outbox batches;
-- `queue_capacity=0` blocks new enqueue-producing writes;
-- recreated source paths rotate source generation so operation IDs are not
-  reused with reset version numbers;
-- version pruning keeps source versions that are still referenced by queued
-  upserts;
-- successful dispatch writes object status and prunes the completed outbox
-  operation;
-- outbox state and due indexes are updated when operation state or schedule
-  changes, and when records are deleted;
-- unsupported queued operation records are removed instead of consuming
-  capacity indefinitely;
-- operation metrics label sync granularity without using source key names;
-- disabling a secret-key association with an unavailable current version does
-  not create a synthetic secret-path status object;
-- expired outbox claims are reclaimable and successful dispatch prunes the
-  reclaimed operation;
-- retryable provider failures clear claim metadata before moving to
-  `retry_wait`;
-- periodic processing skips unsafe OpenBao replication states;
-- manual drain returns an operator-visible error on unsafe replication states.
-
-Current source lifecycle coverage asserts that current-version `delete/` and
-`destroy/` use the durable delete workflow, and current-version `undelete/`
-queues replacement upserts when a remote delete has completed.
-
-## Hardening Order
-
-Hardening should proceed in this order:
-
-1. Test architecture baseline and first core model invariants.
-2. Provider-agnostic state model expansion.
-3. Security boundary tests for redaction, SSRF, auth, and restore guard.
-4. Provider conformance expansion across AWS, Kubernetes, and GitLab.
-5. Retry and real-provider resilience e2e coverage.
+- run `make ci-core`;
+- run the provider or lifecycle e2e lane that matches the changed behavior;
+- record any opt-in manual provider evidence in the PR;
+- update docs at the same ownership level as the changed behavior;
+- verify generated or inspection artifacts when API, release, or docs tooling
+  changes.

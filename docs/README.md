@@ -1,10 +1,9 @@
 # OpenBao Secret Sync docs
 
 
-These docs describe the current design and implementation direction for
-`openbao-plugin-secrets-sync`. The plugin is still early-stage, so documents
-may describe intended contracts as well as implemented behavior. When that
-matters, the document should say so explicitly.
+These docs describe how to use, operate, secure, and maintain
+`openbao-plugin-secrets-sync`. Documents in this tree describe maintained
+behavior and contracts.
 
 ## Documentation shape
 
@@ -15,9 +14,9 @@ page when you need to choose the right detailed document.
 
 - [Get started](getting-started/README.md) points to the shortest local
   validation paths.
-- [User guide](guides/user-guide.md) shows the current operator workflow for
-  installing, configuring, writing source data, creating associations, and
-  inspecting status.
+- [User guide](guides/user-guide.md) shows the operator workflow for installing,
+  configuring, writing source data, creating associations, and inspecting
+  status.
 - [Provider guides](providers/README.md) explain destination-specific
   configuration for AWS Secrets Manager, Kubernetes Secrets, and GitLab project
   variables.
@@ -27,10 +26,12 @@ page when you need to choose the right detailed document.
 - [Operations](operations/README.md) collects operator-facing procedures.
 - [Operator runbook](operations/operator-runbook.md) gives operational checks,
   troubleshooting flows, restore-guard handling, and failure response guidance.
-- [Observability](operations/observability.md) describes the current
-  OpenTelemetry metric surface and attribute policy.
-- [Release engineering](operations/release.md) describes the artifact workflow
-  and plugin verification steps.
+- [Observability](operations/observability.md) describes the OpenTelemetry
+  metric surface and attribute policy.
+- [Install and verify release artifacts](operations/install-and-verify.md)
+  describes artifact verification and plugin installation.
+- [Restore and clone review](operations/restore-and-clone.md) describes the
+  restore guard review workflow before remote mutation resumes.
 
 ### Review security
 
@@ -38,6 +39,8 @@ page when you need to choose the right detailed document.
 - [Security model](security/security-model.md) records the threat model,
   authorization shape, redaction rules, restore safety, packaging, and
   operational requirements.
+- [Policy examples](security/policies.md) provides OpenBao policy snippets for
+  common operator, app, delegated-owner, and auditor roles.
 
 ### Build or review implementation
 
@@ -50,6 +53,8 @@ page when you need to choose the right detailed document.
   conformance expectations.
 - [Provider implementation guide](development/provider-implementation.md)
   explains the practical steps and review checklist for adding a provider.
+- [Release engineering](development/release-engineering.md) describes the
+  maintainer release automation and artifact workflow.
 - [Testing and hardening](development/testing.md) defines unit, contract, model,
   fuzz, e2e, and security test lanes.
 - [Documentation style](development/documentation-style.md) defines the
@@ -58,6 +63,8 @@ page when you need to choose the right detailed document.
 ### Inspect references
 
 - [Reference](reference/README.md) collects API and compatibility references.
+- [API surface](reference/api-surface.md) explains the Secret Sync API path
+  groups and conceptual contract.
 - [API compatibility](reference/api-compatibility.md) explains the KV-v2-like
   source API claim and the intentional differences.
 - [API inspection artifacts](reference/api/README.md) include the draft OpenAPI
