@@ -4,6 +4,8 @@
 goal is operator familiarity, not drop-in replacement compatibility with the
 OpenBao KV-v2 secrets engine.
 
+Use [API surface](api-surface.md) for the full Secret Sync path group summary.
+
 ## Compatibility position
 
 The source API is compatible with KV-v2 at the concept and workflow level:

@@ -6,6 +6,7 @@ inspection artifacts.
 
 ## Reference documents
 
+- [API surface](api-surface.md)
 - [API compatibility](api-compatibility.md)
 - [API inspection artifacts](api/README.md)
 - [OpenAPI specification](api/openapi.yaml)
