@@ -11,7 +11,8 @@ Use `auth_mode=default` to use the AWS SDK default credential chain:
 ```sh
 bao write secret-sync/destinations/aws-sm/prod \
   region=eu-central-1 \
-  auth_mode=default
+  auth_mode=default \
+  delete_recovery_window_days=7
 ```
 
 ## Configure assume-role auth
@@ -29,6 +30,11 @@ bao write secret-sync/destinations/aws-sm/prod \
 
 Static AWS access keys and session tokens are intentionally not supported yet.
 Use workload identity or assume-role auth.
+
+`delete_recovery_window_days` controls the AWS Secrets Manager scheduled-delete
+recovery window used when an association with `delete_mode=delete` deletes an
+owned remote secret. The default is `7`. AWS accepts values from `7` through
+`30`.
 
 ## Configure custom endpoints
 
@@ -97,6 +103,22 @@ bao write secret-sync/associations/app/db \
   destination_name=prod \
   resolved_name=openbao-plugin-secrets-sync/team-a/app-db
 ```
+
+## Recover after delete
+
+AWS Secrets Manager keeps deleted secrets in a scheduled-deletion state during
+the configured recovery window. During that window, creating a new secret with
+the same name is blocked by AWS.
+
+If the scheduled-delete secret is still owned by the same association, the AWS
+provider treats a new upsert as recovery: it calls `RestoreSecret`, writes the
+current payload when needed, and refreshes ownership metadata. Plans report this
+as `action=update` with a message that the secret will be restored before
+upsert.
+
+The provider does not restore or mutate scheduled-delete secrets that are not
+owned by the association. Those plans report a collision, and upserts fail with
+an ownership error.
 
 ## Troubleshoot endpoints
 

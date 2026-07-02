@@ -105,6 +105,19 @@ func TestOpenBaoPluginSyncsToLocalStackSecretsManager(t *testing.T) {
 	drainQueue(t, baoClient, 1)
 	assertRemoteDeleteScheduled(t, ctx, awsClient, remoteName)
 	assertStatus(t, baoClient, "REMOTE_MISSING")
+
+	writeSource(t, baoClient, "recovered")
+	recoveryPlan := write(t, baoClient, mountPath+"/associations/app/db/plan", associationRequest(remoteName))
+	if got := recoveryPlan.Data["action"]; got != "update" {
+		t.Fatalf("recovery plan action = %v, want update", got)
+	}
+	if got := recoveryPlan.Data["message"]; got != "aws-sm secret is scheduled for deletion and will be restored before upsert" {
+		t.Fatalf("recovery plan message = %v, want restore message", got)
+	}
+	drainQueue(t, baoClient, 1)
+	assertRemotePayload(t, ctx, awsClient, remoteName, "recovered")
+	assertStatus(t, baoClient, "SYNCED")
+	assertReconcilePlan(t, baoClient, "SYNCED")
 }
 
 func newOpenBaoClient(t *testing.T) *api.Client {
