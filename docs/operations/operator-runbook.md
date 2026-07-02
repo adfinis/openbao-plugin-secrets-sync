@@ -261,6 +261,9 @@ to use while the restore guard is active.
 
 ## Restore or clone review
 
+Use [Restore and clone review](restore-and-clone.md) for the full review
+workflow.
+
 After restore or clone, keep mutation blocked until remote ownership has been
 reviewed:
 

@@ -9,4 +9,5 @@ plugin.
 - [Install and verify release artifacts](install-and-verify.md)
 - [Operator runbook](operator-runbook.md)
 - [Observability](observability.md)
+- [Restore and clone review](restore-and-clone.md)
 - [Security model](../security/security-model.md)
