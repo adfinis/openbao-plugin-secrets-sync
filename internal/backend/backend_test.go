@@ -2507,6 +2507,63 @@ func TestDataWriteSupersedesStaleQueuedUpserts(t *testing.T) {
 	assertQueueCount(t, b, storage, "canceled", 1)
 }
 
+func TestQueueDrainCancelsClaimedStaleUpsertAfterClaimExpiry(t *testing.T) {
+	b := Backend(&logical.BackendConfig{})
+	storage := &logical.InmemStorage{}
+
+	writeAppDBSecret(t, b, storage, "initial")
+	createFakeDestination(t, b, storage, "default")
+	associationResp := createDefaultFakeAssociation(t, b, storage)
+	staleOperationID := operationIDsFromResponse(t, associationResp)[0]
+	staleOperation := assertOutboxOperation(t, storage, staleOperationID, 1, outboxStatePending)
+	staleOperation.ClaimOwner = "worker-stale"
+	staleOperation.ClaimExpiresTime = nowUTC().Add(time.Hour).Format(timeFormatRFC3339)
+	staleOperation.ClaimAttempt = 1
+	if err := putOutbox(context.Background(), storage, *staleOperation); err != nil {
+		t.Fatalf("write claimed stale operation: %v", err)
+	}
+
+	rotatedResp := writeAppDBSecret(t, b, storage, "rotated")
+	rotatedOperationID := requireSingleOperationID(
+		t,
+		operationIDsFromMetadata(t, rotatedResp.Data["metadata"].(map[string]interface{})),
+		"rotated write",
+	)
+	assertOutboxOperation(t, storage, staleOperationID, 1, outboxStatePending)
+	assertOutboxOperation(t, storage, rotatedOperationID, 2, outboxStatePending)
+
+	staleOperation, err := getOutbox(context.Background(), storage, staleOperationID)
+	if err != nil {
+		t.Fatalf("read stale operation: %v", err)
+	}
+	staleOperation.ClaimExpiresTime = nowUTC().Add(-time.Minute).Format(timeFormatRFC3339)
+	staleOperation.NotBefore = "0001-01-01T00:00:00Z"
+	if err := putOutbox(context.Background(), storage, *staleOperation); err != nil {
+		t.Fatalf("expire stale operation claim: %v", err)
+	}
+
+	acknowledgeRestoreGuard(t, b, storage)
+	drainResp := handleRequest(t, b, storage, logical.UpdateOperation, "queue/drain", map[string]interface{}{
+		"max_operations": 1,
+	})
+	assertNoErrorResponse(t, drainResp)
+	if got := drainResp.Data["processed"]; got != 1 {
+		t.Fatalf("processed = %v, want 1", got)
+	}
+	canceled := assertOutboxOperation(t, storage, staleOperationID, 1, outboxStateCanceled)
+	if canceled.ClaimOwner != "" || canceled.ClaimExpiresTime != "" || canceled.ClaimAttempt != 0 {
+		t.Fatalf("canceled stale operation claim fields = %#v, want cleared", canceled)
+	}
+	assertOutboxOperation(t, storage, rotatedOperationID, 2, outboxStatePending)
+	status, err := getStatus(context.Background(), storage, "app/db", associationIDFromResponse(t, associationResp), syncObjectIDSecretPath)
+	if err != nil {
+		t.Fatalf("read status: %v", err)
+	}
+	if status != nil {
+		t.Fatalf("status = %#v, want nil before rotated operation dispatch", status)
+	}
+}
+
 func TestStatusWriteIgnoresOlderOperationVersion(t *testing.T) {
 	storage := &logical.InmemStorage{}
 	associationID := "assoc-test"

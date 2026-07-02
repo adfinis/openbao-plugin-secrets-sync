@@ -313,8 +313,10 @@ Allowed strategies:
 The current implementation supersedes older inactive pending upserts before
 dispatch and keeps provider-side version checks where supported. Active claims
 are allowed to finish or expire because provider mutation may already be in
-flight; status writes are guarded by source version so older operations cannot
-overwrite newer object status.
+flight. When an older claimed upsert becomes dispatchable again after claim
+expiry, dispatch rechecks the current source version and cancels the stale
+upsert before provider mutation. Status writes are guarded by source version so
+older operations cannot overwrite newer object status.
 
 ## Queue Capacity And Backpressure
 

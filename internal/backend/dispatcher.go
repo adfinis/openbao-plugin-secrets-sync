@@ -163,6 +163,13 @@ func (b *secretSyncBackend) processUpsert(
 	record outboxRecord,
 	now time.Time,
 ) error {
+	stale, err := staleUpsertForCurrentVersion(ctx, storage, record)
+	if err != nil {
+		return err
+	}
+	if stale {
+		return cancelOutboxOperation(ctx, storage, record, now)
+	}
 	upsertContext, failure, err := b.loadUpsertContext(ctx, storage, record)
 	if err != nil {
 		return err
@@ -646,6 +653,25 @@ func markOperationFailed(
 		LastError:       fmt.Sprintf("dispatch failed: %s", failure.message),
 		UpdatedTime:     now.Format(timeFormatRFC3339),
 	})
+}
+
+func staleUpsertForCurrentVersion(ctx context.Context, storage logical.Storage, record outboxRecord) (bool, error) {
+	if record.Type != outbox.OperationTypeUpsert {
+		return false, nil
+	}
+	metadata, err := getMetadata(ctx, storage, record.Path)
+	if err != nil {
+		return false, err
+	}
+	return metadata != nil && metadata.CurrentVersion > record.Version, nil
+}
+
+func cancelOutboxOperation(ctx context.Context, storage logical.Storage, record outboxRecord, now time.Time) error {
+	record.State = outboxStateCanceled
+	record.NotBefore = ""
+	record.UpdatedTime = now.Format(timeFormatRFC3339)
+	clearOutboxClaim(&record)
+	return putOutbox(ctx, storage, record)
 }
 
 func syncStateForFailureClass(errorClass providers.ErrorClass) domain.SyncState {
