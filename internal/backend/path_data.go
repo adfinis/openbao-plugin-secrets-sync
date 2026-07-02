@@ -179,7 +179,7 @@ func (b *secretSyncBackend) commitDataWritePlan(
 	if err := putSourceVersionRecord(ctx, storage, path, plan.nextVersion, payload, plan.now); err != nil {
 		return nil, err
 	}
-	if err := cancelQueuedOutboxIDs(ctx, storage, staleUpsertIDs, plan.now); err != nil {
+	if err := cancelQueuedOutboxIDs(ctx, storage, staleUpsertIDs); err != nil {
 		return nil, err
 	}
 	if err := putOutboxRecords(ctx, storage, plan.operations); err != nil {
@@ -315,7 +315,7 @@ func (b *secretSyncBackend) pathDataDelete(
 	if err := softDeleteVersion(ctx, req.Storage, metadata, path, metadata.CurrentVersion, now); err != nil {
 		return logical.ErrorResponse(err.Error()), nil
 	}
-	if err := cancelQueuedOutboxIDs(ctx, req.Storage, deletePlan.staleUpsertIDs, now); err != nil {
+	if err := cancelQueuedOutboxIDs(ctx, req.Storage, deletePlan.staleUpsertIDs); err != nil {
 		return nil, err
 	}
 	if err := putOutboxRecords(ctx, req.Storage, deletePlan.operations); err != nil {

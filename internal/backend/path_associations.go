@@ -195,7 +195,7 @@ func (b *secretSyncBackend) pathAssociationDisable(
 		return nil, err
 	}
 	b.enqueueMu.Lock()
-	canceledOperationIDs, err := cancelQueuedOutboxForAssociation(ctx, req.Storage, *record, now)
+	canceledOperationIDs, err := cancelQueuedOutboxForAssociation(ctx, req.Storage, *record)
 	b.enqueueMu.Unlock()
 	if err != nil {
 		return nil, err

@@ -263,7 +263,6 @@ replacement writes are serialized across enqueue paths.
 pending -> claimed -> applying -> status_persisted -> pruned
                      -> retry_wait
                      -> failed_terminal
-                     -> canceled
 
 retry_wait -> pending
 claimed    -> pending        when claim expires
@@ -277,8 +276,9 @@ skipped; expired claims are reclaimable. Successful operations write object
 status first and are then pruned from the outbox, so success evidence lives in
 `status/` rather than durable queue history. Automatic retry is reserved for
 provider `rate_limit` and `unavailable` classes, with a bounded attempt budget
-and `not_before` delay. Manual queue retry moves canceled, retry-wait, or
-terminal failed work back to `pending` and resets the attempt counter.
+and `not_before` delay. Manual queue retry moves retry-wait or terminal failed
+work back to `pending` and resets the attempt counter. Manual queue cancel and
+automatic supersede/delete cancellation discard pending or retry-wait records.
 
 The `queue/drain` path runs the same due-operation dispatcher as background
 work with a request-bounded operation limit. It first checks global mutation

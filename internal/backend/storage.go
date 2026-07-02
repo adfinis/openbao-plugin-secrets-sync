@@ -607,7 +607,6 @@ func cancelQueuedOutboxForAssociation(
 	ctx context.Context,
 	storage logical.Storage,
 	association associationRecord,
-	now string,
 ) ([]string, error) {
 	ids, err := listQueuedOutboxIDsForPath(ctx, storage, association.Path)
 	if err != nil {
@@ -622,10 +621,7 @@ func cancelQueuedOutboxForAssociation(
 		if record == nil || record.AssociationID != association.ID {
 			continue
 		}
-		record.State = outboxStateCanceled
-		record.UpdatedTime = now
-		clearOutboxClaim(record)
-		if err := putOutbox(ctx, storage, *record); err != nil {
+		if err := deleteOutbox(ctx, storage, *record); err != nil {
 			return nil, err
 		}
 		canceledIDs = append(canceledIDs, record.ID)
@@ -657,7 +653,7 @@ func queuedUpsertIDsForPathVersion(
 	return matchingIDs, nil
 }
 
-func cancelQueuedOutboxIDs(ctx context.Context, storage logical.Storage, ids []string, now string) error {
+func cancelQueuedOutboxIDs(ctx context.Context, storage logical.Storage, ids []string) error {
 	for _, id := range ids {
 		record, err := getOutbox(ctx, storage, id)
 		if err != nil {
@@ -666,10 +662,7 @@ func cancelQueuedOutboxIDs(ctx context.Context, storage logical.Storage, ids []s
 		if record == nil || !isQueuedOutboxState(record.State) {
 			continue
 		}
-		record.State = outboxStateCanceled
-		record.UpdatedTime = now
-		clearOutboxClaim(record)
-		if err := putOutbox(ctx, storage, *record); err != nil {
+		if err := deleteOutbox(ctx, storage, *record); err != nil {
 			return err
 		}
 	}

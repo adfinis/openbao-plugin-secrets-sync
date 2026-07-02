@@ -166,6 +166,8 @@ bao write -force secret-sync/queue/<operation-id>/retry
 bao write -force secret-sync/queue/<operation-id>/cancel
 ```
 
+Cancel discards queued work; it is not retained in the queue summary.
+
 `queue/drain` can execute remote mutations. Keep it operator-scoped.
 
 ## Operational Signals

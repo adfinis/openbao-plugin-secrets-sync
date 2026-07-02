@@ -187,7 +187,7 @@ Current queue hardening coverage asserts that:
   recovery instead of marking terminal failure;
 - newer source writes supersede older inactive queued upserts for the same
   association object;
-- expired claims on stale upserts are canceled before provider mutation;
+- expired claims on stale upserts are pruned before provider mutation;
 - older operations cannot overwrite newer per-object status records;
 - incomplete enqueue intents recover missing outbox work and completed enqueue
   intents are pruned;

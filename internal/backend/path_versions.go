@@ -178,7 +178,7 @@ func (b *secretSyncBackend) mutateCurrentVersionDelete(
 	if err := mutate(ctx, storage, metadata, path, version, now); err != nil {
 		return err
 	}
-	if err := cancelQueuedOutboxIDs(ctx, storage, deletePlan.staleUpsertIDs, now); err != nil {
+	if err := cancelQueuedOutboxIDs(ctx, storage, deletePlan.staleUpsertIDs); err != nil {
 		return err
 	}
 	if err := putOutboxRecords(ctx, storage, deletePlan.operations); err != nil {
@@ -231,7 +231,7 @@ func (b *secretSyncBackend) mutateCurrentVersionUndelete(
 	if err := mutate(ctx, storage, metadata, path, version, now); err != nil {
 		return err
 	}
-	if err := cancelQueuedOutboxIDs(ctx, storage, staleDeleteIDs, now); err != nil {
+	if err := cancelQueuedOutboxIDs(ctx, storage, staleDeleteIDs); err != nil {
 		return err
 	}
 	if err := putOutboxRecords(ctx, storage, operations); err != nil {

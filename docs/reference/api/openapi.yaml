@@ -621,13 +621,13 @@ paths:
     post:
       tags: [queue]
       operationId: retryQueueOperation
-      summary: Move one queue operation back to pending.
+      summary: Retry one retry-wait or terminal failed queue operation.
       x-openbao-operation: update
       parameters:
         - $ref: "#/components/parameters/OperationID"
       responses:
         "200":
-          description: Updated operation.
+          description: Operation moved back to pending.
           content:
             application/json:
               schema:
@@ -637,13 +637,13 @@ paths:
     post:
       tags: [queue]
       operationId: cancelQueueOperation
-      summary: Cancel one pending or retry-wait operation.
+      summary: Discard one pending or retry-wait operation.
       x-openbao-operation: update
       parameters:
         - $ref: "#/components/parameters/OperationID"
       responses:
         "200":
-          description: Updated operation.
+          description: Canceled operation snapshot. The operation is removed from durable queue storage.
           content:
             application/json:
               schema:
@@ -1576,8 +1576,6 @@ components:
               type: integer
             queue_terminal:
               type: integer
-            queue_canceled:
-              type: integer
             queue_oldest_age_seconds:
               type: integer
             queue_capacity:
@@ -1599,8 +1597,6 @@ components:
         claimed:
           type: integer
         terminal:
-          type: integer
-        canceled:
           type: integer
         oldest_age_seconds:
           type: integer

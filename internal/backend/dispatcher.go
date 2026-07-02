@@ -168,7 +168,7 @@ func (b *secretSyncBackend) processUpsert(
 		return err
 	}
 	if stale {
-		return cancelOutboxOperation(ctx, storage, record, now)
+		return cancelOutboxOperation(ctx, storage, record)
 	}
 	upsertContext, failure, err := b.loadUpsertContext(ctx, storage, record)
 	if err != nil {
@@ -664,12 +664,8 @@ func staleUpsertForCurrentVersion(ctx context.Context, storage logical.Storage, 
 	return metadata != nil && metadata.CurrentVersion > record.Version, nil
 }
 
-func cancelOutboxOperation(ctx context.Context, storage logical.Storage, record outboxRecord, now time.Time) error {
-	record.State = outboxStateCanceled
-	record.NotBefore = ""
-	record.UpdatedTime = now.Format(timeFormatRFC3339)
-	clearOutboxClaim(&record)
-	return putOutbox(ctx, storage, record)
+func cancelOutboxOperation(ctx context.Context, storage logical.Storage, record outboxRecord) error {
+	return deleteOutbox(ctx, storage, record)
 }
 
 func syncStateForFailureClass(errorClass providers.ErrorClass) domain.SyncState {

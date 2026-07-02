@@ -21,7 +21,6 @@ type queueSummary struct {
 	RetryWait        int
 	Claimed          int
 	Terminal         int
-	Canceled         int
 	OldestAgeSeconds int
 	Capacity         int
 	Utilization      float64
@@ -89,7 +88,7 @@ func pathQueue(b *secretSyncBackend) []*framework.Path {
 				},
 			},
 			HelpSynopsis:    "Retry a sync queue operation.",
-			HelpDescription: "Moves canceled, retry-wait, or terminal failed outbox work back to pending.",
+			HelpDescription: "Moves retry-wait or terminal failed outbox work back to pending.",
 		},
 		{
 			Pattern: "queue/" + framework.GenericNameRegex("operation_id") + "/cancel",
@@ -106,7 +105,7 @@ func pathQueue(b *secretSyncBackend) []*framework.Path {
 				},
 			},
 			HelpSynopsis:    "Cancel a sync queue operation.",
-			HelpDescription: "Moves pending or retry-wait outbox work to canceled.",
+			HelpDescription: "Discards pending or retry-wait outbox work.",
 		},
 	}
 }
@@ -182,7 +181,6 @@ func (b *secretSyncBackend) pathQueueDrain(
 		responseField("queue_retry_wait", summary.RetryWait),
 		responseField("queue_claimed", summary.Claimed),
 		responseField("queue_terminal", summary.Terminal),
-		responseField("queue_canceled", summary.Canceled),
 		responseField("queue_oldest_age_seconds", summary.OldestAgeSeconds),
 		responseField("queue_capacity", summary.Capacity),
 		responseField("queue_utilization", summary.Utilization),
@@ -194,7 +192,6 @@ func (b *secretSyncBackend) recordQueueSummary(ctx context.Context, summary queu
 	b.observer.QueueDepth(ctx, outboxStatePending, summary.Pending)
 	b.observer.QueueDepth(ctx, outboxStateRetryWait, summary.RetryWait)
 	b.observer.QueueDepth(ctx, outboxStateFailedTerminal, summary.Terminal)
-	b.observer.QueueDepth(ctx, outboxStateCanceled, summary.Canceled)
 	b.observer.QueueCapacity(ctx, observability.QueueCapacityEvent{
 		Capacity:    summary.Capacity,
 		Utilization: summary.Utilization,
@@ -214,15 +211,10 @@ func readQueueSummary(ctx context.Context, storage logical.Storage, now time.Tim
 	if err != nil {
 		return queueSummary{}, err
 	}
-	canceledIDs, err := listOutboxIDsForState(ctx, storage, outboxStateCanceled)
-	if err != nil {
-		return queueSummary{}, err
-	}
 	summary := queueSummary{}
 	summary.Pending = len(pendingIDs)
 	summary.RetryWait = len(retryWaitIDs)
 	summary.Terminal = len(terminalIDs)
-	summary.Canceled = len(canceledIDs)
 	for _, id := range append(pendingIDs, retryWaitIDs...) {
 		record, err := getOutbox(ctx, storage, id)
 		if err != nil {
@@ -271,7 +263,6 @@ func queueSummaryResponse(summary queueSummary) map[string]interface{} { //nolin
 		responseField("retry_wait", summary.RetryWait),
 		responseField("claimed", summary.Claimed),
 		responseField("terminal", summary.Terminal),
-		responseField("canceled", summary.Canceled),
 		responseField("oldest_age_seconds", summary.OldestAgeSeconds),
 		responseField("capacity", summary.Capacity),
 		responseField("utilization", summary.Utilization),
@@ -312,7 +303,7 @@ func pathQueueOperationRetry(
 	switch record.State {
 	case outboxStatePending:
 		return nil, nil
-	case outboxStateRetryWait, outboxStateFailedTerminal, outboxStateCanceled:
+	case outboxStateRetryWait, outboxStateFailedTerminal:
 		nowString := now.Format(timeFormatRFC3339)
 		record.Attempts = 0
 		record.State = outboxStatePending
@@ -346,16 +337,20 @@ func pathQueueOperationCancel(
 	}
 	switch record.State {
 	case outboxStateCanceled:
+		if err := deleteOutbox(ctx, req.Storage, *record); err != nil {
+			return nil, err
+		}
 		return nil, nil
 	case outboxStatePending, outboxStateRetryWait:
 		nowString := now.Format(timeFormatRFC3339)
-		record.State = outboxStateCanceled
-		record.UpdatedTime = nowString
-		clearOutboxClaim(record)
-		if err := putOutbox(ctx, req.Storage, *record); err != nil {
+		responseRecord := *record
+		responseRecord.State = outboxStateCanceled
+		responseRecord.UpdatedTime = nowString
+		clearOutboxClaim(&responseRecord)
+		if err := deleteOutbox(ctx, req.Storage, *record); err != nil {
 			return nil, err
 		}
-		return &logical.Response{Data: outboxOperationResponse(*record)}, nil
+		return &logical.Response{Data: outboxOperationResponse(responseRecord)}, nil
 	default:
 		return logical.ErrorResponse("operation is not cancelable"), nil
 	}

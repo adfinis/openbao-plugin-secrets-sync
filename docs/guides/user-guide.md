@@ -170,10 +170,10 @@ Inspect queue summary:
 bao read secret-sync/queue
 ```
 
-Queue summaries include pending, retry-wait, terminal, and canceled counters.
+Queue summaries include pending, retry-wait, claimed, and terminal counters.
 `oldest_age_seconds` reports the age of the oldest pending or retry-wait
-operation. Successful operations are removed from the queue after their status
-record is persisted; inspect `status/<path>` for success evidence.
+operation. Successful and canceled operations are removed from the queue;
+inspect `status/<path>` for success evidence.
 
 Newer writes supersede older inactive queued upserts for the same association
 object. Current-version deletes and destroys cancel queued upserts and queue
@@ -187,6 +187,9 @@ bao read secret-sync/queue/<operation-id>
 bao write -force secret-sync/queue/<operation-id>/retry
 bao write -force secret-sync/queue/<operation-id>/cancel
 ```
+
+Cancel discards queued work. Re-enqueue with an association sync or source
+write if the remote mutation is needed again.
 
 ## Reconcile remote state
 

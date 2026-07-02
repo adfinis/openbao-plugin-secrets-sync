@@ -1052,7 +1052,7 @@ func TestCurrentVersionMutationQueuesRemoteDelete(t *testing.T) {
 				t.Fatalf("unexpected %s response: %v", testCase.name, mutationResp.Error())
 			}
 
-			assertOutboxOperation(t, storage, upsertOperationID, 1, outboxStateCanceled)
+			assertOutboxMissing(t, storage, upsertOperationID)
 			deleteOperation := assertOutboxOperation(t, storage, deleteOperationID, 1, outboxStatePending)
 			if got := deleteOperation.Type; got != outbox.OperationTypeDelete {
 				t.Fatalf("operation type = %s, want %s", got, outbox.OperationTypeDelete)
@@ -1120,9 +1120,8 @@ func TestDataDeleteRetainModeCancelsQueuedUpsert(t *testing.T) {
 	assertNoErrorResponse(t, deleteResp)
 	metadata := deleteResp.Data["metadata"].(map[string]interface{})
 	assertOperationIDs(t, metadata, 0)
-	assertOutboxOperation(t, storage, upsertOperationID, 1, outboxStateCanceled)
+	assertOutboxMissing(t, storage, upsertOperationID)
 	assertQueueCount(t, b, storage, "pending", 0)
-	assertQueueCount(t, b, storage, "canceled", 1)
 
 	readResp := handleRequest(t, b, storage, logical.ReadOperation, "data/app/db", nil)
 	if readResp != nil {
@@ -2219,7 +2218,7 @@ func TestAssociationDisableEnableAndManualSync(t *testing.T) {
 	assertNoErrorResponse(t, disableResp)
 	assertAssociationEnabled(t, disableResp, false)
 	assertStringSlice(t, stringSliceFromResponse(t, disableResp, "canceled_operation_ids"), []string{operationID})
-	assertQueueCount(t, b, storage, "canceled", 1)
+	assertOutboxMissing(t, storage, operationID)
 	assertDisabledStatusObject(t, b, storage, 1)
 
 	disabledSyncResp := handleRequest(
@@ -2499,10 +2498,9 @@ func TestDataWriteSupersedesStaleQueuedUpserts(t *testing.T) {
 		"rotated write",
 	)
 
-	assertOutboxOperation(t, storage, staleOperationID, 1, outboxStateCanceled)
+	assertOutboxMissing(t, storage, staleOperationID)
 	assertOutboxOperation(t, storage, rotatedOperationID, 2, outboxStatePending)
 	assertQueueCount(t, b, storage, "pending", 1)
-	assertQueueCount(t, b, storage, "canceled", 1)
 }
 
 func TestQueueDrainCancelsClaimedStaleUpsertAfterClaimExpiry(t *testing.T) {
@@ -2548,10 +2546,7 @@ func TestQueueDrainCancelsClaimedStaleUpsertAfterClaimExpiry(t *testing.T) {
 	if got := drainResp.Data["processed"]; got != 1 {
 		t.Fatalf("processed = %v, want 1", got)
 	}
-	canceled := assertOutboxOperation(t, storage, staleOperationID, 1, outboxStateCanceled)
-	if canceled.ClaimOwner != "" || canceled.ClaimExpiresTime != "" || canceled.ClaimAttempt != 0 {
-		t.Fatalf("canceled stale operation claim fields = %#v, want cleared", canceled)
-	}
+	assertOutboxMissing(t, storage, staleOperationID)
 	assertOutboxOperation(t, storage, rotatedOperationID, 2, outboxStatePending)
 	status, err := getStatus(context.Background(), storage, "app/db", associationIDFromResponse(t, associationResp), syncObjectIDSecretPath)
 	if err != nil {
@@ -3099,7 +3094,7 @@ func TestPeriodicMapsProviderMutationErrorClasses(t *testing.T) {
 	}
 }
 
-func TestQueueOperationReadCancelAndRetry(t *testing.T) {
+func TestQueueOperationReadCancelAndPrune(t *testing.T) {
 	b := Backend(&logical.BackendConfig{})
 	storage := &logical.InmemStorage{}
 
@@ -3119,19 +3114,16 @@ func TestQueueOperationReadCancelAndRetry(t *testing.T) {
 	if got := cancelResp.Data["state"]; got != outboxStateCanceled {
 		t.Fatalf("canceled operation state = %v, want %s", got, outboxStateCanceled)
 	}
+	assertOutboxMissing(t, storage, operationID)
 	queueResp := handleRequest(t, b, storage, logical.ReadOperation, "queue", nil)
 	assertNoErrorResponse(t, queueResp)
 	if got := queueResp.Data["pending"]; got != 0 {
 		t.Fatalf("pending queue count = %v, want 0", got)
 	}
-	if got := queueResp.Data["canceled"]; got != 1 {
-		t.Fatalf("canceled queue count = %v, want 1", got)
-	}
 
 	retryResp := handleRequest(t, b, storage, logical.UpdateOperation, "queue/"+operationID+"/retry", nil)
-	assertNoErrorResponse(t, retryResp)
-	if got := retryResp.Data["state"]; got != outboxStatePending {
-		t.Fatalf("retried operation state = %v, want %s", got, outboxStatePending)
+	if retryResp != nil {
+		t.Fatalf("retry pruned operation response = %#v, want nil", retryResp)
 	}
 }
 
