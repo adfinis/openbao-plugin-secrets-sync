@@ -163,6 +163,16 @@ func associationRequestFields() map[string]*framework.FieldSchema {
 			Type:        framework.TypeString,
 			Description: "Payload format: json or raw. Raw requires secret-key granularity.",
 		},
+		"data_mapping": {
+			Type: framework.TypeString,
+			Description: "Destination data mapping mode. payload stores the canonical payload as one destination value; " +
+				"source-keys maps top-level source keys into destination-native data keys when supported.",
+		},
+		"data_key_template": {
+			Type: framework.TypeString,
+			Description: "Destination-native data key template for data_mapping source-keys. " +
+				"Requires {{ key }} and defaults to {{ key }} when source-key data mapping is enabled.",
+		},
 		"delete_mode": {
 			Type:        framework.TypeString,
 			Description: "Remote delete behavior for this association: retain, delete, or orphan.",
@@ -484,9 +494,8 @@ func (b *secretSyncBackend) pathAssociationSecretPathPlan(
 	preflightErr error,
 ) (*logical.Response, error) {
 	preparedPayload, err := buildCanonicalPayloadForObject(
-		record.Format,
+		record,
 		version.Data,
-		record.Granularity,
 		syncObjectIDSecretPath,
 	)
 	if err != nil {
@@ -602,6 +611,8 @@ func providerPlanRequest(
 		Format:        preparedPayload.Format,
 		PayloadSHA256: preparedPayload.SHA256,
 		PayloadBytes:  len(preparedPayload.Bytes),
+		DataMap:       normalizedDataMapping(record.DataMapping) == dataMappingSourceKeys,
+		DataMapKeys:   dataMapKeys(preparedPayload.Data),
 		SourcePath:    record.Path,
 		SourceVersion: version,
 		AssociationID: record.ID,
@@ -667,7 +678,7 @@ func (b *secretSyncBackend) planSecretKeyObject(
 	objectID string,
 	sourceEligible bool,
 ) (secretKeyPlanObject, error) {
-	payload, err := buildCanonicalPayloadForObject(record.Format, data, record.Granularity, objectID)
+	payload, err := buildCanonicalPayloadForObject(record, data, objectID)
 	if err != nil {
 		return secretKeyPlanObject{
 			ObjectID:   objectID,
@@ -719,6 +730,7 @@ func (b *secretSyncBackend) planSecretKeyObject(
 			Format:        payload.Format,
 			PayloadSHA256: payload.SHA256,
 			PayloadBytes:  len(payload.Bytes),
+			DataMap:       false,
 			SourcePath:    record.Path,
 			SourceVersion: version,
 			AssociationID: record.ID,
@@ -814,6 +826,8 @@ func associationPlanResponse(
 		)),
 		responseField("resolved_name", record.ResolvedName),
 		responseField("format", preparedPayload.Format),
+		responseField("data_mapping", normalizedDataMapping(record.DataMapping)),
+		responseField("data_key_template", record.DataKeyTemplate),
 		responseField("payload_bytes", len(preparedPayload.Bytes)),
 		responseField("error_class", string(plan.ErrorClass)),
 		responseField("message", plan.Message),
@@ -827,6 +841,8 @@ func associationSummaryFields(record associationRecord) []responseEntry {
 		responseField("resolved_name", record.ResolvedName),
 		responseField("granularity", record.Granularity),
 		responseField("format", record.Format),
+		responseField("data_mapping", normalizedDataMapping(record.DataMapping)),
+		responseField("data_key_template", record.DataKeyTemplate),
 		responseField("delete_mode", normalizedDeleteMode(record.DeleteMode)),
 		responseField("enabled", record.Enabled),
 		responseField("defaults", associationDefaultsResponse()),
@@ -1196,6 +1212,16 @@ func (b *secretSyncBackend) associationRecordFromFieldData(
 	granularity := stringFromField(data, "granularity", associationGranularityDefault(base))
 	baseMatchesGranularity := base != nil && base.Granularity == granularity
 	format := stringFromField(data, "format", associationFormatDefault(base, baseMatchesGranularity))
+	dataMapping := stringFromField(
+		data,
+		"data_mapping",
+		associationDataMappingDefault(base, baseMatchesGranularity),
+	)
+	dataKeyTemplate := stringFromField(
+		data,
+		"data_key_template",
+		associationDataKeyTemplateDefault(base, dataMapping, baseMatchesGranularity),
+	)
 	deleteMode := stringFromField(data, "delete_mode", associationDeleteModeDefault(base))
 	nameTemplate := stringFromField(
 		data,
@@ -1217,6 +1243,15 @@ func (b *secretSyncBackend) associationRecordFromFieldData(
 	if err := validateAssociationCapabilities(provider.Capabilities(), granularity, format); err != nil {
 		return associationRecord{}, err
 	}
+	if err := validateAssociationDataMapping(
+		provider.Capabilities(),
+		granularity,
+		format,
+		dataMapping,
+		dataKeyTemplate,
+	); err != nil {
+		return associationRecord{}, err
+	}
 	if err := validateDeleteMode(provider.Capabilities(), deleteMode); err != nil {
 		return associationRecord{}, err
 	}
@@ -1235,6 +1270,8 @@ func (b *secretSyncBackend) associationRecordFromFieldData(
 		ResolvedName:    resolvedName,
 		Granularity:     granularity,
 		Format:          format,
+		DataMapping:     dataMapping,
+		DataKeyTemplate: dataKeyTemplate,
 		DeleteMode:      deleteMode,
 		Enabled:         boolFromField(data, "enabled", associationEnabledDefault(base)),
 		CreatedTime:     now,
@@ -1289,6 +1326,27 @@ func associationFormatDefault(base *associationRecord, baseMatchesGranularity bo
 		return base.Format
 	}
 	return defaultAssociationFormat
+}
+
+func associationDataMappingDefault(base *associationRecord, baseMatchesGranularity bool) string {
+	if baseMatchesGranularity && base.DataMapping != "" {
+		return base.DataMapping
+	}
+	return defaultDataMapping
+}
+
+func associationDataKeyTemplateDefault(
+	base *associationRecord,
+	dataMapping string,
+	baseMatchesGranularity bool,
+) string {
+	if dataMapping != dataMappingSourceKeys {
+		return ""
+	}
+	if baseMatchesGranularity && base.DataMapping == dataMappingSourceKeys && base.DataKeyTemplate != "" {
+		return base.DataKeyTemplate
+	}
+	return defaultDataKeyTemplate
 }
 
 func associationDeleteModeDefault(base *associationRecord) string {
@@ -1473,6 +1531,45 @@ func validateAssociationCapabilities(capabilities providers.Capabilities, granul
 	return nil
 }
 
+func validateAssociationDataMapping(
+	capabilities providers.Capabilities,
+	granularity string,
+	format string,
+	dataMapping string,
+	dataKeyTemplate string,
+) error {
+	switch dataMapping {
+	case "", defaultDataMapping:
+		if strings.TrimSpace(dataKeyTemplate) != "" {
+			return fmt.Errorf("data_key_template requires data_mapping %q", dataMappingSourceKeys)
+		}
+		return nil
+	case dataMappingSourceKeys:
+		if !capabilities.SupportsDataMap {
+			return fmt.Errorf("destination provider does not support source-key data mapping")
+		}
+		if granularity != syncGranularitySecretPath {
+			return fmt.Errorf("data_mapping %q requires secret-path granularity", dataMappingSourceKeys)
+		}
+		if format != defaultAssociationFormat {
+			return fmt.Errorf("data_mapping %q requires format %q", dataMappingSourceKeys, defaultAssociationFormat)
+		}
+		if !strings.Contains(dataKeyTemplate, "{{ key }}") {
+			return fmt.Errorf("data_key_template must include {{ key }}")
+		}
+		rendered, err := renderDataKeyTemplate(dataKeyTemplate, "key")
+		if err != nil {
+			return err
+		}
+		if err := validateDataMapKey(rendered); err != nil {
+			return err
+		}
+		return nil
+	default:
+		return fmt.Errorf("unsupported data_mapping %q", dataMapping)
+	}
+}
+
 func validateAssociationFormat(granularity string, format string) error {
 	switch format {
 	case defaultAssociationFormat:
@@ -1544,6 +1641,8 @@ func associationResponse(record associationRecord) map[string]interface{} { //no
 		responseField("resolved_name", record.ResolvedName),
 		responseField("granularity", record.Granularity),
 		responseField("format", record.Format),
+		responseField("data_mapping", normalizedDataMapping(record.DataMapping)),
+		responseField("data_key_template", record.DataKeyTemplate),
 		responseField("delete_mode", normalizedDeleteMode(record.DeleteMode)),
 		responseField("enabled", record.Enabled),
 		responseField("defaults", associationDefaultsResponse()),
@@ -1556,6 +1655,8 @@ func associationDefaultsResponse() map[string]interface{} { //nolint:forbidigo
 	return newResponseData(
 		responseField("granularity", syncGranularitySecretPath),
 		responseField("format", defaultAssociationFormat),
+		responseField("data_mapping", defaultDataMapping),
+		responseField("data_key_template", ""),
 		responseField("delete_mode", defaultDeleteMode),
 		responseField("enabled", true),
 		responseField("secret_path_name_template", defaultNameTemplate),
@@ -1568,4 +1669,11 @@ func normalizedDeleteMode(deleteMode string) string {
 		return defaultDeleteMode
 	}
 	return deleteMode
+}
+
+func normalizedDataMapping(dataMapping string) string {
+	if dataMapping == "" {
+		return defaultDataMapping
+	}
+	return dataMapping
 }

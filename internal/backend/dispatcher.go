@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -392,6 +393,7 @@ func (b *secretSyncBackend) providerUpsert(
 		Format:        preparedPayload.Format,
 		Payload:       preparedPayload.Bytes,
 		PayloadSHA256: preparedPayload.SHA256,
+		DataMap:       preparedPayload.Data,
 		SourcePath:    record.Path,
 		SourceVersion: record.Version,
 		AssociationID: record.AssociationID,
@@ -414,6 +416,7 @@ func (b *secretSyncBackend) providerDelete(
 	return runtime.Delete(ctx, providers.DeleteRequest{
 		Runtime:       runtimeIdentity,
 		ResolvedName:  resolvedName,
+		DataMap:       normalizedDataMapping(ctxData.association.DataMapping) == dataMappingSourceKeys,
 		SourcePath:    record.Path,
 		SourceVersion: record.Version,
 		AssociationID: record.AssociationID,
@@ -551,9 +554,8 @@ func prepareProviderPayload(
 	objectID string,
 ) (payloadpkg.CanonicalPayload, *operationFailure) {
 	preparedPayload, err := buildCanonicalPayloadForObject(
-		upsertContext.association.Format,
+		*upsertContext.association,
 		upsertContext.version.Data,
-		upsertContext.association.Granularity,
 		objectID,
 	)
 	if err != nil {
@@ -576,14 +578,22 @@ func prepareProviderPayload(
 }
 
 func buildCanonicalPayloadForObject(
-	format string,
+	association associationRecord,
 	data secretPayload,
-	granularity string,
 	objectID string,
 ) (payloadpkg.CanonicalPayload, error) {
-	switch format {
+	if normalizedDataMapping(association.DataMapping) == dataMappingSourceKeys {
+		if association.Granularity != syncGranularitySecretPath || objectID != syncObjectIDSecretPath {
+			return payloadpkg.CanonicalPayload{}, fmt.Errorf(
+				"data_mapping %q requires secret-path granularity",
+				dataMappingSourceKeys,
+			)
+		}
+		return buildDataMapPayloadForAssociation(association, data)
+	}
+	switch association.Format {
 	case defaultAssociationFormat:
-		switch granularity {
+		switch association.Granularity {
 		case syncGranularitySecretPath:
 			return payloadpkg.BuildJSON(map[string]interface{}(data))
 		case syncGranularitySecretKey:
@@ -593,10 +603,10 @@ func buildCanonicalPayloadForObject(
 			}
 			return payloadpkg.BuildJSON(map[string]interface{}{objectID: value})
 		default:
-			return payloadpkg.CanonicalPayload{}, fmt.Errorf("unsupported granularity %q", granularity)
+			return payloadpkg.CanonicalPayload{}, fmt.Errorf("unsupported granularity %q", association.Granularity)
 		}
 	case rawAssociationFormat:
-		if granularity != syncGranularitySecretKey {
+		if association.Granularity != syncGranularitySecretKey {
 			return payloadpkg.CanonicalPayload{}, fmt.Errorf("raw payload format requires secret-key granularity")
 		}
 		value, ok := data[objectID]
@@ -605,8 +615,48 @@ func buildCanonicalPayloadForObject(
 		}
 		return payloadpkg.BuildRaw(value)
 	default:
-		return payloadpkg.CanonicalPayload{}, fmt.Errorf("unsupported payload format %q", format)
+		return payloadpkg.CanonicalPayload{}, fmt.Errorf("unsupported payload format %q", association.Format)
 	}
+}
+
+func buildDataMapPayloadForAssociation(
+	association associationRecord,
+	data secretPayload,
+) (payloadpkg.CanonicalPayload, error) {
+	dataMap := make(map[string][]byte, len(data))
+	for sourceKey, value := range data {
+		if strings.TrimSpace(sourceKey) != sourceKey || sourceKey == "" {
+			return payloadpkg.CanonicalPayload{}, fmt.Errorf("source key must not be empty or have surrounding whitespace")
+		}
+		dataKey, err := renderDataKeyTemplate(association.DataKeyTemplate, sourceKey)
+		if err != nil {
+			return payloadpkg.CanonicalPayload{}, err
+		}
+		if err := validateDataMapKey(dataKey); err != nil {
+			return payloadpkg.CanonicalPayload{}, err
+		}
+		if _, exists := dataMap[dataKey]; exists {
+			return payloadpkg.CanonicalPayload{}, fmt.Errorf("data_key_template maps multiple source keys to %q", dataKey)
+		}
+		rawBytes, err := payloadpkg.RawBytes(value)
+		if err != nil {
+			return payloadpkg.CanonicalPayload{}, fmt.Errorf("source key %q is not string or bytes", sourceKey)
+		}
+		dataMap[dataKey] = rawBytes
+	}
+	return payloadpkg.BuildDataMap(dataMap)
+}
+
+func dataMapKeys(data map[string][]byte) []string {
+	if len(data) == 0 {
+		return nil
+	}
+	keys := make([]string, 0, len(data))
+	for key := range data {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	return keys
 }
 
 func resolvedNameForOperation(association *associationRecord, objectID string) (string, *operationFailure) {

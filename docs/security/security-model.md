@@ -119,6 +119,8 @@ credentials must be seal-wrapped.
 - Current AWS support stores assume-role `external_id` in seal-wrapped
   sensitive config. Static access keys and session tokens are recognized as
   sensitive fields but intentionally remain unsupported auth material.
+- GitLab API tokens and Kubernetes bearer tokens are stored in seal-wrapped
+  sensitive config and redacted on destination reads.
 - Derived short-lived tokens should be cached only in memory and invalidated on
   destination config updates.
 - Provider SDK default credential chains must be explicitly allowed or disabled

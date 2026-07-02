@@ -66,6 +66,7 @@ Key capability questions:
 - Can it prove ownership before delete?
 - Does it support `secret-path` granularity?
 - Does it support `secret-key` granularity?
+- Does it support destination-native source-key data mapping?
 - What is the real max payload size before provider mutation?
 
 If ownership proof is partial, document the reduced guarantee in

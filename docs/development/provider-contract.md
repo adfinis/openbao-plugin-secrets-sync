@@ -298,6 +298,10 @@ Granularity:
 - `secret-path`: one destination secret per OpenBao secret path.
 - `secret-key`: one destination secret per top-level key in OpenBao secret
   data.
+- `data_mapping=source-keys`: one destination object per OpenBao secret path,
+  with top-level source keys mapped into destination-native data keys. This is
+  separate from `secret-key` granularity and requires an explicit provider
+  capability.
 
 Core dispatch supports both granularities when the destination provider
 advertises the matching capability. For `secret-key` and `json` format, each
@@ -309,6 +313,11 @@ For `secret-key` and `raw` format, the remote payload is the exact string or
 byte value of the selected source key. Structured values are rejected before a
 provider call. `raw` is intentionally invalid for `secret-path` because there
 is no single selected key.
+
+For `data_mapping=source-keys`, the core sends a canonical data-map payload
+with deterministic bytes and a payload hash over the rendered key/value map.
+Providers receive the destination-native `map[string][]byte` and must not
+derive it by reparsing JSON payload bytes.
 
 Canonical JSON requirements:
 
@@ -448,16 +457,17 @@ Required implementation behavior:
 
 Current status: package has provider type `k8s`, conservative capabilities,
 backend registration, destination config for namespace, in-cluster auth, and
-kubeconfig auth, a client-go-backed client boundary, Opaque Secret
+kubeconfig auth, token auth, a client-go-backed client boundary, Opaque Secret
 create/update/delete/read-state/health behavior, ownership labels and
-annotations, payload hash metadata, Kubernetes API error classification, and a
-provider conformance lifecycle and maturity test using the client-go fake
-client.
+annotations, payload hash metadata, source-key data mapping into Secret
+`.data`, Kubernetes API error classification, and a provider conformance
+lifecycle and maturity test using the client-go fake client.
 
-Current granularity support: `secret-path` only. The core engine now expands
-`secret-key` associations for providers that opt in, but Kubernetes Secret
-`secret-key` support remains later work because it needs a clear provider-level
-model for Secret name, data key, ownership metadata, and cleanup semantics.
+Current granularity support: `secret-path` only. The provider supports
+`data_mapping=source-keys` for Kubernetes-native `.data` entries without
+turning on `secret-key` fan-out. Kubernetes Secret `secret-key` support remains
+later work because it would require separate remote object naming and cleanup
+semantics.
 
 ### GitLab Project Variables
 

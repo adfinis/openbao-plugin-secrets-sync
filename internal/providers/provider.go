@@ -30,6 +30,7 @@ type Capabilities struct {
 	SupportsDeleteIfOwned       bool
 	SupportsSecretPath          bool
 	SupportsSecretKey           bool
+	SupportsDataMap             bool
 	MaxPayloadBytes             int
 }
 
@@ -92,6 +93,8 @@ type PlanRequest struct {
 	Format        string
 	PayloadSHA256 string
 	PayloadBytes  int
+	DataMap       bool
+	DataMapKeys   []string
 	SourcePath    string
 	SourceVersion int
 	AssociationID string
@@ -112,6 +115,7 @@ type UpsertRequest struct {
 	Format        string
 	Payload       []byte
 	PayloadSHA256 string
+	DataMap       map[string][]byte
 	SourcePath    string
 	SourceVersion int
 	AssociationID string
@@ -122,6 +126,7 @@ type UpsertRequest struct {
 type DeleteRequest struct {
 	Runtime       RuntimeIdentity
 	ResolvedName  string
+	DataMap       bool
 	SourcePath    string
 	SourceVersion int
 	AssociationID string
@@ -133,6 +138,7 @@ type ReadStateRequest struct {
 	Runtime       RuntimeIdentity
 	ResolvedName  string
 	PayloadSHA256 string
+	DataMap       bool
 	SourcePath    string
 	SourceVersion int
 	AssociationID string

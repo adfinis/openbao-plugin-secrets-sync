@@ -895,6 +895,16 @@ components:
         context:
           type: string
           description: Kubernetes kubeconfig context.
+        api_server:
+          type: string
+          format: uri
+          description: Kubernetes API server URL for token auth.
+        ca_cert_pem:
+          type: string
+          description: Optional Kubernetes API PEM CA bundle for token auth.
+        tls_server_name:
+          type: string
+          description: Optional Kubernetes API TLS server name override for token auth.
         base_url:
           type: string
           format: uri
@@ -926,7 +936,7 @@ components:
         token:
           type: string
           writeOnly: true
-          description: GitLab API token. Stored seal-wrapped and redacted on read.
+          description: Provider API token. GitLab uses this for project variables; Kubernetes uses it as a bearer token for token auth. Stored seal-wrapped and redacted on read.
       additionalProperties: false
 
     DestinationResponse:
@@ -1085,6 +1095,8 @@ components:
         supports_secret_path:
           type: boolean
         supports_secret_key:
+          type: boolean
+        supports_data_map:
           type: boolean
         max_payload_bytes:
           type: integer
@@ -1326,6 +1338,15 @@ components:
           type: string
           enum: [json, raw]
           default: json
+        data_mapping:
+          type: string
+          enum: [payload, source-keys]
+          default: payload
+          description: Destination data mapping mode. source-keys maps top-level source keys into destination-native data keys when supported.
+        data_key_template:
+          type: string
+          default: ""
+          description: Destination-native data key template for data_mapping source-keys. Requires `{{ key }}`.
         delete_mode:
           type: string
           enum: [retain, delete, orphan]
@@ -1351,6 +1372,10 @@ components:
             granularity:
               type: string
             format:
+              type: string
+            data_mapping:
+              type: string
+            data_key_template:
               type: string
             delete_mode:
               type: string
@@ -1403,6 +1428,10 @@ components:
           type: string
         format:
           type: string
+        data_mapping:
+          type: string
+        data_key_template:
+          type: string
         delete_mode:
           type: string
         enabled:
@@ -1423,6 +1452,11 @@ components:
         format:
           type: string
           enum: [json]
+        data_mapping:
+          type: string
+          enum: [payload]
+        data_key_template:
+          type: string
         delete_mode:
           type: string
           enum: [retain]
@@ -1438,6 +1472,8 @@ components:
       required:
         - granularity
         - format
+        - data_mapping
+        - data_key_template
         - delete_mode
         - enabled
         - secret_path_name_template
@@ -1473,6 +1509,10 @@ components:
             granularity:
               type: string
             format:
+              type: string
+            data_mapping:
+              type: string
+            data_key_template:
               type: string
             payload_bytes:
               type: integer

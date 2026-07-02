@@ -153,9 +153,11 @@ bao write secret-sync/associations/app/db \
 ```
 
 The default association shape is `granularity=secret-path`, `format=json`,
-`delete_mode=retain`, `enabled=true`, and `name_template='{{ path }}'`. Set
-`resolved_name`, `name_template`, `format`, or `delete_mode` only when the
-destination needs a different remote name, payload shape, or delete behavior.
+`data_mapping=payload`, `delete_mode=retain`, `enabled=true`, and
+`name_template='{{ path }}'`. Set `resolved_name`, `name_template`, `format`,
+`data_mapping`, `data_key_template`, or `delete_mode` only when the destination
+needs a different remote name, payload shape, data-key mapping, or delete
+behavior.
 Create and plan responses include a `defaults` object beside the effective
 values so these defaults are visible in CLI and API output.
 
@@ -174,6 +176,11 @@ Some providers support `secret-key` granularity, which creates one destination
 object per top-level source key. Source keys used with `secret-key`
 granularity must be non-empty, have no surrounding whitespace, and must not
 contain `/`, `.`, or `..`.
+
+Some providers support `data_mapping=source-keys`, which keeps
+`secret-path` granularity but maps top-level source keys into destination-native
+data keys inside one remote object. For Kubernetes Secrets this writes one
+Secret object whose `.data` entries are rendered from `data_key_template`.
 
 The write returns `sync_operation_ids`. Queue processing is asynchronous.
 For one-to-one associations, lifecycle responses also include top-level fields

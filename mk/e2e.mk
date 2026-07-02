@@ -27,6 +27,7 @@ E2E_KIND_CLUSTER ?= openbao-plugin-secrets-sync-e2e
 E2E_KIND_CONTEXT ?= kind-$(E2E_KIND_CLUSTER)
 E2E_KIND_NAMESPACE ?= openbao-plugin-secrets-sync-e2e
 E2E_KIND_IMAGE ?= openbao-plugin-secrets-sync-e2e:dev
+E2E_KIND_NODE_IMAGE ?= kindest/node:v1.35.0
 E2E_KIND_DOCKERFILE ?= test/e2e/kind/Dockerfile
 E2E_KIND_MANIFEST_DIR ?= test/e2e/kind/manifests
 E2E_KIND_OPENBAO_PORT ?= 18202
@@ -329,7 +330,7 @@ e2e-kind-up: e2e-kind-image ## Create the kind e2e cluster and deploy OpenBao wi
 	@command -v "$(KUBECTL)" >/dev/null 2>&1 || { echo "kubectl is required for e2e-kind-up"; exit 2; }
 	@set -eu; \
 	if ! "$(KIND)" get clusters | grep -qx "$(E2E_KIND_CLUSTER)"; then \
-		"$(KIND)" create cluster --name "$(E2E_KIND_CLUSTER)"; \
+		"$(KIND)" create cluster --name "$(E2E_KIND_CLUSTER)" --image "$(E2E_KIND_NODE_IMAGE)"; \
 	fi; \
 	"$(KIND)" load docker-image "$(E2E_KIND_IMAGE)" --name "$(E2E_KIND_CLUSTER)"; \
 	"$(KUBECTL)" --context "$(E2E_KIND_CONTEXT)" create namespace "$(E2E_KIND_NAMESPACE)" --dry-run=client -o yaml | \

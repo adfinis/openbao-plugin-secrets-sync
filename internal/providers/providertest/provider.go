@@ -32,6 +32,7 @@ type CapabilityExpectations struct {
 	MetadataReadback    bool
 	SecretPath          bool
 	SecretKey           bool
+	DataMap             bool
 	UpdateIfOwned       bool
 	DeleteIfOwned       bool
 	PayloadHashMetadata bool
@@ -736,6 +737,7 @@ func assertCapabilities(
 		{name: "metadata readback", required: expected.MetadataReadback, actual: capabilities.SupportsMetadataReadback},
 		{name: "secret-path granularity", required: expected.SecretPath, actual: capabilities.SupportsSecretPath},
 		{name: "secret-key granularity", required: expected.SecretKey, actual: capabilities.SupportsSecretKey},
+		{name: "data-map payloads", required: expected.DataMap, actual: capabilities.SupportsDataMap},
 		{name: "owned updates", required: expected.UpdateIfOwned, actual: capabilities.SupportsUpdateIfOwned},
 		{name: "owned deletes", required: expected.DeleteIfOwned, actual: capabilities.SupportsDeleteIfOwned},
 		{

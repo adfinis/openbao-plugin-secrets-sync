@@ -10,7 +10,7 @@ constraints.
 | Provider | Destination type | Remote object | Supported association shape |
 | --- | --- | --- | --- |
 | AWS Secrets Manager | `aws-sm` | AWS Secrets Manager secret | `secret-path` with `json` |
-| Kubernetes Secrets | `k8s` | Kubernetes `Opaque` Secret | `secret-path` with `json` |
+| Kubernetes Secrets | `k8s` | Kubernetes `Opaque` Secret | `secret-path` with `json`; optional `source-keys` data mapping |
 | GitLab project variables | `gitlab` | Project CI/CD variable | `secret-key` with `raw` recommended; `secret-path` also supported |
 
 ## Provider guides

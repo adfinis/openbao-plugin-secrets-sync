@@ -110,6 +110,38 @@ jobs:
       - name: Run LocalStack e2e
         run: make test-e2e
 
+  kind-e2e:
+    name: Kubernetes Kind E2E
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    env:
+      KIND_VERSION: "v0.31.0"
+      KUBECTL_VERSION: "v1.35.3"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Setup repo tools
+        uses: ./.github/actions/setup-repo-tools
+        with:
+          cache-tools: "false"
+          bootstrap-tools: "false"
+
+      - name: Install kind and kubectl
+        run: |
+          set -euo pipefail
+
+          mkdir -p "${GITHUB_WORKSPACE}/bin"
+          GOBIN="${GITHUB_WORKSPACE}/bin" go install "sigs.k8s.io/kind@${KIND_VERSION}"
+          curl -fsSLo "${GITHUB_WORKSPACE}/bin/kubectl" "https://dl.k8s.io/release/${KUBECTL_VERSION}/bin/linux/amd64/kubectl"
+          curl -fsSLo "${GITHUB_WORKSPACE}/bin/kubectl.sha256" "https://dl.k8s.io/release/${KUBECTL_VERSION}/bin/linux/amd64/kubectl.sha256"
+          cd "${GITHUB_WORKSPACE}"
+          echo "$(cat bin/kubectl.sha256)  bin/kubectl" | sha256sum -c -
+          chmod +x bin/kubectl
+
+      - name: Run Kubernetes kind e2e
+        run: make test-e2e-kind
+
   resilience-e2e:
     name: OpenBao Lifecycle E2E
     runs-on: ubuntu-24.04
@@ -137,6 +169,7 @@ jobs:
       - security
       - heavy
       - localstack-e2e
+      - kind-e2e
       - resilience-e2e
     steps:
       - name: Validate required CI graph
@@ -146,6 +179,7 @@ jobs:
           SECURITY: ${{ needs.security.result }}
           HEAVY: ${{ needs.heavy.result }}
           LOCALSTACK_E2E: ${{ needs.localstack-e2e.result }}
+          KIND_E2E: ${{ needs.kind-e2e.result }}
           RESILIENCE_E2E: ${{ needs.resilience-e2e.result }}
         run: |
           set -euo pipefail
@@ -165,6 +199,7 @@ jobs:
           security=${SECURITY}
           heavy=${HEAVY}
           localstack-e2e=${LOCALSTACK_E2E}
+          kind-e2e=${KIND_E2E}
           resilience-e2e=${RESILIENCE_E2E}
           EOF
 

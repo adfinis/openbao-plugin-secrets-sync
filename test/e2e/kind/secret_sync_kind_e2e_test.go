@@ -11,11 +11,14 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"testing"
 	"time"
 
+	payloadpkg "github.com/adfinis/openbao-plugin-secrets-sync/internal/payload"
 	"github.com/adfinis/openbao-plugin-secrets-sync/internal/providers/kubernetessecrets"
 	"github.com/openbao/openbao/api/v2"
+	authv1 "k8s.io/api/authentication/v1"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -30,6 +33,7 @@ const (
 	rootToken        = "root"
 	defaultContext   = "kind-openbao-plugin-secrets-sync-e2e"
 	defaultNamespace = "openbao-plugin-secrets-sync-e2e"
+	openBaoSAName    = "openbao"
 	dataKeyPayload   = "payload"
 	testPollInterval = 500 * time.Millisecond
 	testTimeout      = 45 * time.Second
@@ -88,6 +92,93 @@ func TestOpenBaoPluginSyncsToKubernetesSecrets(t *testing.T) {
 	}
 	drainQueue(t, baoClient, 1)
 	assertKubernetesSecretMissing(t, ctx, kubeClient, namespace, remoteName)
+	assertStatus(t, baoClient, "REMOTE_MISSING")
+}
+
+func TestOpenBaoPluginSyncsSourceKeyDataMapWithTokenAuth(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	defer cancel()
+
+	baoClient := setupMountedOpenBao(t, ctx)
+	namespace := env("E2E_KIND_NAMESPACE", defaultNamespace)
+	kubeClient := newKubernetesClient(t)
+	remoteName := fmt.Sprintf("openbao-plugin-secrets-sync-datamap-%d", time.Now().UnixNano())
+	t.Cleanup(func() {
+		deleteKubernetesSecret(ctx, kubeClient, namespace, remoteName)
+	})
+
+	writeKubernetesTokenDestination(t, ctx, baoClient, kubeClient, namespace, "token-prod")
+	assertDestinationValidByName(t, baoClient, "token-prod")
+	assertDestinationHealthyByName(t, baoClient, "token-prod")
+	acknowledgeRestoreGuard(t, baoClient)
+	write(t, baoClient, mountPath+"/metadata/app/db", map[string]interface{}{
+		"custom_metadata": map[string]interface{}{
+			"syncable": "true",
+		},
+	})
+	writeSourceData(t, baoClient, map[string]interface{}{
+		"username": "app",
+		"password": "initial-secret",
+	})
+
+	plan := write(
+		t,
+		baoClient,
+		mountPath+"/associations/app/db/plan",
+		dataMapAssociationRequest(remoteName, "token-prod"),
+	)
+	if got := plan.Data["action"]; got != "create" {
+		t.Fatalf("data-map plan action = %v, want create", got)
+	}
+	if got := plan.Data["format"]; got != payloadpkg.FormatDataMap {
+		t.Fatalf("data-map plan format = %v, want %s", got, payloadpkg.FormatDataMap)
+	}
+
+	association := write(
+		t,
+		baoClient,
+		mountPath+"/associations/app/db",
+		dataMapAssociationRequest(remoteName, "token-prod"),
+	)
+	if ids := stringSlice(t, association.Data["sync_operation_ids"]); len(ids) != 1 {
+		t.Fatalf("sync_operation_ids = %v, want one operation", ids)
+	}
+	drainQueue(t, baoClient, 1)
+	assertKubernetesDataMapSecret(t, ctx, kubeClient, namespace, remoteName, dataMapExpectation{
+		Managed: map[string]string{
+			"APP_username": "app",
+			"APP_password": "initial-secret",
+		},
+		SourceVersion: "1",
+	})
+
+	secret := getKubernetesSecret(t, ctx, kubeClient, namespace, remoteName)
+	secret.Data["FOREIGN"] = []byte("preserved")
+	updateKubernetesSecret(t, ctx, kubeClient, namespace, secret)
+
+	writeSourceData(t, baoClient, map[string]interface{}{
+		"username": "app-v2",
+		"token":    "rotated-token",
+	})
+	drainQueue(t, baoClient, 1)
+	assertKubernetesDataMapSecret(t, ctx, kubeClient, namespace, remoteName, dataMapExpectation{
+		Managed: map[string]string{
+			"APP_username": "app-v2",
+			"APP_token":    "rotated-token",
+		},
+		Foreign: map[string]string{
+			"FOREIGN": "preserved",
+		},
+		Absent:        []string{"APP_password", dataKeyPayload},
+		SourceVersion: "2",
+	})
+
+	deleteSecret := deletePath(t, baoClient, mountPath+"/data/app/db")
+	if ids := metadataOperationIDs(t, deleteSecret); len(ids) != 1 {
+		t.Fatalf("delete sync_operation_ids = %v, want one operation", ids)
+	}
+	drainQueue(t, baoClient, 1)
+	assertKubernetesSecretPreservedAfterDataMapDelete(t, ctx, kubeClient, namespace, remoteName)
 	assertStatus(t, baoClient, "REMOTE_MISSING")
 }
 
@@ -206,10 +297,32 @@ func writeKubernetesDestination(t *testing.T, client *api.Client, namespace stri
 	})
 }
 
+func writeKubernetesTokenDestination(
+	t *testing.T,
+	ctx context.Context,
+	client *api.Client,
+	kubeClient kubernetes.Interface,
+	namespace string,
+	name string,
+) {
+	t.Helper()
+	write(t, client, mountPath+"/destinations/k8s/"+name, map[string]interface{}{
+		kubernetessecrets.ConfigKeyNamespace: namespace,
+		kubernetessecrets.ConfigKeyAuthMode:  kubernetessecrets.AuthModeToken,
+		kubernetessecrets.ConfigKeyAPIServer: "https://kubernetes.default.svc",
+		kubernetessecrets.ConfigKeyCACertPEM: kubernetesRootCA(t, ctx, kubeClient, namespace),
+		kubernetessecrets.ConfigKeyToken:     serviceAccountToken(t, ctx, kubeClient, namespace),
+	})
+}
+
 func associationRequest(remoteName string) map[string]interface{} {
+	return associationRequestForDestination(remoteName, "prod")
+}
+
+func associationRequestForDestination(remoteName string, destinationName string) map[string]interface{} {
 	return map[string]interface{}{
 		"destination_type": "k8s",
-		"destination_name": "prod",
+		"destination_name": destinationName,
 		"resolved_name":    remoteName,
 		"granularity":      "secret-path",
 		"format":           "json",
@@ -217,13 +330,70 @@ func associationRequest(remoteName string) map[string]interface{} {
 	}
 }
 
+func dataMapAssociationRequest(remoteName string, destinationName string) map[string]interface{} {
+	request := associationRequestForDestination(remoteName, destinationName)
+	request["data_mapping"] = "source-keys"
+	request["data_key_template"] = "APP_{{ key }}"
+	return request
+}
+
 func writeSource(t *testing.T, client *api.Client, password string) {
 	t.Helper()
-	write(t, client, mountPath+"/data/app/db", map[string]interface{}{
-		"data": map[string]interface{}{
-			"password": password,
-		},
+	writeSourceData(t, client, map[string]interface{}{
+		"password": password,
 	})
+}
+
+func writeSourceData(t *testing.T, client *api.Client, data map[string]interface{}) {
+	t.Helper()
+	write(t, client, mountPath+"/data/app/db", map[string]interface{}{
+		"data": data,
+	})
+}
+
+func serviceAccountToken(
+	t *testing.T,
+	ctx context.Context,
+	client kubernetes.Interface,
+	namespace string,
+) string {
+	t.Helper()
+	expirationSeconds := int64(3600)
+	token, err := client.CoreV1().ServiceAccounts(namespace).CreateToken(
+		ctx,
+		openBaoSAName,
+		&authv1.TokenRequest{
+			Spec: authv1.TokenRequestSpec{
+				ExpirationSeconds: &expirationSeconds,
+			},
+		},
+		metav1.CreateOptions{},
+	)
+	if err != nil {
+		t.Fatalf("create service account token: %v", err)
+	}
+	if token.Status.Token == "" {
+		t.Fatal("service account token is empty")
+	}
+	return token.Status.Token
+}
+
+func kubernetesRootCA(
+	t *testing.T,
+	ctx context.Context,
+	client kubernetes.Interface,
+	namespace string,
+) string {
+	t.Helper()
+	configMap, err := client.CoreV1().ConfigMaps(namespace).Get(ctx, "kube-root-ca.crt", metav1.GetOptions{})
+	if err != nil {
+		t.Fatalf("read kube-root-ca.crt: %v", err)
+	}
+	caCert := configMap.Data["ca.crt"]
+	if caCert == "" {
+		t.Fatal("kube-root-ca.crt does not contain ca.crt")
+	}
+	return caCert
 }
 
 func newOpenBaoClient(t *testing.T) *api.Client {
@@ -319,7 +489,12 @@ func acknowledgeRestoreGuard(t *testing.T, client *api.Client) {
 
 func assertDestinationValid(t *testing.T, client *api.Client) {
 	t.Helper()
-	secret := write(t, client, mountPath+"/destinations/k8s/prod/validate", map[string]interface{}{})
+	assertDestinationValidByName(t, client, "prod")
+}
+
+func assertDestinationValidByName(t *testing.T, client *api.Client, name string) {
+	t.Helper()
+	secret := write(t, client, mountPath+"/destinations/k8s/"+name+"/validate", map[string]interface{}{})
 	if got := secret.Data["valid"]; got != true {
 		t.Fatalf("destination valid = %v, want true", got)
 	}
@@ -327,7 +502,12 @@ func assertDestinationValid(t *testing.T, client *api.Client) {
 
 func assertDestinationHealthy(t *testing.T, client *api.Client) {
 	t.Helper()
-	secret, err := client.Logical().Read(mountPath + "/destinations/k8s/prod/health")
+	assertDestinationHealthyByName(t, client, "prod")
+}
+
+func assertDestinationHealthyByName(t *testing.T, client *api.Client, name string) {
+	t.Helper()
+	secret, err := client.Logical().Read(mountPath + "/destinations/k8s/" + name + "/health")
 	if err != nil {
 		t.Fatalf("read destination health: %v", err)
 	}
@@ -463,6 +643,102 @@ func assertKubernetesSecretPayload(
 		}
 		if data["password"] != expectedPassword {
 			return fmt.Errorf("password = %q, want %q", data["password"], expectedPassword)
+		}
+		return nil
+	})
+}
+
+type dataMapExpectation struct {
+	Managed       map[string]string
+	Foreign       map[string]string
+	Absent        []string
+	SourceVersion string
+}
+
+func assertKubernetesDataMapSecret(
+	t *testing.T,
+	ctx context.Context,
+	client kubernetes.Interface,
+	namespace string,
+	name string,
+	expected dataMapExpectation,
+) {
+	t.Helper()
+	waitFor(t, ctx, func() error {
+		secret, err := client.CoreV1().Secrets(namespace).Get(ctx, name, metav1.GetOptions{})
+		if err != nil {
+			return err
+		}
+		for key, expectedValue := range expected.Managed {
+			if got := string(secret.Data[key]); got != expectedValue {
+				return fmt.Errorf("managed data key %s = %q, want %q", key, got, expectedValue)
+			}
+		}
+		for key, expectedValue := range expected.Foreign {
+			if got := string(secret.Data[key]); got != expectedValue {
+				return fmt.Errorf("foreign data key %s = %q, want %q", key, got, expectedValue)
+			}
+		}
+		for _, key := range expected.Absent {
+			if _, ok := secret.Data[key]; ok {
+				return fmt.Errorf("data key %s must be absent", key)
+			}
+		}
+		expectedSHA, err := dataMapSHA(expected.Managed)
+		if err != nil {
+			return err
+		}
+		expectedAnnotations := map[string]string{
+			"openbao.adfinis.com/source-path":    "app/db",
+			"openbao.adfinis.com/source-version": expected.SourceVersion,
+			"openbao.adfinis.com/object-id":      "secret-path",
+			"openbao.adfinis.com/payload-sha256": expectedSHA,
+			"openbao.adfinis.com/format":         payloadpkg.FormatDataMap,
+		}
+		if got := secret.Labels["openbao.adfinis.com/managed"]; got != "true" {
+			return fmt.Errorf("managed label = %q, want true", got)
+		}
+		for key, expectedValue := range expectedAnnotations {
+			if got := secret.Annotations[key]; got != expectedValue {
+				return fmt.Errorf("annotation %s = %q, want %q", key, got, expectedValue)
+			}
+		}
+		if got := secret.Annotations["openbao.adfinis.com/association-id"]; got == "" {
+			return errors.New("association-id annotation is missing")
+		}
+		return assertDataKeysAnnotation(secret, sortedMapKeys(expected.Managed))
+	})
+}
+
+func assertKubernetesSecretPreservedAfterDataMapDelete(
+	t *testing.T,
+	ctx context.Context,
+	client kubernetes.Interface,
+	namespace string,
+	name string,
+) {
+	t.Helper()
+	waitFor(t, ctx, func() error {
+		secret, err := client.CoreV1().Secrets(namespace).Get(ctx, name, metav1.GetOptions{})
+		if err != nil {
+			return err
+		}
+		if len(secret.Data) != 1 || string(secret.Data["FOREIGN"]) != "preserved" {
+			return fmt.Errorf("secret data after delete = %#v, want only FOREIGN", secret.Data)
+		}
+		if got := secret.Labels["openbao.adfinis.com/managed"]; got != "" {
+			return fmt.Errorf("managed label = %q, want removed", got)
+		}
+		for key := range secret.Annotations {
+			if key == "openbao.adfinis.com/association-id" ||
+				key == "openbao.adfinis.com/source-path" ||
+				key == "openbao.adfinis.com/source-version" ||
+				key == "openbao.adfinis.com/object-id" ||
+				key == "openbao.adfinis.com/payload-sha256" ||
+				key == "openbao.adfinis.com/format" ||
+				key == "openbao.adfinis.com/data-keys" {
+				return fmt.Errorf("managed annotation %s must be removed", key)
+			}
 		}
 		return nil
 	})
@@ -623,6 +899,47 @@ func stringSlice(t *testing.T, raw interface{}) []string {
 		t.Fatalf("value = %T, want string slice", raw)
 	}
 	return strings
+}
+
+func dataMapSHA(values map[string]string) (string, error) {
+	data := make(map[string][]byte, len(values))
+	for key, value := range values {
+		data[key] = []byte(value)
+	}
+	payload, err := payloadpkg.BuildDataMap(data)
+	if err != nil {
+		return "", err
+	}
+	return payload.SHA256, nil
+}
+
+func assertDataKeysAnnotation(secret *corev1.Secret, expected []string) error {
+	raw := secret.Annotations["openbao.adfinis.com/data-keys"]
+	if raw == "" {
+		return errors.New("data-keys annotation is missing")
+	}
+	var got []string
+	if err := json.Unmarshal([]byte(raw), &got); err != nil {
+		return fmt.Errorf("parse data-keys annotation: %w", err)
+	}
+	if len(got) != len(expected) {
+		return fmt.Errorf("data-keys annotation = %v, want %v", got, expected)
+	}
+	for index := range got {
+		if got[index] != expected[index] {
+			return fmt.Errorf("data-keys annotation = %v, want %v", got, expected)
+		}
+	}
+	return nil
+}
+
+func sortedMapKeys(values map[string]string) []string {
+	keys := make([]string, 0, len(values))
+	for key := range values {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	return keys
 }
 
 func intFromSecret(t *testing.T, raw interface{}) int {
