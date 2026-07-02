@@ -53,7 +53,9 @@ func (b *secretSyncBackend) processDueOutboxLimit(
 			}
 			continue
 		}
+		b.enqueueMu.Lock()
 		claimed, ok, err := claimOutboxRecord(ctx, storage, *record, claimOwner, now)
+		b.enqueueMu.Unlock()
 		if err != nil {
 			return processed, err
 		}

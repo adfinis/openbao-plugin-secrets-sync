@@ -302,6 +302,12 @@ func (b *secretSyncBackend) pathDataDelete(
 	); err != nil {
 		return logical.ErrorResponse(err.Error()), nil
 	}
+	if err := ensureQueuedOutboxIDsUnclaimed(ctx, req.Storage, deletePlan.staleUpsertIDs); err != nil {
+		if isQueuedOperationClaimedError(err) {
+			return logical.ErrorResponse(err.Error()), nil
+		}
+		return nil, err
+	}
 	if err := putPendingEnqueueIntent(
 		ctx,
 		req.Storage,

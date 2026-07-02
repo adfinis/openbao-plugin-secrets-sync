@@ -292,6 +292,10 @@ provider `rate_limit` and `unavailable` classes, with a bounded attempt budget
 and `not_before` delay. Manual queue retry moves retry-wait or terminal failed
 work back to `pending` and resets the attempt counter. Manual queue cancel and
 automatic supersede/delete cancellation discard pending or retry-wait records.
+Lifecycle paths that cancel queued work refuse operations with active claims.
+The dispatcher serializes claim writes with enqueue/cancel paths, then releases
+that lock before provider I/O; active work must finish or expire before
+association disable/delete or source delete can discard it.
 
 The `queue/drain` path runs the same due-operation dispatcher as background
 work with a request-bounded operation limit. It first checks global mutation

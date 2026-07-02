@@ -189,15 +189,18 @@ func (b *secretSyncBackend) pathAssociationDisable(
 		return nil, nil
 	}
 	now := nowUTC().Format(timeFormatRFC3339)
-	record.Enabled = false
-	record.UpdatedTime = now
-	if err := putAssociation(ctx, req.Storage, *record); err != nil {
-		return nil, err
-	}
 	b.enqueueMu.Lock()
 	canceledOperationIDs, err := cancelQueuedOutboxForAssociation(ctx, req.Storage, *record)
 	b.enqueueMu.Unlock()
 	if err != nil {
+		if isQueuedOperationClaimedError(err) {
+			return logical.ErrorResponse(err.Error()), nil
+		}
+		return nil, err
+	}
+	record.Enabled = false
+	record.UpdatedTime = now
+	if err := putAssociation(ctx, req.Storage, *record); err != nil {
 		return nil, err
 	}
 	if err := markAssociationStatusDisabled(ctx, req.Storage, *record, now); err != nil {
@@ -891,6 +894,9 @@ func (b *secretSyncBackend) pathAssociationDelete(
 	b.enqueueMu.Lock()
 	if err := deleteQueuedOutboxForAssociation(ctx, req.Storage, *record); err != nil {
 		b.enqueueMu.Unlock()
+		if isQueuedOperationClaimedError(err) {
+			return logical.ErrorResponse(err.Error()), nil
+		}
 		return nil, err
 	}
 	b.enqueueMu.Unlock()

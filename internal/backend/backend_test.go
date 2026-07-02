@@ -1186,6 +1186,29 @@ func TestCurrentVersionMutationQueuesRemoteDelete(t *testing.T) {
 	}
 }
 
+func TestSourceDeleteRejectsClaimedUpsert(t *testing.T) {
+	b := Backend(&logical.BackendConfig{})
+	storage := &logical.InmemStorage{}
+
+	writeAppDBSecret(t, b, storage, "initial")
+	createFakeDestination(t, b, storage, "default")
+	associationResp := createDefaultFakeAssociation(t, b, storage)
+	operationID := requireSingleOperationID(t, operationIDsFromResponse(t, associationResp), "association")
+	claimOperationFixture(t, storage, operationID)
+
+	deleteResp := handleRequest(t, b, storage, logical.DeleteOperation, "data/app/db", nil)
+	if deleteResp == nil || !deleteResp.IsError() {
+		t.Fatalf("delete claimed upsert response = %#v, want error", deleteResp)
+	}
+	readResp := handleRequest(t, b, storage, logical.ReadOperation, "data/app/db", nil)
+	assertNoErrorResponse(t, readResp)
+	readMetadata := readResp.Data["metadata"].(map[string]interface{})
+	if got := readMetadata["deletion_time"]; got != "" {
+		t.Fatalf("deletion_time = %v, want empty", got)
+	}
+	assertOutboxOperation(t, storage, operationID, 1, outboxStatePending)
+}
+
 func TestUndeleteCurrentVersionQueuesUpsertAfterRemoteDelete(t *testing.T) {
 	b := Backend(&logical.BackendConfig{})
 	storage := &logical.InmemStorage{}
@@ -2051,6 +2074,73 @@ func TestAssociationSecretKeyDisableMarksPerSourceKeyStatus(t *testing.T) {
 	if _, ok := statusObjects[syncObjectIDSecretPath]; ok {
 		t.Fatalf("secret-key status must not include %s object: %#v", syncObjectIDSecretPath, statusObjects)
 	}
+}
+
+func TestAssociationDisableRejectsClaimedOperation(t *testing.T) {
+	b := Backend(&logical.BackendConfig{})
+	storage := &logical.InmemStorage{}
+
+	writeAppDBSecret(t, b, storage, "initial")
+	createFakeDestination(t, b, storage, "default")
+	associationResp := createDefaultFakeAssociation(t, b, storage)
+	associationID := associationIDFromResponse(t, associationResp)
+	operationID := requireSingleOperationID(t, operationIDsFromResponse(t, associationResp), "association")
+	claimOperationFixture(t, storage, operationID)
+
+	disableResp := handleRequest(
+		t,
+		b,
+		storage,
+		logical.UpdateOperation,
+		"associations/app/db/"+associationID+"/disable",
+		nil,
+	)
+	if disableResp == nil || !disableResp.IsError() {
+		t.Fatalf("disable claimed operation response = %#v, want error", disableResp)
+	}
+	association, err := getAssociation(context.Background(), storage, "app/db", associationID)
+	if err != nil {
+		t.Fatalf("read association: %v", err)
+	}
+	if association == nil || !association.Enabled {
+		t.Fatalf("association after failed disable = %#v, want enabled", association)
+	}
+	operation := assertOutboxOperation(t, storage, operationID, 1, outboxStatePending)
+	if operation.ClaimOwner == "" {
+		t.Fatal("operation claim must remain active")
+	}
+}
+
+func TestAssociationDeleteRejectsClaimedOperation(t *testing.T) {
+	b := Backend(&logical.BackendConfig{})
+	storage := &logical.InmemStorage{}
+
+	writeAppDBSecret(t, b, storage, "initial")
+	createFakeDestination(t, b, storage, "default")
+	associationResp := createDefaultFakeAssociation(t, b, storage)
+	associationID := associationIDFromResponse(t, associationResp)
+	operationID := requireSingleOperationID(t, operationIDsFromResponse(t, associationResp), "association")
+	claimOperationFixture(t, storage, operationID)
+
+	deleteResp := handleRequest(
+		t,
+		b,
+		storage,
+		logical.DeleteOperation,
+		"associations/app/db/"+associationID,
+		nil,
+	)
+	if deleteResp == nil || !deleteResp.IsError() {
+		t.Fatalf("delete claimed operation response = %#v, want error", deleteResp)
+	}
+	association, err := getAssociation(context.Background(), storage, "app/db", associationID)
+	if err != nil {
+		t.Fatalf("read association: %v", err)
+	}
+	if association == nil {
+		t.Fatal("association must remain after failed delete")
+	}
+	assertOutboxOperation(t, storage, operationID, 1, outboxStatePending)
 }
 
 func TestAssociationSecretKeyDisableSkipsStatusWhenCurrentVersionMissing(t *testing.T) {
@@ -4134,6 +4224,23 @@ func assertPrunedEnqueueIntentAndOutbox(
 	}
 	if got := operation.ObjectID; got != syncObjectIDSecretPath {
 		t.Fatalf("outbox object ID = %v, want %s", got, syncObjectIDSecretPath)
+	}
+}
+
+func claimOperationFixture(t *testing.T, storage logical.Storage, operationID string) {
+	t.Helper()
+	operation, err := getOutbox(context.Background(), storage, operationID)
+	if err != nil {
+		t.Fatalf("read operation to claim: %v", err)
+	}
+	if operation == nil {
+		t.Fatalf("operation %s must exist", operationID)
+	}
+	operation.ClaimOwner = "worker-active"
+	operation.ClaimExpiresTime = nowUTC().Add(time.Hour).Format(timeFormatRFC3339)
+	operation.ClaimAttempt = operation.Attempts + 1
+	if err := putOutbox(context.Background(), storage, *operation); err != nil {
+		t.Fatalf("write claimed operation: %v", err)
 	}
 }
 

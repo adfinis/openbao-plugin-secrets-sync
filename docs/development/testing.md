@@ -188,6 +188,8 @@ Current queue hardening coverage asserts that:
 - association writes lock destination identity and enqueue when an existing
   association transitions from disabled to enabled;
 - unexpired outbox claims are skipped by manual drain and block operator cancel;
+- unexpired outbox claims block association disable/delete and source delete
+  cancellation paths;
 - dispatcher context cancellation leaves the claimed operation for lease-based
   recovery instead of marking terminal failure;
 - newer source writes supersede older inactive queued upserts for the same

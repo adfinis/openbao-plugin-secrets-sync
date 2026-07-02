@@ -2,6 +2,8 @@ package backend
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"sort"
 	"strconv"
 	"strings"
@@ -10,6 +12,12 @@ import (
 	"github.com/adfinis/openbao-plugin-secrets-sync/internal/outbox"
 	"github.com/openbao/openbao/sdk/v2/logical"
 )
+
+var errQueuedOperationClaimed = errors.New("queued operation is currently claimed")
+
+func isQueuedOperationClaimedError(err error) bool {
+	return errors.Is(err, errQueuedOperationClaimed)
+}
 
 func getMetadata(ctx context.Context, storage logical.Storage, path string) (*metadataRecord, error) {
 	entry, err := storage.Get(ctx, metadataStorageKey(path))
@@ -622,6 +630,9 @@ func deleteQueuedOutboxForAssociation(
 		if record == nil || record.AssociationID != association.ID {
 			continue
 		}
+		if isOutboxClaimActive(*record, nowUTC()) {
+			return fmt.Errorf("%w: %s", errQueuedOperationClaimed, record.ID)
+		}
 		if err := deleteOutbox(ctx, storage, *record); err != nil {
 			return err
 		}
@@ -646,6 +657,9 @@ func cancelQueuedOutboxForAssociation(
 		}
 		if record == nil || record.AssociationID != association.ID {
 			continue
+		}
+		if isOutboxClaimActive(*record, nowUTC()) {
+			return nil, fmt.Errorf("%w: %s", errQueuedOperationClaimed, record.ID)
 		}
 		if err := deleteOutbox(ctx, storage, *record); err != nil {
 			return nil, err
@@ -688,8 +702,27 @@ func cancelQueuedOutboxIDs(ctx context.Context, storage logical.Storage, ids []s
 		if record == nil || !isQueuedOutboxState(record.State) {
 			continue
 		}
+		if isOutboxClaimActive(*record, nowUTC()) {
+			return fmt.Errorf("%w: %s", errQueuedOperationClaimed, record.ID)
+		}
 		if err := deleteOutbox(ctx, storage, *record); err != nil {
 			return err
+		}
+	}
+	return nil
+}
+
+func ensureQueuedOutboxIDsUnclaimed(ctx context.Context, storage logical.Storage, ids []string) error {
+	for _, id := range ids {
+		record, err := getOutbox(ctx, storage, id)
+		if err != nil {
+			return err
+		}
+		if record == nil || !isQueuedOutboxState(record.State) {
+			continue
+		}
+		if isOutboxClaimActive(*record, nowUTC()) {
+			return fmt.Errorf("%w: %s", errQueuedOperationClaimed, record.ID)
 		}
 	}
 	return nil
