@@ -343,31 +343,59 @@ func (b *secretSyncBackend) pathDestinationWrite(
 	defer unlock()
 
 	now := nowUTC().Format(timeFormatRFC3339)
-	existing, err := getDestination(ctx, req.Storage, destinationType, name)
-	if err != nil {
+	record, sensitiveConfig, sensitiveCreatedTime, response, err := destinationWriteRecordFromFieldData(
+		ctx,
+		req.Storage,
+		destinationType,
+		name,
+		data,
+		now,
+	)
+	if response != nil || err != nil {
+		return response, err
+	}
+	if response := b.validateDestinationWrite(ctx, provider, record, sensitiveConfig); response != nil {
+		return response, nil
+	}
+	if err := storeDestinationWrite(ctx, req.Storage, record, sensitiveConfig, sensitiveCreatedTime, now); err != nil {
 		return nil, err
 	}
-	existingSensitive, err := getDestinationSensitiveConfig(ctx, req.Storage, destinationType, name)
+	return nil, nil
+}
+
+func destinationWriteRecordFromFieldData(
+	ctx context.Context,
+	storage logical.Storage,
+	destinationType string,
+	name string,
+	data *framework.FieldData,
+	now string,
+) (destinationRecord, map[string]string, string, *logical.Response, error) {
+	existing, err := getDestination(ctx, storage, destinationType, name)
 	if err != nil {
-		return nil, err
+		return destinationRecord{}, nil, "", nil, err
+	}
+	existingSensitive, err := getDestinationSensitiveConfig(ctx, storage, destinationType, name)
+	if err != nil {
+		return destinationRecord{}, nil, "", nil, err
 	}
 	config, err := destinationConfigFromFieldData(destinationType, existing, data)
 	if err != nil {
-		return logical.ErrorResponse(err.Error()), nil
+		return destinationRecord{}, nil, "", logical.ErrorResponse(err.Error()), nil
 	}
 	sensitiveConfig, err := destinationSensitiveConfigFromFieldData(destinationType, existingSensitive, data)
 	if err != nil {
-		return logical.ErrorResponse(err.Error()), nil
+		return destinationRecord{}, nil, "", logical.ErrorResponse(err.Error()), nil
 	}
 	migrateSensitiveConfigFromDestination(existing, data, sensitiveConfig)
 	removeSensitiveConfigKeys(config)
 	allowedSourcePrefixes, err := destinationSourcePathPrefixesFromFieldData(existing, data)
 	if err != nil {
-		return logical.ErrorResponse(err.Error()), nil
+		return destinationRecord{}, nil, "", logical.ErrorResponse(err.Error()), nil
 	}
 	allowedNamePrefixes, err := destinationResolvedNamePrefixesFromFieldData(existing, data)
 	if err != nil {
-		return logical.ErrorResponse(err.Error()), nil
+		return destinationRecord{}, nil, "", logical.ErrorResponse(err.Error()), nil
 	}
 	record := destinationRecord{
 		Type:                        destinationType,
@@ -383,36 +411,66 @@ func (b *secretSyncBackend) pathDestinationWrite(
 	if existing != nil {
 		record.CreatedTime = existing.CreatedTime
 	}
+	sensitiveCreatedTime := ""
+	if existingSensitive != nil {
+		sensitiveCreatedTime = existingSensitive.CreatedTime
+	}
+	return record, sensitiveConfig, sensitiveCreatedTime, nil, nil
+}
+
+func (b *secretSyncBackend) validateDestinationWrite(
+	ctx context.Context,
+	provider providers.Provider,
+	record destinationRecord,
+	sensitiveConfig map[string]string,
+) *logical.Response {
 	resolvedConfig := destinationConfigFromParts(record, sensitiveConfig)
 	providerStart := time.Now()
 	validationErr := provider.Validate(ctx, resolvedConfig)
-	b.recordProviderRequest(ctx, provider.Type(), observability.OperationValidate, validationErr, time.Since(providerStart))
+	b.recordProviderRequest(
+		ctx,
+		provider.Type(),
+		observability.OperationValidate,
+		validationErr,
+		time.Since(providerStart),
+	)
 	if validationErr != nil {
-		return logical.ErrorResponse("destination validation failed: %s", validationErr.Error()), nil
+		return logical.ErrorResponse("destination validation failed: %s", validationErr.Error())
 	}
-	if err := putDestination(ctx, req.Storage, record); err != nil {
-		return nil, err
+	return nil
+}
+
+func storeDestinationWrite(
+	ctx context.Context,
+	storage logical.Storage,
+	record destinationRecord,
+	sensitiveConfig map[string]string,
+	sensitiveCreatedTime string,
+	now string,
+) error {
+	if err := putDestination(ctx, storage, record); err != nil {
+		return err
 	}
 	if len(sensitiveConfig) == 0 {
-		if err := deleteDestinationSensitiveConfig(ctx, req.Storage, destinationType, name); err != nil {
-			return nil, err
+		if err := deleteDestinationSensitiveConfig(ctx, storage, record.Type, record.Name); err != nil {
+			return err
 		}
-		return nil, nil
+		return nil
 	}
 	sensitiveRecord := destinationSensitiveRecord{
-		Type:        destinationType,
-		Name:        name,
+		Type:        record.Type,
+		Name:        record.Name,
 		Config:      sensitiveConfig,
 		CreatedTime: now,
 		UpdatedTime: now,
 	}
-	if existingSensitive != nil {
-		sensitiveRecord.CreatedTime = existingSensitive.CreatedTime
+	if sensitiveCreatedTime != "" {
+		sensitiveRecord.CreatedTime = sensitiveCreatedTime
 	}
-	if err := putDestinationSensitiveConfig(ctx, req.Storage, sensitiveRecord); err != nil {
-		return nil, err
+	if err := putDestinationSensitiveConfig(ctx, storage, sensitiveRecord); err != nil {
+		return err
 	}
-	return nil, nil
+	return nil
 }
 
 func (b *secretSyncBackend) pathDestinationValidate(
@@ -729,34 +787,17 @@ func destinationConfigFromFieldData(
 	existing *destinationRecord,
 	data *framework.FieldData,
 ) (map[string]string, error) {
-	config := map[string]string{}
+	var existingConfig map[string]string
 	if existing != nil {
-		for _, key := range destinationConfigFieldKeysForType(destinationType) {
-			if value := strings.TrimSpace(existing.Config[key]); value != "" {
-				config[key] = value
-			}
-		}
+		existingConfig = existing.Config
 	}
-	allowedKeys := stringSet(destinationConfigFieldKeysForType(destinationType))
-	for _, key := range destinationConfigFieldKeys {
-		value, ok := data.GetOk(key)
-		if !ok {
-			continue
-		}
-		stringValue := strings.TrimSpace(value.(string))
-		if _, allowed := allowedKeys[key]; !allowed {
-			if stringValue == "" {
-				continue
-			}
-			return nil, fmt.Errorf("%s is not supported for destination type %s", key, destinationType)
-		}
-		if stringValue == "" {
-			delete(config, key)
-			continue
-		}
-		config[key] = stringValue
-	}
-	return config, nil
+	return destinationConfigMapFromFieldData(
+		destinationType,
+		existingConfig,
+		destinationConfigFieldKeysForType(destinationType),
+		destinationConfigFieldKeys,
+		data,
+	)
 }
 
 func destinationSensitiveConfigFromFieldData(
@@ -764,16 +805,36 @@ func destinationSensitiveConfigFromFieldData(
 	existing *destinationSensitiveRecord,
 	data *framework.FieldData,
 ) (map[string]string, error) {
+	var existingConfig map[string]string
+	if existing != nil {
+		existingConfig = existing.Config
+	}
+	return destinationConfigMapFromFieldData(
+		destinationType,
+		existingConfig,
+		destinationSensitiveConfigFieldKeysForType(destinationType),
+		destinationSensitiveConfigFieldKeys,
+		data,
+	)
+}
+
+func destinationConfigMapFromFieldData(
+	destinationType string,
+	existing map[string]string,
+	providerKeys []string,
+	fieldKeys []string,
+	data *framework.FieldData,
+) (map[string]string, error) {
 	config := map[string]string{}
 	if existing != nil {
-		for _, key := range destinationSensitiveConfigFieldKeysForType(destinationType) {
-			if value := strings.TrimSpace(existing.Config[key]); value != "" {
+		for _, key := range providerKeys {
+			if value := strings.TrimSpace(existing[key]); value != "" {
 				config[key] = value
 			}
 		}
 	}
-	allowedKeys := stringSet(destinationSensitiveConfigFieldKeysForType(destinationType))
-	for _, key := range destinationSensitiveConfigFieldKeys {
+	allowedKeys := stringSet(providerKeys)
+	for _, key := range fieldKeys {
 		value, ok := data.GetOk(key)
 		if !ok {
 			continue

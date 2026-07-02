@@ -173,8 +173,8 @@ func TestSourceEnableMarksPathSyncable(t *testing.T) {
 
 	enableResp := handleRequest(t, b, storage, logical.UpdateOperation, "sources/app/db/enable", nil)
 	assertNoErrorResponse(t, enableResp)
-	if got := enableResp.Data["path"]; got != "app/db" {
-		t.Fatalf("source path = %v, want app/db", got)
+	if got := enableResp.Data["path"]; got != modelSourcePath {
+		t.Fatalf("source path = %v, want %s", got, modelSourcePath)
 	}
 	if got := enableResp.Data["syncable"]; got != true {
 		t.Fatalf("syncable = %v, want true", got)
@@ -1155,7 +1155,7 @@ func TestCurrentVersionMutationQueuesRemoteDelete(t *testing.T) {
 			createFakeDestination(t, b, storage, "default")
 			associationResp := createFakeDeleteModeAssociation(t, b, storage)
 			associationID := associationIDFromResponse(t, associationResp)
-			generation := sourceGeneration(t, storage, "app/db")
+			generation := sourceGeneration(t, storage)
 			upsertOperationID := operationIDsFromResponse(t, associationResp)[0]
 			deleteOperationID := newOperationID(
 				generation,
@@ -1347,7 +1347,7 @@ func TestMetadataDeleteRecreateRotatesOperationIDs(t *testing.T) {
 	createFakeDestination(t, b, storage, "default")
 	firstAssociationResp := createDefaultFakeAssociation(t, b, storage)
 	firstAssociationID := associationIDFromResponse(t, firstAssociationResp)
-	firstGeneration := sourceGeneration(t, storage, "app/db")
+	firstGeneration := sourceGeneration(t, storage)
 	firstOperationID := requireSingleOperationID(t, operationIDsFromResponse(t, firstAssociationResp), "first association")
 
 	deleteAssociationResp := handleRequest(
@@ -1368,8 +1368,12 @@ func TestMetadataDeleteRecreateRotatesOperationIDs(t *testing.T) {
 
 	writeAppDBSecret(t, b, storage, "recreated")
 	secondAssociationResp := createDefaultFakeAssociation(t, b, storage)
-	secondGeneration := sourceGeneration(t, storage, "app/db")
-	secondOperationID := requireSingleOperationID(t, operationIDsFromResponse(t, secondAssociationResp), "second association")
+	secondGeneration := sourceGeneration(t, storage)
+	secondOperationID := requireSingleOperationID(
+		t,
+		operationIDsFromResponse(t, secondAssociationResp),
+		"second association",
+	)
 
 	if secondGeneration == firstGeneration {
 		t.Fatalf("metadata generation was reused: %s", secondGeneration)
@@ -2922,7 +2926,13 @@ func TestQueueDrainCancelsClaimedStaleUpsertAfterClaimExpiry(t *testing.T) {
 	}
 	assertOutboxMissing(t, storage, staleOperationID)
 	assertOutboxOperation(t, storage, rotatedOperationID, 2, outboxStatePending)
-	status, err := getStatus(context.Background(), storage, "app/db", associationIDFromResponse(t, associationResp), syncObjectIDSecretPath)
+	status, err := getStatus(
+		context.Background(),
+		storage,
+		"app/db",
+		associationIDFromResponse(t, associationResp),
+		syncObjectIDSecretPath,
+	)
 	if err != nil {
 		t.Fatalf("read status: %v", err)
 	}
@@ -3424,6 +3434,7 @@ func TestPeriodicLeavesClaimedOperationOnDispatchContextCancellation(t *testing.
 func TestPeriodicLeavesClaimedOperationWhenCanceledProviderRedactsCause(t *testing.T) {
 	b := Backend(&logical.BackendConfig{})
 	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 	b.providerRegistry = providers.MustNewRegistry(contextCanceledProvider{cancel: cancel})
 	storage := &logical.InmemStorage{}
 
@@ -3965,7 +3976,13 @@ func TestPeriodicRecoversIncompleteEnqueueIntent(t *testing.T) {
 	if err := deleteOutbox(context.Background(), storage, *operation); err != nil {
 		t.Fatalf("delete outbox operation: %v", err)
 	}
-	intent := newEnqueueIntentRecord("app/db", sourceGeneration(t, storage, "app/db"), 2, []outboxRecord{*operation}, operation.CreatedTime)
+	intent := newEnqueueIntentRecord(
+		"app/db",
+		sourceGeneration(t, storage),
+		2,
+		[]outboxRecord{*operation},
+		operation.CreatedTime,
+	)
 	if err := putEnqueueIntent(context.Background(), storage, intent); err != nil {
 		t.Fatalf("write incomplete enqueue intent: %v", err)
 	}
@@ -4002,7 +4019,13 @@ func TestRecoveryRestoresDeleteIntentAfterSourceDelete(t *testing.T) {
 	if err := deleteOutbox(context.Background(), storage, *operation); err != nil {
 		t.Fatalf("delete outbox operation: %v", err)
 	}
-	intent := newEnqueueIntentRecord("app/db", sourceGeneration(t, storage, "app/db"), 1, []outboxRecord{*operation}, operation.CreatedTime)
+	intent := newEnqueueIntentRecord(
+		"app/db",
+		sourceGeneration(t, storage),
+		1,
+		[]outboxRecord{*operation},
+		operation.CreatedTime,
+	)
 	if err := putEnqueueIntent(context.Background(), storage, intent); err != nil {
 		t.Fatalf("write incomplete delete enqueue intent: %v", err)
 	}
@@ -4029,7 +4052,7 @@ func TestRecoveryCompletesIntentWithoutCommittedVersion(t *testing.T) {
 		t.Fatalf("read association: %v", err)
 	}
 	now := nowUTC().Format(timeFormatRFC3339)
-	generation := sourceGeneration(t, storage, "app/db")
+	generation := sourceGeneration(t, storage)
 	operation := newAssociationOutboxRecord(*association, generation, 99, syncObjectIDSecretPath, now)
 	intent := newEnqueueIntentRecord("app/db", generation, 99, []outboxRecord{operation}, now)
 	if err := putEnqueueIntent(context.Background(), storage, intent); err != nil {
@@ -4571,8 +4594,9 @@ func requireSingleOperationID(t *testing.T, operationIDs []string, label string)
 	return operationIDs[0]
 }
 
-func sourceGeneration(t *testing.T, storage logical.Storage, path string) string {
+func sourceGeneration(t *testing.T, storage logical.Storage) string {
 	t.Helper()
+	path := "app/db"
 	metadata, err := getMetadata(context.Background(), storage, path)
 	if err != nil {
 		t.Fatalf("read source metadata: %v", err)

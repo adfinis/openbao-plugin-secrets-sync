@@ -130,7 +130,12 @@ func (b *secretSyncBackend) periodic(ctx context.Context, req *logical.Request) 
 		return nil
 	}
 	now := nowUTC()
-	if _, err := recoverIncompleteEnqueueIntentsLimit(ctx, req.Storage, now, defaultPeriodicRecoveryMaxIntents); err != nil {
+	if err := recoverIncompleteEnqueueIntentsLimit(
+		ctx,
+		req.Storage,
+		now,
+		defaultPeriodicRecoveryMaxIntents,
+	); err != nil {
 		return err
 	}
 	_, err = b.processDueOutboxLimit(ctx, req.Storage, now, defaultPeriodicMaxOperations)

@@ -9,8 +9,7 @@ import (
 )
 
 func recoverIncompleteEnqueueIntents(ctx context.Context, storage logical.Storage, now time.Time) error {
-	_, err := recoverIncompleteEnqueueIntentsLimit(ctx, storage, now, 0)
-	return err
+	return recoverIncompleteEnqueueIntentsLimit(ctx, storage, now, 0)
 }
 
 func recoverIncompleteEnqueueIntentsLimit(
@@ -18,16 +17,16 @@ func recoverIncompleteEnqueueIntentsLimit(
 	storage logical.Storage,
 	now time.Time,
 	maxIntents int,
-) (int, error) {
+) error {
 	intents, err := listEnqueueIntents(ctx, storage)
 	if err != nil {
-		return 0, err
+		return err
 	}
 	recovered := 0
 	for _, intent := range intents {
 		if intent.Complete {
 			if err := deleteEnqueueIntent(ctx, storage, intent.Path, intent.Version); err != nil {
-				return recovered, err
+				return err
 			}
 			recovered++
 			if maxIntents > 0 && recovered >= maxIntents {
@@ -36,14 +35,14 @@ func recoverIncompleteEnqueueIntentsLimit(
 			continue
 		}
 		if err := recoverEnqueueIntent(ctx, storage, intent, now.Format(timeFormatRFC3339)); err != nil {
-			return recovered, err
+			return err
 		}
 		recovered++
 		if maxIntents > 0 && recovered >= maxIntents {
 			break
 		}
 	}
-	return recovered, nil
+	return nil
 }
 
 func recoverEnqueueIntent(

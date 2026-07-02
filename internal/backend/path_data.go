@@ -132,7 +132,13 @@ func dataWritePlanFromRequest(
 	nextVersion := metadata.CurrentVersion + 1
 	nowTime := nowUTC()
 	now := nowTime.Format(timeFormatRFC3339)
-	operations, operationIDs, err := newAssociationOutboxRecords(associations, metadata.Generation, nextVersion, payload, now)
+	operations, operationIDs, err := newAssociationOutboxRecords(
+		associations,
+		metadata.Generation,
+		nextVersion,
+		payload,
+		now,
+	)
 	if err != nil {
 		return dataWritePlan{}, logical.ErrorResponse(err.Error()), nil
 	}
@@ -173,7 +179,15 @@ func (b *secretSyncBackend) commitDataWritePlan(
 	); err != nil {
 		return logical.ErrorResponse(err.Error()), nil
 	}
-	if err := putPendingEnqueueIntent(ctx, storage, path, plan.metadata.Generation, plan.nextVersion, plan.operations, plan.now); err != nil {
+	if err := putPendingEnqueueIntent(
+		ctx,
+		storage,
+		path,
+		plan.metadata.Generation,
+		plan.nextVersion,
+		plan.operations,
+		plan.now,
+	); err != nil {
 		return nil, err
 	}
 	if err := putSourceVersionRecord(ctx, storage, path, plan.nextVersion, payload, plan.now); err != nil {
@@ -399,7 +413,13 @@ func buildSourceDeletePlan(
 	if versionRecord == nil {
 		return sourceDeletePlan{}, fmt.Errorf("source version is unavailable")
 	}
-	operations, operationIDs, err := newAssociationDeleteOutboxRecords(associations, generation, version, versionRecord.Data, now)
+	operations, operationIDs, err := newAssociationDeleteOutboxRecords(
+		associations,
+		generation,
+		version,
+		versionRecord.Data,
+		now,
+	)
 	if err != nil {
 		return sourceDeletePlan{}, err
 	}
@@ -729,7 +749,13 @@ func syncStateForOperationIDs(operationIDs []string) domain.SyncState {
 	return domain.SyncStateNoAssociation
 }
 
-func newEnqueueIntentRecord(path string, generation string, version int, operations []outboxRecord, now string) enqueueIntentRecord {
+func newEnqueueIntentRecord(
+	path string,
+	generation string,
+	version int,
+	operations []outboxRecord,
+	now string,
+) enqueueIntentRecord {
 	return enqueueIntentRecord{
 		Path:        path,
 		Generation:  generation,
@@ -781,7 +807,14 @@ func newAssociationOutboxRecord(
 		NotBefore:      now,
 		CreatedTime:    now,
 		UpdatedTime:    now,
-		IdempotencyKey: operationIdempotencyKey(generation, association.Path, version, association.ID, objectID, outbox.OperationTypeUpsert),
+		IdempotencyKey: operationIdempotencyKey(
+			generation,
+			association.Path,
+			version,
+			association.ID,
+			objectID,
+			outbox.OperationTypeUpsert,
+		),
 	}
 }
 
@@ -812,7 +845,14 @@ func newAssociationDeleteOutboxRecord(
 		NotBefore:      now,
 		CreatedTime:    now,
 		UpdatedTime:    now,
-		IdempotencyKey: operationIdempotencyKey(generation, association.Path, version, association.ID, objectID, outbox.OperationTypeDelete),
+		IdempotencyKey: operationIdempotencyKey(
+			generation,
+			association.Path,
+			version,
+			association.ID,
+			objectID,
+			outbox.OperationTypeDelete,
+		),
 	}
 }
 
@@ -824,7 +864,12 @@ func operationIdempotencyKey(
 	objectID string,
 	operationType outbox.OperationType,
 ) string {
-	return generation + ":" + path + ":" + strconv.Itoa(version) + ":" + associationID + ":" + objectID + ":" + string(operationType)
+	return generation + ":" +
+		path + ":" +
+		strconv.Itoa(version) + ":" +
+		associationID + ":" +
+		objectID + ":" +
+		string(operationType)
 }
 
 func enabledAssociationsForPath(
