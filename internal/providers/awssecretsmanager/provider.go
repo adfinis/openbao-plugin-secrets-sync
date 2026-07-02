@@ -782,6 +782,9 @@ func setupErrorClass(err error) providers.ErrorClass {
 }
 
 func classifyAWSError(err error) providers.ErrorClass {
+	if errorClass, ok := providers.ClassifyTransportError(err); ok {
+		return errorClass
+	}
 	var apiError smithy.APIError
 	if !errors.As(err, &apiError) {
 		return providers.ErrorClassInternal

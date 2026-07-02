@@ -563,6 +563,9 @@ func setupErrorClass(err error) providers.ErrorClass {
 }
 
 func classifyKubernetesError(err error) providers.ErrorClass {
+	if errorClass, ok := providers.ClassifyTransportError(err); ok {
+		return errorClass
+	}
 	switch {
 	case apierrors.IsTooManyRequests(err):
 		return providers.ErrorClassRateLimit
