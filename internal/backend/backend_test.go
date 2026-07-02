@@ -2,12 +2,15 @@ package backend
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/adfinis/openbao-plugin-secrets-sync/internal/domain"
+	"github.com/adfinis/openbao-plugin-secrets-sync/internal/observability"
 	"github.com/adfinis/openbao-plugin-secrets-sync/internal/outbox"
 	"github.com/adfinis/openbao-plugin-secrets-sync/internal/providers"
 	"github.com/adfinis/openbao-plugin-secrets-sync/internal/providers/awssecretsmanager"
@@ -80,6 +83,18 @@ func TestConfigWriteMergesDefaultsAndValidatesQueueCapacity(t *testing.T) {
 	}
 	if got := readResp.Data["restore_guard"]; got != true {
 		t.Fatalf("restore_guard = %v, want true", got)
+	}
+
+	zeroResp := handleRequest(t, b, storage, logical.UpdateOperation, configPath, map[string]interface{}{
+		"queue_capacity": 0,
+	})
+	if zeroResp != nil && zeroResp.IsError() {
+		t.Fatalf("unexpected zero queue_capacity error: %v", zeroResp.Error())
+	}
+	readZeroResp := handleRequest(t, b, storage, logical.ReadOperation, configPath, nil)
+	assertNoErrorResponse(t, readZeroResp)
+	if got := readZeroResp.Data["queue_capacity"]; got != 0 {
+		t.Fatalf("queue_capacity = %v, want 0", got)
 	}
 
 	negativeResp := handleRequest(t, b, storage, logical.UpdateOperation, configPath, map[string]interface{}{
@@ -158,8 +173,8 @@ func TestSourceEnableMarksPathSyncable(t *testing.T) {
 
 	enableResp := handleRequest(t, b, storage, logical.UpdateOperation, "sources/app/db/enable", nil)
 	assertNoErrorResponse(t, enableResp)
-	if got := enableResp.Data["path"]; got != "app/db" {
-		t.Fatalf("source path = %v, want app/db", got)
+	if got := enableResp.Data["path"]; got != modelSourcePath {
+		t.Fatalf("source path = %v, want %s", got, modelSourcePath)
 	}
 	if got := enableResp.Data["syncable"]; got != true {
 		t.Fatalf("syncable = %v, want true", got)
@@ -282,7 +297,15 @@ func TestDestinationCheckReportsValidationFailure(t *testing.T) {
 	b := Backend(&logical.BackendConfig{})
 	storage := &logical.InmemStorage{}
 
-	createFakeDestination(t, b, storage, "invalid")
+	now := nowUTC().Format(timeFormatRFC3339)
+	if err := putDestination(context.Background(), storage, destinationRecord{
+		Type:        providerTypeFake,
+		Name:        "invalid",
+		CreatedTime: now,
+		UpdatedTime: now,
+	}); err != nil {
+		t.Fatalf("write invalid destination fixture: %v", err)
+	}
 	invalidResp := handleRequest(t, b, storage, logical.ReadOperation, "destinations/fake/invalid/check", nil)
 	assertNoErrorResponse(t, invalidResp)
 	assertResponseBool(t, invalidResp, "ready", false)
@@ -336,6 +359,43 @@ func TestDestinationCheckReportsDisabled(t *testing.T) {
 		t.Fatalf("disabled health_checked = %v, want false", got)
 	}
 	assertStringSlice(t, disabledCheckResp.Data["blockers"].([]string), []string{"destination_disabled"})
+}
+
+func TestDestinationWriteValidatesProviderConfig(t *testing.T) {
+	b := Backend(&logical.BackendConfig{})
+	storage := &logical.InmemStorage{}
+
+	resp := handleRequest(t, b, storage, logical.UpdateOperation, "destinations/fake/invalid", nil)
+	if resp == nil || !resp.IsError() {
+		t.Fatalf("invalid destination write response = %#v, want error", resp)
+	}
+	record, err := getDestination(context.Background(), storage, providerTypeFake, "invalid")
+	if err != nil {
+		t.Fatalf("read invalid destination: %v", err)
+	}
+	if record != nil {
+		t.Fatalf("invalid destination was stored: %#v", record)
+	}
+}
+
+func TestDestinationWriteRejectsCrossProviderConfig(t *testing.T) {
+	b := Backend(&logical.BackendConfig{})
+	storage := &logical.InmemStorage{}
+
+	resp := handleRequest(t, b, storage, logical.UpdateOperation, "destinations/k8s/prod", map[string]interface{}{
+		kubernetessecrets.ConfigKeyNamespace: "apps",
+		gitlab.ConfigKeyToken:                "glpat-secret",
+	})
+	if resp == nil || !resp.IsError() {
+		t.Fatalf("cross-provider destination response = %#v, want error", resp)
+	}
+	record, err := getDestination(context.Background(), storage, kubernetessecrets.ProviderType, "prod")
+	if err != nil {
+		t.Fatalf("read rejected k8s destination: %v", err)
+	}
+	if record != nil {
+		t.Fatalf("cross-provider destination was stored: %#v", record)
+	}
 }
 
 func TestAssociationCreateUsesSafeDefaults(t *testing.T) {
@@ -425,6 +485,59 @@ func TestIncompatibleStorageSchemaFailsClosed(t *testing.T) {
 	}
 	if entry != nil {
 		t.Fatal("source metadata must not be written when schema is incompatible")
+	}
+}
+
+func TestNormalizeSourcePathRejectsReservedSegments(t *testing.T) {
+	for _, input := range []string{
+		"app/versions/5/x",
+		"versions",
+		"team/plan",
+	} {
+		t.Run(input, func(t *testing.T) {
+			if _, err := normalizeSourcePath(input); err == nil {
+				t.Fatalf("normalizeSourcePath(%q) succeeded, want error", input)
+			}
+		})
+	}
+	for _, input := range []string{
+		"app/versions2/5/x",
+		"plan/team",
+		"team/plans",
+	} {
+		t.Run(input, func(t *testing.T) {
+			if _, err := normalizeSourcePath(input); err != nil {
+				t.Fatalf("normalizeSourcePath(%q): %v", input, err)
+			}
+		})
+	}
+}
+
+func TestResolvedNameAllowedUsesSegmentBoundary(t *testing.T) {
+	prefixes := []string{"prod/app", "shared/team/"}
+	for _, name := range []string{
+		"prod/app",
+		"prod/app/db",
+		"/prod/app/db",
+		"shared/team",
+		"shared/team/api",
+	} {
+		t.Run("allow "+name, func(t *testing.T) {
+			if !resolvedNameAllowed(name, prefixes) {
+				t.Fatalf("resolvedNameAllowed(%q) = false, want true", name)
+			}
+		})
+	}
+	for _, name := range []string{
+		"prod/apple-secrets",
+		"prod/application/db",
+		"shared/team-alpha",
+	} {
+		t.Run("deny "+name, func(t *testing.T) {
+			if resolvedNameAllowed(name, prefixes) {
+				t.Fatalf("resolvedNameAllowed(%q) = true, want false", name)
+			}
+		})
 	}
 }
 
@@ -798,7 +911,15 @@ func TestDestinationValidateAndHealth(t *testing.T) {
 	storage := &logical.InmemStorage{}
 
 	createFakeDestination(t, b, storage, "primary")
-	createFakeDestination(t, b, storage, "invalid")
+	now := nowUTC().Format(timeFormatRFC3339)
+	if err := putDestination(context.Background(), storage, destinationRecord{
+		Type:        providerTypeFake,
+		Name:        "invalid",
+		CreatedTime: now,
+		UpdatedTime: now,
+	}); err != nil {
+		t.Fatalf("write invalid destination fixture: %v", err)
+	}
 	createFakeDestination(t, b, storage, "unhealthy")
 
 	validateResp := handleRequest(t, b, storage, logical.UpdateOperation, "destinations/fake/primary/validate", nil)
@@ -1018,6 +1139,111 @@ func TestDeleteVersionsSoftDeletesSelectedVersions(t *testing.T) {
 	}
 }
 
+func TestCurrentVersionMutationQueuesRemoteDelete(t *testing.T) {
+	for _, testCase := range []struct {
+		name string
+		path string
+	}{
+		{name: "delete", path: "delete/app/db"},
+		{name: "destroy", path: "destroy/app/db"},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			b := Backend(&logical.BackendConfig{})
+			storage := &logical.InmemStorage{}
+
+			writeAppDBSecret(t, b, storage, "initial")
+			createFakeDestination(t, b, storage, "default")
+			associationResp := createFakeDeleteModeAssociation(t, b, storage)
+			associationID := associationIDFromResponse(t, associationResp)
+			generation := sourceGeneration(t, storage)
+			upsertOperationID := operationIDsFromResponse(t, associationResp)[0]
+			deleteOperationID := newOperationID(
+				generation,
+				"app/db",
+				1,
+				associationID,
+				syncObjectIDSecretPath,
+				outbox.OperationTypeDelete,
+			)
+
+			mutationResp := handleRequest(t, b, storage, logical.UpdateOperation, testCase.path, map[string]interface{}{
+				"versions": []int{1},
+			})
+			if mutationResp != nil && mutationResp.IsError() {
+				t.Fatalf("unexpected %s response: %v", testCase.name, mutationResp.Error())
+			}
+
+			assertOutboxMissing(t, storage, upsertOperationID)
+			deleteOperation := assertOutboxOperation(t, storage, deleteOperationID, 1, outboxStatePending)
+			if got := deleteOperation.Type; got != outbox.OperationTypeDelete {
+				t.Fatalf("operation type = %s, want %s", got, outbox.OperationTypeDelete)
+			}
+			readResp := handleRequest(t, b, storage, logical.ReadOperation, "data/app/db", nil)
+			if readResp != nil {
+				t.Fatalf("mutated current version response = %#v, want nil", readResp)
+			}
+		})
+	}
+}
+
+func TestSourceDeleteRejectsClaimedUpsert(t *testing.T) {
+	b := Backend(&logical.BackendConfig{})
+	storage := &logical.InmemStorage{}
+
+	writeAppDBSecret(t, b, storage, "initial")
+	createFakeDestination(t, b, storage, "default")
+	associationResp := createDefaultFakeAssociation(t, b, storage)
+	operationID := requireSingleOperationID(t, operationIDsFromResponse(t, associationResp), "association")
+	claimOperationFixture(t, storage, operationID)
+
+	deleteResp := handleRequest(t, b, storage, logical.DeleteOperation, "data/app/db", nil)
+	if deleteResp == nil || !deleteResp.IsError() {
+		t.Fatalf("delete claimed upsert response = %#v, want error", deleteResp)
+	}
+	readResp := handleRequest(t, b, storage, logical.ReadOperation, "data/app/db", nil)
+	assertNoErrorResponse(t, readResp)
+	readMetadata := readResp.Data["metadata"].(map[string]interface{})
+	if got := readMetadata["deletion_time"]; got != "" {
+		t.Fatalf("deletion_time = %v, want empty", got)
+	}
+	assertOutboxOperation(t, storage, operationID, 1, outboxStatePending)
+}
+
+func TestUndeleteCurrentVersionQueuesUpsertAfterRemoteDelete(t *testing.T) {
+	b := Backend(&logical.BackendConfig{})
+	storage := &logical.InmemStorage{}
+
+	writeAppDBSecret(t, b, storage, "initial")
+	createFakeDestination(t, b, storage, "default")
+	associationResp := createFakeDeleteModeAssociation(t, b, storage)
+	upsertOperationID := operationIDsFromResponse(t, associationResp)[0]
+	runPeriodicAllowed(t, b, storage, "periodic upsert")
+
+	deleteResp := handleRequest(t, b, storage, logical.DeleteOperation, "data/app/db", nil)
+	assertNoErrorResponse(t, deleteResp)
+	deleteOperationID := operationIDsFromMetadata(t, deleteResp.Data["metadata"].(map[string]interface{}))[0]
+	runPeriodicAllowed(t, b, storage, "periodic delete")
+	assertOutboxMissing(t, storage, deleteOperationID)
+	assertStatusObjectState(t, b, storage, domain.SyncStateRemoteMissing)
+
+	undeleteResp := handleRequest(t, b, storage, logical.UpdateOperation, "undelete/app/db", map[string]interface{}{
+		"versions": []int{1},
+	})
+	if undeleteResp != nil && undeleteResp.IsError() {
+		t.Fatalf("unexpected undelete response: %v", undeleteResp.Error())
+	}
+	assertOutboxOperation(t, storage, upsertOperationID, 1, outboxStatePending)
+
+	runPeriodicAllowed(t, b, storage, "periodic undelete upsert")
+	assertOutboxMissing(t, storage, upsertOperationID)
+	statusResp := handleRequest(t, b, storage, logical.ReadOperation, "status/app/db", nil)
+	assertNoErrorResponse(t, statusResp)
+	objects := statusResp.Data["objects"].([]map[string]interface{})
+	if len(objects) != 1 || objects[0]["state"] != string(domain.SyncStateSynced) {
+		t.Fatalf("status objects = %#v, want synced object", objects)
+	}
+}
+
 func TestDataDeleteRetainModeCancelsQueuedUpsert(t *testing.T) {
 	b := Backend(&logical.BackendConfig{})
 	storage := &logical.InmemStorage{}
@@ -1031,9 +1257,8 @@ func TestDataDeleteRetainModeCancelsQueuedUpsert(t *testing.T) {
 	assertNoErrorResponse(t, deleteResp)
 	metadata := deleteResp.Data["metadata"].(map[string]interface{})
 	assertOperationIDs(t, metadata, 0)
-	assertOutboxOperation(t, storage, upsertOperationID, 1, outboxStateCanceled)
+	assertOutboxMissing(t, storage, upsertOperationID)
 	assertQueueCount(t, b, storage, "pending", 0)
-	assertQueueCount(t, b, storage, "canceled", 1)
 
 	readResp := handleRequest(t, b, storage, logical.ReadOperation, "data/app/db", nil)
 	if readResp != nil {
@@ -1047,7 +1272,7 @@ func TestDataDeleteDeleteModeQueuesRemoteDelete(t *testing.T) {
 
 	writeAppDBSecret(t, b, storage, "initial")
 	createFakeDestination(t, b, storage, "default")
-	createFakeAssociationWithDeleteMode(t, b, storage, deleteModeDelete)
+	createFakeDeleteModeAssociation(t, b, storage)
 	runPeriodicAllowed(t, b, storage, "periodic upsert")
 
 	deleteResp := handleRequest(t, b, storage, logical.DeleteOperation, "data/app/db", nil)
@@ -1063,10 +1288,7 @@ func TestDataDeleteDeleteModeQueuesRemoteDelete(t *testing.T) {
 	}
 
 	runPeriodicAllowed(t, b, storage, "periodic delete")
-	deleteOperation = assertOutboxOperation(t, storage, deleteOperationID, 1, outboxStateSucceeded)
-	if got := deleteOperation.Type; got != outbox.OperationTypeDelete {
-		t.Fatalf("succeeded delete operation type = %s, want %s", got, outbox.OperationTypeDelete)
-	}
+	assertOutboxMissing(t, storage, deleteOperationID)
 	statusResp := handleRequest(t, b, storage, logical.ReadOperation, "status/app/db", nil)
 	assertNoErrorResponse(t, statusResp)
 	objects := statusResp.Data["objects"].([]map[string]interface{})
@@ -1114,6 +1336,50 @@ func TestMetadataDeleteRequiresAssociationRemoval(t *testing.T) {
 	readResp := handleRequest(t, b, storage, logical.ReadOperation, "metadata/app/db", nil)
 	if readResp != nil {
 		t.Fatalf("deleted metadata response = %#v, want nil", readResp)
+	}
+}
+
+func TestMetadataDeleteRecreateRotatesOperationIDs(t *testing.T) {
+	b := Backend(&logical.BackendConfig{})
+	storage := &logical.InmemStorage{}
+
+	writeAppDBSecret(t, b, storage, "initial")
+	createFakeDestination(t, b, storage, "default")
+	firstAssociationResp := createDefaultFakeAssociation(t, b, storage)
+	firstAssociationID := associationIDFromResponse(t, firstAssociationResp)
+	firstGeneration := sourceGeneration(t, storage)
+	firstOperationID := requireSingleOperationID(t, operationIDsFromResponse(t, firstAssociationResp), "first association")
+
+	deleteAssociationResp := handleRequest(
+		t,
+		b,
+		storage,
+		logical.DeleteOperation,
+		"associations/app/db/"+firstAssociationID,
+		nil,
+	)
+	if deleteAssociationResp != nil && deleteAssociationResp.IsError() {
+		t.Fatalf("unexpected association delete error: %v", deleteAssociationResp.Error())
+	}
+	deleteMetadataResp := handleRequest(t, b, storage, logical.DeleteOperation, "metadata/app/db", nil)
+	if deleteMetadataResp != nil && deleteMetadataResp.IsError() {
+		t.Fatalf("unexpected metadata delete error: %v", deleteMetadataResp.Error())
+	}
+
+	writeAppDBSecret(t, b, storage, "recreated")
+	secondAssociationResp := createDefaultFakeAssociation(t, b, storage)
+	secondGeneration := sourceGeneration(t, storage)
+	secondOperationID := requireSingleOperationID(
+		t,
+		operationIDsFromResponse(t, secondAssociationResp),
+		"second association",
+	)
+
+	if secondGeneration == firstGeneration {
+		t.Fatalf("metadata generation was reused: %s", secondGeneration)
+	}
+	if secondOperationID == firstOperationID {
+		t.Fatalf("operation ID was reused after metadata delete: %s", secondOperationID)
 	}
 }
 
@@ -1192,6 +1458,44 @@ func TestMetadataMaxVersionsPrunesOldVersions(t *testing.T) {
 	versions := metadataResp.Data["versions"].(map[string]versionMetadata)
 	if _, ok := versions["1"]; ok {
 		t.Fatalf("metadata versions = %v, want version 1 pruned", versions)
+	}
+}
+
+func TestMetadataMaxVersionsKeepsQueuedSourceVersions(t *testing.T) {
+	b := Backend(&logical.BackendConfig{})
+	storage := &logical.InmemStorage{}
+
+	metadataResp := handleRequest(t, b, storage, logical.UpdateOperation, "metadata/app/db", map[string]interface{}{
+		"max_versions": 1,
+	})
+	assertNoErrorResponse(t, metadataResp)
+	writeAppDBSecret(t, b, storage, "one")
+	createFakeDestination(t, b, storage, "default")
+	associationResp := createDefaultFakeAssociation(t, b, storage)
+	operationID := requireSingleOperationID(t, operationIDsFromResponse(t, associationResp), "association")
+	operation := assertOutboxOperation(t, storage, operationID, 1, outboxStatePending)
+	operation.ClaimOwner = "worker-active"
+	operation.ClaimExpiresTime = nowUTC().Add(time.Hour).Format(timeFormatRFC3339)
+	operation.ClaimAttempt = 1
+	if err := putOutbox(context.Background(), storage, *operation); err != nil {
+		t.Fatalf("write claimed operation: %v", err)
+	}
+
+	writeAppDBSecret(t, b, storage, "two")
+
+	version, err := getVersion(context.Background(), storage, "app/db", 1)
+	if err != nil {
+		t.Fatalf("read protected version: %v", err)
+	}
+	if version == nil {
+		t.Fatal("version 1 must be kept while a queued upsert references it")
+	}
+	metadata, err := getMetadata(context.Background(), storage, "app/db")
+	if err != nil {
+		t.Fatalf("read metadata: %v", err)
+	}
+	if _, ok := metadata.Versions["1"]; !ok {
+		t.Fatalf("metadata versions = %v, want protected version 1", metadata.Versions)
 	}
 }
 
@@ -1300,6 +1604,174 @@ func TestAssociationSecretKeyQueuesAndSyncsPerSourceKey(t *testing.T) {
 	assertOperationObjectIDs(t, storage, updateOperationIDs, 2, outboxStatePending, []string{"password", "username"})
 }
 
+func TestAssociationUpdateMergesOmittedFieldsFromExistingRecord(t *testing.T) {
+	b := Backend(&logical.BackendConfig{})
+	storage := &logical.InmemStorage{}
+
+	writeAppDBSecretData(t, b, storage, map[string]interface{}{
+		"password": "initial",
+	})
+	createFakeDestination(t, b, storage, "default")
+	markAppDBSyncable(t, b, storage)
+	initialResp := handleRequest(t, b, storage, logical.UpdateOperation, "associations/app/db", map[string]interface{}{
+		"destination_type": providerTypeFake,
+		"destination_name": "default",
+		"name_template":    "prod/{{ path }}/{{ key }}",
+		"granularity":      syncGranularitySecretKey,
+		"format":           defaultAssociationFormat,
+		"enabled":          false,
+	})
+	assertNoErrorResponse(t, initialResp)
+	associationID := associationIDFromResponse(t, initialResp)
+
+	updateResp := handleRequest(t, b, storage, logical.UpdateOperation, "associations/app/db", map[string]interface{}{
+		"destination_type": providerTypeFake,
+		"destination_name": "default",
+		"delete_mode":      deleteModeDelete,
+	})
+	assertNoErrorResponse(t, updateResp)
+	updateAssociationID := associationIDFromResponse(t, updateResp)
+	if updateAssociationID != associationID {
+		t.Fatalf("updated association ID = %s, want %s", updateAssociationID, associationID)
+	}
+	if operationIDs := operationIDsFromResponse(t, updateResp); len(operationIDs) != 0 {
+		t.Fatalf("update operation IDs = %v, want none", operationIDs)
+	}
+
+	records, err := listAssociationsForPath(context.Background(), storage, "app/db")
+	if err != nil {
+		t.Fatalf("list associations: %v", err)
+	}
+	if len(records) != 1 {
+		t.Fatalf("association count = %d, want 1", len(records))
+	}
+	record := records[0]
+	if got := record.Granularity; got != syncGranularitySecretKey {
+		t.Fatalf("granularity = %s, want %s", got, syncGranularitySecretKey)
+	}
+	if got := record.NameTemplate; got != "prod/{{ path }}/{{ key }}" {
+		t.Fatalf("name_template = %s, want original template", got)
+	}
+	if record.Enabled {
+		t.Fatal("association should remain disabled when enabled is omitted")
+	}
+	if got := record.DeleteMode; got != deleteModeDelete {
+		t.Fatalf("delete_mode = %s, want %s", got, deleteModeDelete)
+	}
+}
+
+func TestAssociationUpdateEnqueuesWhenEnablingExistingRecord(t *testing.T) {
+	b := Backend(&logical.BackendConfig{})
+	storage := &logical.InmemStorage{}
+
+	writeAppDBSecret(t, b, storage, "initial")
+	createFakeDestination(t, b, storage, "default")
+	markAppDBSyncable(t, b, storage)
+	initialResp := handleRequest(t, b, storage, logical.UpdateOperation, "associations/app/db", map[string]interface{}{
+		"destination_type": providerTypeFake,
+		"destination_name": "default",
+		"resolved_name":    "prod/app/db",
+		"granularity":      syncGranularitySecretPath,
+		"format":           defaultAssociationFormat,
+		"enabled":          false,
+	})
+	assertNoErrorResponse(t, initialResp)
+	if operationIDs := operationIDsFromResponse(t, initialResp); len(operationIDs) != 0 {
+		t.Fatalf("initial operation IDs = %v, want none", operationIDs)
+	}
+
+	enableResp := handleRequest(t, b, storage, logical.UpdateOperation, "associations/app/db", map[string]interface{}{
+		"destination_type": providerTypeFake,
+		"destination_name": "default",
+		"enabled":          true,
+	})
+	assertNoErrorResponse(t, enableResp)
+	operationID := requireSingleOperationID(t, operationIDsFromResponse(t, enableResp), "enable through write")
+	assertOutboxOperation(t, storage, operationID, 1, outboxStatePending)
+}
+
+func TestAssociationPlanMergesOmittedFieldsFromExistingRecord(t *testing.T) {
+	b := Backend(&logical.BackendConfig{})
+	storage := &logical.InmemStorage{}
+
+	writeAppDBSecretData(t, b, storage, map[string]interface{}{
+		"password": "initial",
+	})
+	createFakeDestination(t, b, storage, "default")
+	markAppDBSyncable(t, b, storage)
+	initialResp := handleRequest(t, b, storage, logical.UpdateOperation, "associations/app/db", map[string]interface{}{
+		"destination_type": providerTypeFake,
+		"destination_name": "default",
+		"name_template":    "prod/{{ path }}/{{ key }}",
+		"granularity":      syncGranularitySecretKey,
+		"format":           defaultAssociationFormat,
+	})
+	assertNoErrorResponse(t, initialResp)
+
+	planResp := handleRequest(t, b, storage, logical.UpdateOperation, "associations/app/db/plan", map[string]interface{}{
+		"destination_type": providerTypeFake,
+		"destination_name": "default",
+		"delete_mode":      deleteModeDelete,
+	})
+	assertNoErrorResponse(t, planResp)
+	if got := planResp.Data["association_id"]; got != associationIDFromResponse(t, initialResp) {
+		t.Fatalf("plan association ID = %v, want existing association", got)
+	}
+	if got := planResp.Data["granularity"]; got != syncGranularitySecretKey {
+		t.Fatalf("plan granularity = %v, want %s", got, syncGranularitySecretKey)
+	}
+	objects := objectsByIDFromRaw(t, planResp.Data["objects"])
+	if _, ok := objects["password"]; !ok {
+		t.Fatalf("plan objects = %#v, want password object", objects)
+	}
+}
+
+func TestAssociationUpdateRejectsAmbiguousDestinationBase(t *testing.T) {
+	b := Backend(&logical.BackendConfig{})
+	storage := &logical.InmemStorage{}
+
+	writeAppDBSecretData(t, b, storage, map[string]interface{}{
+		"password": "initial",
+	})
+	createFakeDestination(t, b, storage, "default")
+	markAppDBSyncable(t, b, storage)
+	firstResp := handleRequest(t, b, storage, logical.UpdateOperation, "associations/app/db", map[string]interface{}{
+		"destination_type": providerTypeFake,
+		"destination_name": "default",
+		"resolved_name":    "prod/app/db",
+		"granularity":      syncGranularitySecretPath,
+		"format":           defaultAssociationFormat,
+	})
+	assertNoErrorResponse(t, firstResp)
+	secondResp := handleRequest(t, b, storage, logical.UpdateOperation, "associations/app/db", map[string]interface{}{
+		"destination_type": providerTypeFake,
+		"destination_name": "default",
+		"name_template":    "prod/{{ path }}/{{ key }}",
+		"granularity":      syncGranularitySecretKey,
+		"format":           defaultAssociationFormat,
+	})
+	assertNoErrorResponse(t, secondResp)
+
+	updateResp := handleRequest(t, b, storage, logical.UpdateOperation, "associations/app/db", map[string]interface{}{
+		"destination_type": providerTypeFake,
+		"destination_name": "default",
+		"delete_mode":      deleteModeDelete,
+	})
+	if updateResp == nil || !updateResp.IsError() {
+		t.Fatalf("ambiguous update response = %#v, want error", updateResp)
+	}
+	if !strings.Contains(updateResp.Error().Error(), "ambiguous") {
+		t.Fatalf("ambiguous update error = %q, want ambiguity", updateResp.Error().Error())
+	}
+	records, err := listAssociationsForPath(context.Background(), storage, "app/db")
+	if err != nil {
+		t.Fatalf("list associations: %v", err)
+	}
+	if len(records) != 2 {
+		t.Fatalf("association count = %d, want 2", len(records))
+	}
+}
+
 func TestAssociationSecretKeyRawFormat(t *testing.T) {
 	b := Backend(&logical.BackendConfig{})
 	storage := &logical.InmemStorage{}
@@ -1323,9 +1795,7 @@ func TestAssociationSecretKeyRawFormat(t *testing.T) {
 	if got := object["payload_bytes"]; got != len("initial") {
 		t.Fatalf("raw payload bytes = %v, want %d", got, len("initial"))
 	}
-	if got := object["payload_sha256"].(string); !strings.HasPrefix(got, "sha256:") {
-		t.Fatalf("raw payload sha = %q, want sha256 prefix", got)
-	}
+	assertNoPayloadHash(t, object)
 }
 
 func TestAssociationRawFormatRequiresSecretKey(t *testing.T) {
@@ -1592,7 +2062,7 @@ func TestAssociationSecretKeyDisableMarksPerSourceKeyStatus(t *testing.T) {
 	)
 	assertNoErrorResponse(t, disableResp)
 	assertAssociationEnabled(t, disableResp, false)
-	assertStringSlice(t, stringSliceFromResponse(t, disableResp, "canceled_operation_ids"), operationIDs)
+	assertStringSet(t, stringSliceFromResponse(t, disableResp, "canceled_operation_ids"), operationIDs)
 
 	statusResp := handleRequest(t, b, storage, logical.ReadOperation, "status/app/db", nil)
 	assertNoErrorResponse(t, statusResp)
@@ -1605,6 +2075,139 @@ func TestAssociationSecretKeyDisableMarksPerSourceKeyStatus(t *testing.T) {
 	}
 	if _, ok := statusObjects[syncObjectIDSecretPath]; ok {
 		t.Fatalf("secret-key status must not include %s object: %#v", syncObjectIDSecretPath, statusObjects)
+	}
+}
+
+func TestAssociationDisableRejectsClaimedOperation(t *testing.T) {
+	b := Backend(&logical.BackendConfig{})
+	storage := &logical.InmemStorage{}
+
+	writeAppDBSecret(t, b, storage, "initial")
+	createFakeDestination(t, b, storage, "default")
+	associationResp := createDefaultFakeAssociation(t, b, storage)
+	associationID := associationIDFromResponse(t, associationResp)
+	operationID := requireSingleOperationID(t, operationIDsFromResponse(t, associationResp), "association")
+	claimOperationFixture(t, storage, operationID)
+
+	disableResp := handleRequest(
+		t,
+		b,
+		storage,
+		logical.UpdateOperation,
+		"associations/app/db/"+associationID+"/disable",
+		nil,
+	)
+	if disableResp == nil || !disableResp.IsError() {
+		t.Fatalf("disable claimed operation response = %#v, want error", disableResp)
+	}
+	association, err := getAssociation(context.Background(), storage, "app/db", associationID)
+	if err != nil {
+		t.Fatalf("read association: %v", err)
+	}
+	if association == nil || !association.Enabled {
+		t.Fatalf("association after failed disable = %#v, want enabled", association)
+	}
+	operation := assertOutboxOperation(t, storage, operationID, 1, outboxStatePending)
+	if operation.ClaimOwner == "" {
+		t.Fatal("operation claim must remain active")
+	}
+}
+
+func TestAssociationDeleteRejectsClaimedOperation(t *testing.T) {
+	b := Backend(&logical.BackendConfig{})
+	storage := &logical.InmemStorage{}
+
+	writeAppDBSecret(t, b, storage, "initial")
+	createFakeDestination(t, b, storage, "default")
+	associationResp := createDefaultFakeAssociation(t, b, storage)
+	associationID := associationIDFromResponse(t, associationResp)
+	operationID := requireSingleOperationID(t, operationIDsFromResponse(t, associationResp), "association")
+	claimOperationFixture(t, storage, operationID)
+
+	deleteResp := handleRequest(
+		t,
+		b,
+		storage,
+		logical.DeleteOperation,
+		"associations/app/db/"+associationID,
+		nil,
+	)
+	if deleteResp == nil || !deleteResp.IsError() {
+		t.Fatalf("delete claimed operation response = %#v, want error", deleteResp)
+	}
+	association, err := getAssociation(context.Background(), storage, "app/db", associationID)
+	if err != nil {
+		t.Fatalf("read association: %v", err)
+	}
+	if association == nil {
+		t.Fatal("association must remain after failed delete")
+	}
+	assertOutboxOperation(t, storage, operationID, 1, outboxStatePending)
+}
+
+func TestAssociationSecretKeyDisableSkipsStatusWhenCurrentVersionMissing(t *testing.T) {
+	b := Backend(&logical.BackendConfig{})
+	storage := &logical.InmemStorage{}
+
+	writeAppDBSecretData(t, b, storage, map[string]interface{}{
+		"password": "initial",
+	})
+	createFakeDestination(t, b, storage, "default")
+	associationResp := createFakeSecretKeyAssociation(t, b, storage, deleteModeRetain)
+	associationID := associationIDFromResponse(t, associationResp)
+	metadata, err := getMetadata(context.Background(), storage, "app/db")
+	if err != nil {
+		t.Fatalf("read metadata: %v", err)
+	}
+	if err := deleteVersion(context.Background(), storage, "app/db", metadata.CurrentVersion); err != nil {
+		t.Fatalf("delete current version fixture: %v", err)
+	}
+
+	disableResp := handleRequest(
+		t,
+		b,
+		storage,
+		logical.UpdateOperation,
+		"associations/app/db/"+associationID+"/disable",
+		nil,
+	)
+	assertNoErrorResponse(t, disableResp)
+	status, err := getStatus(context.Background(), storage, "app/db", associationID, syncObjectIDSecretPath)
+	if err != nil {
+		t.Fatalf("read secret-path status: %v", err)
+	}
+	if status != nil {
+		t.Fatalf("secret-key disable wrote phantom status: %#v", status)
+	}
+}
+
+func TestOperationMetricsUseGranularityLabels(t *testing.T) {
+	b := Backend(&logical.BackendConfig{})
+	recorder := &recordingObserver{}
+	b.observer = recorder
+	storage := &logical.InmemStorage{}
+
+	writeAppDBSecretData(t, b, storage, map[string]interface{}{
+		"password": "initial",
+		"username": "appuser",
+	})
+	createFakeDestination(t, b, storage, "default")
+	createFakeSecretKeyAssociation(t, b, storage, deleteModeRetain)
+
+	runPeriodicAllowed(t, b, storage, "periodic")
+
+	successGranularities := map[string]struct{}{}
+	for _, event := range recorder.operations {
+		if event.Operation != observability.OperationUpsert || event.Result != observability.ResultSuccess {
+			continue
+		}
+		successGranularities[event.Granularity] = struct{}{}
+		if event.Granularity == "password" || event.Granularity == "username" {
+			t.Fatalf("operation metric leaked source key granularity: %#v", recorder.operations)
+		}
+	}
+	if _, ok := successGranularities[syncGranularitySecretKey]; !ok {
+		t.Fatalf("operation granularities = %v, want %s", successGranularities, syncGranularitySecretKey)
 	}
 }
 
@@ -1826,9 +2429,7 @@ func TestAssociationPlan(t *testing.T) {
 	if got := createResp.Data["source_eligible"]; got != true {
 		t.Fatalf("create source_eligible = %v, want true", got)
 	}
-	if got := createResp.Data["payload_sha256"].(string); !strings.HasPrefix(got, "sha256:") {
-		t.Fatalf("payload_sha256 = %q, want sha256 prefix", got)
-	}
+	assertNoPayloadHash(t, createResp.Data)
 	if got := createResp.Data["payload_bytes"].(int); got <= 0 {
 		t.Fatalf("payload_bytes = %d, want positive", got)
 	}
@@ -1995,7 +2596,7 @@ func TestAssociationDisableEnableAndManualSync(t *testing.T) {
 	assertNoErrorResponse(t, disableResp)
 	assertAssociationEnabled(t, disableResp, false)
 	assertStringSlice(t, stringSliceFromResponse(t, disableResp, "canceled_operation_ids"), []string{operationID})
-	assertQueueCount(t, b, storage, "canceled", 1)
+	assertOutboxMissing(t, storage, operationID)
 	assertDisabledStatusObject(t, b, storage, 1)
 
 	disabledSyncResp := handleRequest(
@@ -2113,6 +2714,293 @@ func TestDataWriteCAS(t *testing.T) {
 	}
 }
 
+func TestConcurrentDataWritesPreserveVersions(t *testing.T) {
+	b := Backend(&logical.BackendConfig{})
+	storage := &logical.InmemStorage{}
+	const writers = 32
+	resp := handleRequest(t, b, storage, logical.UpdateOperation, "metadata/app/db", map[string]interface{}{
+		"max_versions": writers,
+	})
+	assertNoErrorResponse(t, resp)
+
+	start := make(chan struct{})
+	errs := make(chan error, writers)
+	var wg sync.WaitGroup
+	for i := 0; i < writers; i++ {
+		wg.Add(1)
+		go func(index int) {
+			defer wg.Done()
+			<-start
+			resp, err := b.HandleRequest(context.Background(), &logical.Request{
+				Operation: logical.UpdateOperation,
+				Path:      "data/app/db",
+				Storage:   storage,
+				Data: map[string]interface{}{
+					"data": map[string]interface{}{
+						"password": fmt.Sprintf("secret-%02d", index),
+					},
+				},
+			})
+			if err != nil {
+				errs <- err
+				return
+			}
+			if resp == nil {
+				errs <- fmt.Errorf("write %d returned nil response", index)
+				return
+			}
+			if resp.IsError() {
+				errs <- fmt.Errorf("write %d returned error response: %v", index, resp.Error())
+			}
+		}(i)
+	}
+	close(start)
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	metadata, err := getMetadata(context.Background(), storage, "app/db")
+	if err != nil {
+		t.Fatalf("read metadata: %v", err)
+	}
+	if metadata == nil {
+		t.Fatal("metadata must exist")
+	}
+	if got := metadata.CurrentVersion; got != writers {
+		t.Fatalf("current version = %d, want %d", got, writers)
+	}
+	for version := 1; version <= writers; version++ {
+		record, err := getVersion(context.Background(), storage, "app/db", version)
+		if err != nil {
+			t.Fatalf("read version %d: %v", version, err)
+		}
+		if record == nil {
+			t.Fatalf("version %d is missing", version)
+		}
+	}
+}
+
+func TestConcurrentAssociationWritesReserveResolvedNameOnce(t *testing.T) {
+	b := Backend(&logical.BackendConfig{})
+	storage := &logical.InmemStorage{}
+
+	for _, path := range []string{"app/db", "app/api"} {
+		resp := handleRequest(t, b, storage, logical.UpdateOperation, "data/"+path, map[string]interface{}{
+			"data": map[string]interface{}{
+				"password": path,
+			},
+		})
+		assertNoErrorResponse(t, resp)
+		resp = handleRequest(t, b, storage, logical.UpdateOperation, "metadata/"+path, map[string]interface{}{
+			"custom_metadata": map[string]interface{}{
+				sourceMetadataKeySyncable: sourceMetadataValueTrue,
+			},
+		})
+		assertNoErrorResponse(t, resp)
+	}
+	createFakeDestination(t, b, storage, "default")
+
+	start := make(chan struct{})
+	results := make(chan bool, 2)
+	var wg sync.WaitGroup
+	for _, path := range []string{"app/db", "app/api"} {
+		wg.Add(1)
+		go func(path string) {
+			defer wg.Done()
+			<-start
+			resp, err := b.HandleRequest(context.Background(), &logical.Request{
+				Operation: logical.UpdateOperation,
+				Path:      "associations/" + path,
+				Storage:   storage,
+				Data: map[string]interface{}{
+					"destination_type": providerTypeFake,
+					"destination_name": "default",
+					"resolved_name":    "prod/shared",
+					"granularity":      syncObjectIDSecretPath,
+					"format":           defaultAssociationFormat,
+				},
+			})
+			if err != nil {
+				t.Errorf("association write %s: %v", path, err)
+				results <- false
+				return
+			}
+			results <- resp != nil && !resp.IsError()
+		}(path)
+	}
+	close(start)
+	wg.Wait()
+	close(results)
+
+	successes := 0
+	for success := range results {
+		if success {
+			successes++
+		}
+	}
+	if successes != 1 {
+		t.Fatalf("successful association writes = %d, want 1", successes)
+	}
+	reservations, err := listAssociationNameReservationIDs(
+		context.Background(),
+		storage,
+		"fake/default",
+		"prod/shared",
+	)
+	if err != nil {
+		t.Fatalf("list reservations: %v", err)
+	}
+	if len(reservations) != 1 {
+		t.Fatalf("reservation count = %d, want 1", len(reservations))
+	}
+}
+
+func TestDataWriteSupersedesStaleQueuedUpserts(t *testing.T) {
+	b := Backend(&logical.BackendConfig{})
+	storage := &logical.InmemStorage{}
+
+	writeAppDBSecret(t, b, storage, "initial")
+	createFakeDestination(t, b, storage, "default")
+	associationResp := createDefaultFakeAssociation(t, b, storage)
+	staleOperationID := operationIDsFromResponse(t, associationResp)[0]
+
+	rotatedResp := writeAppDBSecret(t, b, storage, "rotated")
+	rotatedMetadata := rotatedResp.Data["metadata"].(map[string]interface{})
+	rotatedOperationID := requireSingleOperationID(
+		t,
+		operationIDsFromMetadata(t, rotatedMetadata),
+		"rotated write",
+	)
+
+	assertOutboxMissing(t, storage, staleOperationID)
+	assertOutboxOperation(t, storage, rotatedOperationID, 2, outboxStatePending)
+	assertQueueCount(t, b, storage, "pending", 1)
+}
+
+func TestQueueDrainCancelsClaimedStaleUpsertAfterClaimExpiry(t *testing.T) {
+	b := Backend(&logical.BackendConfig{})
+	storage := &logical.InmemStorage{}
+
+	writeAppDBSecret(t, b, storage, "initial")
+	createFakeDestination(t, b, storage, "default")
+	associationResp := createDefaultFakeAssociation(t, b, storage)
+	staleOperationID := operationIDsFromResponse(t, associationResp)[0]
+	staleOperation := assertOutboxOperation(t, storage, staleOperationID, 1, outboxStatePending)
+	staleOperation.ClaimOwner = "worker-stale"
+	staleOperation.ClaimExpiresTime = nowUTC().Add(time.Hour).Format(timeFormatRFC3339)
+	staleOperation.ClaimAttempt = 1
+	if err := putOutbox(context.Background(), storage, *staleOperation); err != nil {
+		t.Fatalf("write claimed stale operation: %v", err)
+	}
+
+	rotatedResp := writeAppDBSecret(t, b, storage, "rotated")
+	rotatedOperationID := requireSingleOperationID(
+		t,
+		operationIDsFromMetadata(t, rotatedResp.Data["metadata"].(map[string]interface{})),
+		"rotated write",
+	)
+	assertOutboxOperation(t, storage, staleOperationID, 1, outboxStatePending)
+	assertOutboxOperation(t, storage, rotatedOperationID, 2, outboxStatePending)
+
+	staleOperation, err := getOutbox(context.Background(), storage, staleOperationID)
+	if err != nil {
+		t.Fatalf("read stale operation: %v", err)
+	}
+	staleOperation.ClaimExpiresTime = nowUTC().Add(-time.Minute).Format(timeFormatRFC3339)
+	staleOperation.NotBefore = "0001-01-01T00:00:00Z"
+	if err := putOutbox(context.Background(), storage, *staleOperation); err != nil {
+		t.Fatalf("expire stale operation claim: %v", err)
+	}
+
+	acknowledgeRestoreGuard(t, b, storage)
+	drainResp := handleRequest(t, b, storage, logical.UpdateOperation, "queue/drain", map[string]interface{}{
+		"max_operations": 1,
+	})
+	assertNoErrorResponse(t, drainResp)
+	if got := drainResp.Data["processed"]; got != 1 {
+		t.Fatalf("processed = %v, want 1", got)
+	}
+	assertOutboxMissing(t, storage, staleOperationID)
+	assertOutboxOperation(t, storage, rotatedOperationID, 2, outboxStatePending)
+	status, err := getStatus(
+		context.Background(),
+		storage,
+		"app/db",
+		associationIDFromResponse(t, associationResp),
+		syncObjectIDSecretPath,
+	)
+	if err != nil {
+		t.Fatalf("read status: %v", err)
+	}
+	if status != nil {
+		t.Fatalf("status = %#v, want nil before rotated operation dispatch", status)
+	}
+}
+
+func TestStatusWriteIgnoresOlderOperationVersion(t *testing.T) {
+	storage := &logical.InmemStorage{}
+	associationID := "assoc-test"
+	if err := putStatus(context.Background(), storage, statusRecord{
+		Path:            "app/db",
+		Version:         2,
+		AssociationID:   associationID,
+		ObjectID:        syncObjectIDSecretPath,
+		DestinationRef:  "fake/default",
+		ResolvedName:    "prod/app/db",
+		State:           string(domain.SyncStateSynced),
+		LastOperationID: "op-new",
+		UpdatedTime:     nowUTC().Format(timeFormatRFC3339),
+	}); err != nil {
+		t.Fatalf("write current status: %v", err)
+	}
+
+	staleOperation := outboxRecord{
+		ID:             "op-stale",
+		Type:           outbox.OperationTypeUpsert,
+		Path:           "app/db",
+		Version:        1,
+		AssociationID:  associationID,
+		ObjectID:       syncObjectIDSecretPath,
+		DestinationRef: "fake/default",
+		State:          outboxStatePending,
+	}
+	if err := markOperationFailed(
+		context.Background(),
+		storage,
+		staleOperation,
+		operationFailure{
+			class:        providers.ErrorClassDrift,
+			message:      "stale remote drift",
+			resolvedName: "prod/app/db",
+		},
+		nowUTC(),
+	); err != nil {
+		t.Fatalf("mark stale operation failed: %v", err)
+	}
+
+	status, err := getStatus(context.Background(), storage, "app/db", associationID, syncObjectIDSecretPath)
+	if err != nil {
+		t.Fatalf("read status: %v", err)
+	}
+	if status == nil {
+		t.Fatal("status must exist")
+	}
+	if got := status.Version; got != 2 {
+		t.Fatalf("status version = %d, want 2", got)
+	}
+	if got := status.State; got != string(domain.SyncStateSynced) {
+		t.Fatalf("status state = %s, want %s", got, domain.SyncStateSynced)
+	}
+	if got := status.LastOperationID; got != "op-new" {
+		t.Fatalf("last operation = %s, want op-new", got)
+	}
+	assertOutboxOperation(t, storage, staleOperation.ID, 1, outboxStateFailedTerminal)
+}
+
 func TestQueueCapacityRejectsWriteBeforeVersionCommit(t *testing.T) {
 	b := Backend(&logical.BackendConfig{})
 	storage := &logical.InmemStorage{}
@@ -2123,7 +3011,44 @@ func TestQueueCapacityRejectsWriteBeforeVersionCommit(t *testing.T) {
 	})
 	writeAppDBSecret(t, b, storage, "initial")
 	createFakeDestination(t, b, storage, "default")
-	createDefaultFakeAssociation(t, b, storage)
+	markAppDBSyncable(t, b, storage)
+	associationResp := handleRequest(t, b, storage, logical.UpdateOperation, "associations/app/db", map[string]interface{}{
+		"destination_type": providerTypeFake,
+		"destination_name": "default",
+		"resolved_name":    "prod/app/db",
+		"granularity":      syncObjectIDSecretPath,
+		"format":           defaultAssociationFormat,
+		"enabled":          false,
+	})
+	assertNoErrorResponse(t, associationResp)
+	now := nowUTC().Format(timeFormatRFC3339)
+	if err := putOutbox(context.Background(), storage, outboxRecord{
+		ID:             "op-unrelated-1",
+		Type:           outbox.OperationTypeUpsert,
+		Path:           "other/db",
+		Version:        1,
+		AssociationID:  "assoc-unrelated",
+		ObjectID:       syncObjectIDSecretPath,
+		DestinationRef: "fake/default",
+		State:          outboxStatePending,
+		NotBefore:      now,
+		CreatedTime:    now,
+		UpdatedTime:    now,
+	}); err != nil {
+		t.Fatalf("write unrelated outbox operation: %v", err)
+	}
+	associationID := associationIDFromResponse(t, associationResp)
+	association, err := getAssociation(context.Background(), storage, "app/db", associationID)
+	if err != nil {
+		t.Fatalf("read association: %v", err)
+	}
+	if association == nil {
+		t.Fatal("association must exist")
+	}
+	association.Enabled = true
+	if err := putAssociation(context.Background(), storage, *association); err != nil {
+		t.Fatalf("enable association fixture: %v", err)
+	}
 
 	secondResp := handleRequest(t, b, storage, logical.UpdateOperation, "data/app/db", map[string]interface{}{
 		"data": map[string]interface{}{
@@ -2139,6 +3064,41 @@ func TestQueueCapacityRejectsWriteBeforeVersionCommit(t *testing.T) {
 	readMetadata := readResp.Data["metadata"].(map[string]interface{})
 	if got := readMetadata["version"]; got != 1 {
 		t.Fatalf("blocked write committed version = %v, want 1", got)
+	}
+}
+
+func TestQueueCapacityZeroBlocksEnqueues(t *testing.T) {
+	b := Backend(&logical.BackendConfig{})
+	storage := &logical.InmemStorage{}
+
+	writeAppDBSecret(t, b, storage, "initial")
+	createFakeDestination(t, b, storage, "default")
+	createDefaultFakeAssociation(t, b, storage)
+	runPeriodicAllowed(t, b, storage, "periodic")
+
+	configResp := handleRequest(t, b, storage, logical.UpdateOperation, configPath, map[string]interface{}{
+		"queue_capacity": 0,
+	})
+	if configResp != nil && configResp.IsError() {
+		t.Fatalf("unexpected config write error: %v", configResp.Error())
+	}
+
+	blockedResp := writeAppDBSecretDataNoAssert(t, b, storage, map[string]interface{}{
+		"password": "blocked",
+	})
+	if blockedResp == nil || !blockedResp.IsError() {
+		t.Fatalf("write with zero queue capacity response = %#v, want error", blockedResp)
+	}
+	readResp := handleRequest(t, b, storage, logical.ReadOperation, "data/app/db", nil)
+	assertNoErrorResponse(t, readResp)
+	readMetadata := readResp.Data["metadata"].(map[string]interface{})
+	if got := readMetadata["version"]; got != 1 {
+		t.Fatalf("blocked write committed version = %v, want 1", got)
+	}
+	queueResp := handleRequest(t, b, storage, logical.ReadOperation, "queue", nil)
+	assertNoErrorResponse(t, queueResp)
+	if got := queueResp.Data["capacity"]; got != 0 {
+		t.Fatalf("queue capacity = %v, want 0", got)
 	}
 }
 
@@ -2183,13 +3143,81 @@ func TestPeriodicProcessesFakeOutbox(t *testing.T) {
 	}
 	assertSyncedStatusObject(t, statusResp.Data["objects"], operationID)
 
-	operation, err := getOutbox(context.Background(), storage, operationID)
+	assertOutboxMissing(t, storage, operationID)
+}
+
+func TestPeriodicLimitsProcessedOperations(t *testing.T) {
+	b := Backend(&logical.BackendConfig{})
+	storage := &logical.InmemStorage{}
+
+	writeAppDBSecret(t, b, storage, "initial")
+	createFakeDestination(t, b, storage, "default")
+	associationResp := createDefaultFakeAssociation(t, b, storage)
+	associationID := associationIDFromResponse(t, associationResp)
+	for _, operationID := range operationIDsFromResponse(t, associationResp) {
+		operation, err := getOutbox(context.Background(), storage, operationID)
+		if err != nil {
+			t.Fatalf("read initial operation: %v", err)
+		}
+		if operation != nil {
+			if err := deleteOutbox(context.Background(), storage, *operation); err != nil {
+				t.Fatalf("delete initial operation: %v", err)
+			}
+		}
+	}
+
+	now := nowUTC().Format(timeFormatRFC3339)
+	for index := 0; index < defaultPeriodicMaxOperations+1; index++ {
+		if err := putOutbox(context.Background(), storage, outboxRecord{
+			ID:             fmt.Sprintf("op-periodic-%03d", index),
+			Type:           outbox.OperationTypeUpsert,
+			Path:           "app/db",
+			Version:        1,
+			AssociationID:  associationID,
+			ObjectID:       syncObjectIDSecretPath,
+			DestinationRef: "fake/default",
+			State:          outboxStatePending,
+			NotBefore:      now,
+			CreatedTime:    now,
+			UpdatedTime:    now,
+		}); err != nil {
+			t.Fatalf("write periodic operation %d: %v", index, err)
+		}
+	}
+
+	runPeriodicAllowed(t, b, storage, "bounded periodic")
+	ids, err := listQueuedOutboxIDs(context.Background(), storage)
 	if err != nil {
-		t.Fatalf("read outbox operation: %v", err)
+		t.Fatalf("list queued outbox IDs: %v", err)
 	}
-	if operation == nil || operation.State != outboxStateSucceeded {
-		t.Fatalf("outbox operation = %#v, want succeeded", operation)
+	if len(ids) != 1 {
+		t.Fatalf("queued IDs after bounded periodic = %v, want one remaining", ids)
 	}
+}
+
+func TestPeriodicDropsUnsupportedOutboxOperation(t *testing.T) {
+	b := Backend(&logical.BackendConfig{})
+	storage := &logical.InmemStorage{}
+	now := nowUTC().Format(timeFormatRFC3339)
+	record := outboxRecord{
+		ID:             "op-empty-object",
+		Type:           outbox.OperationTypeUpsert,
+		Path:           "app/db",
+		Version:        1,
+		AssociationID:  "assoc-invalid",
+		DestinationRef: "fake/default",
+		State:          outboxStatePending,
+		NotBefore:      now,
+		CreatedTime:    now,
+		UpdatedTime:    now,
+	}
+	if err := putOutbox(context.Background(), storage, record); err != nil {
+		t.Fatalf("write unsupported operation: %v", err)
+	}
+
+	runPeriodicAllowed(t, b, storage, "periodic invalid operation cleanup")
+	assertOutboxMissing(t, storage, record.ID)
+	assertQueueCount(t, b, storage, "pending", 0)
 }
 
 func TestPeriodicHonorsRestoreGuard(t *testing.T) {
@@ -2208,7 +3236,8 @@ func TestPeriodicHonorsRestoreGuard(t *testing.T) {
 	assertQueueCount(t, b, storage, "pending", 1)
 
 	runPeriodicAllowed(t, b, storage, "periodic after restore guard acknowledgement")
-	assertOutboxOperation(t, storage, operationID, 1, outboxStateSucceeded)
+	assertOutboxMissing(t, storage, operationID)
+	assertStatusObjectState(t, b, storage, domain.SyncStateSynced)
 }
 
 func TestPeriodicSkipsUnsafeReplicationNode(t *testing.T) {
@@ -2273,9 +3302,7 @@ func TestPeriodicRejectsPayloadOverProviderLimit(t *testing.T) {
 	if strings.Contains(object["last_error"].(string), "secret-canary") {
 		t.Fatalf("last_error contains secret canary: %s", object["last_error"])
 	}
-	if got := object["payload_sha256"].(string); !strings.HasPrefix(got, "sha256:") {
-		t.Fatalf("payload_sha256 = %q, want sha256 prefix", got)
-	}
+	assertNoPayloadHash(t, object)
 }
 
 func TestPeriodicRejectsPayloadOverAWSProviderLimit(t *testing.T) {
@@ -2330,9 +3357,7 @@ func TestPeriodicRejectsPayloadOverAWSProviderLimit(t *testing.T) {
 	if strings.Contains(object["last_error"].(string), "secret-canary") {
 		t.Fatalf("last_error contains secret canary: %s", object["last_error"])
 	}
-	if got := object["payload_sha256"].(string); !strings.HasPrefix(got, "sha256:") {
-		t.Fatalf("payload_sha256 = %q, want sha256 prefix", got)
-	}
+	assertNoPayloadHash(t, object)
 }
 
 func TestPeriodicRetriesTransientProviderErrors(t *testing.T) {
@@ -2360,6 +3385,122 @@ func TestPeriodicRetriesTransientProviderErrors(t *testing.T) {
 	operation = assertOutboxOperation(t, storage, operationID, 1, outboxStateFailedTerminal)
 	if got := operation.Attempts; got != maxAutomaticRetryAttempts {
 		t.Fatalf("attempts = %d, want %d", got, maxAutomaticRetryAttempts)
+	}
+}
+
+func TestPeriodicLeavesClaimedOperationOnDispatchContextCancellation(t *testing.T) {
+	b := Backend(&logical.BackendConfig{})
+	storage := &logical.InmemStorage{}
+
+	writeAppDBSecret(t, b, storage, "initial")
+	createFakeDestination(t, b, storage, "default")
+	associationResp := createFakeAssociationWithResolvedName(t, b, storage, "prod/context-canceled/app/db")
+	operationID := operationIDsFromResponse(t, associationResp)[0]
+
+	acknowledgeRestoreGuard(t, b, storage)
+	err := b.periodic(context.Background(), &logical.Request{Storage: storage})
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("periodic error = %v, want context.Canceled", err)
+	}
+
+	operation := assertOutboxOperation(t, storage, operationID, 1, outboxStatePending)
+	if got := operation.Attempts; got != 0 {
+		t.Fatalf("attempts = %d, want 0", got)
+	}
+	if operation.ClaimOwner == "" {
+		t.Fatal("claim owner must remain set")
+	}
+	if operation.ClaimExpiresTime == "" {
+		t.Fatal("claim expiry must remain set")
+	}
+	if got := operation.ClaimAttempt; got != 1 {
+		t.Fatalf("claim attempt = %d, want 1", got)
+	}
+	status, err := getStatus(
+		context.Background(),
+		storage,
+		"app/db",
+		associationIDFromResponse(t, associationResp),
+		syncObjectIDSecretPath,
+	)
+	if err != nil {
+		t.Fatalf("read status: %v", err)
+	}
+	if status != nil {
+		t.Fatalf("status = %#v, want nil", status)
+	}
+}
+
+func TestPeriodicLeavesClaimedOperationWhenCanceledProviderRedactsCause(t *testing.T) {
+	b := Backend(&logical.BackendConfig{})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	b.providerRegistry = providers.MustNewRegistry(contextCanceledProvider{cancel: cancel})
+	storage := &logical.InmemStorage{}
+
+	writeAppDBSecret(t, b, storage, "initial")
+	destinationResp := handleRequest(
+		t,
+		b,
+		storage,
+		logical.UpdateOperation,
+		"destinations/ctxcancel/default",
+		nil,
+	)
+	if destinationResp != nil && destinationResp.IsError() {
+		t.Fatalf("unexpected destination write error: %v", destinationResp.Error())
+	}
+	markAppDBSyncable(t, b, storage)
+	associationResp := handleRequest(t, b, storage, logical.UpdateOperation, "associations/app/db", map[string]interface{}{
+		"destination_type": "ctxcancel",
+		"destination_name": "default",
+		"resolved_name":    "prod/app/db",
+		"granularity":      syncObjectIDSecretPath,
+		"format":           defaultAssociationFormat,
+	})
+	assertNoErrorResponse(t, associationResp)
+	operationID := operationIDsFromResponse(t, associationResp)[0]
+
+	acknowledgeRestoreGuard(t, b, storage)
+	err := b.periodic(ctx, &logical.Request{Storage: storage})
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("periodic error = %v, want context.Canceled", err)
+	}
+
+	operation := assertOutboxOperation(t, storage, operationID, 1, outboxStatePending)
+	if got := operation.Attempts; got != 0 {
+		t.Fatalf("attempts = %d, want 0", got)
+	}
+	if operation.ClaimOwner == "" {
+		t.Fatal("claim owner must remain set")
+	}
+	if operation.ClaimExpiresTime == "" {
+		t.Fatal("claim expiry must remain set")
+	}
+	if got := operation.ClaimAttempt; got != 1 {
+		t.Fatalf("claim attempt = %d, want 1", got)
+	}
+	status, err := getStatus(
+		context.Background(),
+		storage,
+		"app/db",
+		associationIDFromResponse(t, associationResp),
+		syncObjectIDSecretPath,
+	)
+	if err != nil {
+		t.Fatalf("read status: %v", err)
+	}
+	if status != nil {
+		t.Fatalf("status = %#v, want nil", status)
+	}
+}
+
+func TestIsDispatchContextCanceledTreatsRedactedProviderErrorAsCancellation(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	if !isDispatchContextCanceled(ctx, &providers.Error{Class: providers.ErrorClassUnavailable, Message: "redacted"}) {
+		t.Fatal("canceled context with redacted provider error must be treated as cancellation")
 	}
 }
 
@@ -2443,7 +3584,7 @@ func TestPeriodicMapsProviderMutationErrorClasses(t *testing.T) {
 	}
 }
 
-func TestQueueOperationReadCancelAndRetry(t *testing.T) {
+func TestQueueOperationReadCancelAndPrune(t *testing.T) {
 	b := Backend(&logical.BackendConfig{})
 	storage := &logical.InmemStorage{}
 
@@ -2463,20 +3604,77 @@ func TestQueueOperationReadCancelAndRetry(t *testing.T) {
 	if got := cancelResp.Data["state"]; got != outboxStateCanceled {
 		t.Fatalf("canceled operation state = %v, want %s", got, outboxStateCanceled)
 	}
+	assertOutboxMissing(t, storage, operationID)
 	queueResp := handleRequest(t, b, storage, logical.ReadOperation, "queue", nil)
 	assertNoErrorResponse(t, queueResp)
 	if got := queueResp.Data["pending"]; got != 0 {
 		t.Fatalf("pending queue count = %v, want 0", got)
 	}
-	if got := queueResp.Data["canceled"]; got != 1 {
-		t.Fatalf("canceled queue count = %v, want 1", got)
-	}
 
 	retryResp := handleRequest(t, b, storage, logical.UpdateOperation, "queue/"+operationID+"/retry", nil)
-	assertNoErrorResponse(t, retryResp)
-	if got := retryResp.Data["state"]; got != outboxStatePending {
-		t.Fatalf("retried operation state = %v, want %s", got, outboxStatePending)
+	if retryResp != nil {
+		t.Fatalf("retry pruned operation response = %#v, want nil", retryResp)
 	}
+}
+
+func TestOutboxIndexesTrackPutAndDelete(t *testing.T) {
+	storage := &logical.InmemStorage{}
+	nowTime := nowUTC()
+	now := nowTime.Format(timeFormatRFC3339)
+	future := nowTime.Add(time.Minute).Format(timeFormatRFC3339)
+	record := outboxRecord{
+		ID:          "op_state_index",
+		Type:        outbox.OperationTypeUpsert,
+		Path:        "app/db",
+		Version:     1,
+		State:       outboxStatePending,
+		NotBefore:   now,
+		CreatedTime: now,
+		UpdatedTime: now,
+	}
+	if err := putOutbox(context.Background(), storage, record); err != nil {
+		t.Fatalf("write pending outbox: %v", err)
+	}
+	assertOutboxStateIndexed(t, storage, outboxStatePending, record.ID, true)
+	assertOutboxStateIndexed(t, storage, outboxStateRetryWait, record.ID, false)
+	assertOutboxDueIndexed(t, storage, now, record.ID, true)
+	assertOutboxDueIndexed(t, storage, future, record.ID, false)
+
+	record.State = outboxStateRetryWait
+	record.NotBefore = future
+	record.UpdatedTime = now
+	if err := putOutbox(context.Background(), storage, record); err != nil {
+		t.Fatalf("write retry-wait outbox: %v", err)
+	}
+	assertOutboxStateIndexed(t, storage, outboxStatePending, record.ID, false)
+	assertOutboxStateIndexed(t, storage, outboxStateRetryWait, record.ID, true)
+	assertOutboxDueIndexed(t, storage, now, record.ID, false)
+	assertOutboxDueIndexed(t, storage, future, record.ID, true)
+
+	if err := deleteOutbox(context.Background(), storage, record); err != nil {
+		t.Fatalf("delete outbox: %v", err)
+	}
+	assertOutboxMissing(t, storage, record.ID)
+	assertOutboxStateIndexed(t, storage, outboxStateRetryWait, record.ID, false)
+	assertOutboxDueIndexed(t, storage, future, record.ID, false)
+
+	record.State = outboxStatePending
+	record.NotBefore = now
+	if err := putOutbox(context.Background(), storage, record); err != nil {
+		t.Fatalf("rewrite pending outbox: %v", err)
+	}
+	assertOutboxStateIndexed(t, storage, outboxStatePending, record.ID, true)
+	assertOutboxDueIndexed(t, storage, now, record.ID, true)
+
+	partial := record
+	partial.State = ""
+	partial.NotBefore = ""
+	if err := deleteOutbox(context.Background(), storage, partial); err != nil {
+		t.Fatalf("delete outbox with partial caller copy: %v", err)
+	}
+	assertOutboxMissing(t, storage, record.ID)
+	assertOutboxStateIndexed(t, storage, outboxStatePending, record.ID, false)
+	assertOutboxDueIndexed(t, storage, now, record.ID, false)
 }
 
 func TestQueueDrainProcessesDueOperations(t *testing.T) {
@@ -2503,7 +3701,8 @@ func TestQueueDrainProcessesDueOperations(t *testing.T) {
 	if got := queue["pending"]; got != 0 {
 		t.Fatalf("pending = %v, want 0", got)
 	}
-	assertOutboxOperation(t, storage, operationID, 1, outboxStateSucceeded)
+	assertOutboxMissing(t, storage, operationID)
+	assertStatusObjectState(t, b, storage, domain.SyncStateSynced)
 }
 
 func TestQueueDrainSkipsUnexpiredClaim(t *testing.T) {
@@ -2574,15 +3773,11 @@ func TestQueueDrainReclaimsExpiredClaimAndClearsIt(t *testing.T) {
 	if got := drainResp.Data["processed"]; got != 1 {
 		t.Fatalf("processed = %v, want 1", got)
 	}
-	operation = assertOutboxOperation(t, storage, operationID, 1, outboxStateSucceeded)
-	if operation.ClaimOwner != "" || operation.ClaimExpiresTime != "" || operation.ClaimAttempt != 0 {
-		t.Fatalf("claim fields after success = %#v, want cleared", operation)
-	}
+	assertOutboxMissing(t, storage, operationID)
 
 	readResp := handleRequest(t, b, storage, logical.ReadOperation, "queue/"+operationID, nil)
-	assertNoErrorResponse(t, readResp)
-	if got := readResp.Data["claimed"]; got != false {
-		t.Fatalf("claimed response = %v, want false", got)
+	if readResp != nil {
+		t.Fatalf("read pruned operation response = %#v, want nil", readResp)
 	}
 }
 
@@ -2600,6 +3795,29 @@ func TestQueueDrainClearsClaimAfterRetryableFailure(t *testing.T) {
 	if operation.ClaimOwner != "" || operation.ClaimExpiresTime != "" || operation.ClaimAttempt != 0 {
 		t.Fatalf("claim fields after retryable failure = %#v, want cleared", operation)
 	}
+}
+
+func TestQueueDrainSkipsFutureRetryWaitOperation(t *testing.T) {
+	b := Backend(&logical.BackendConfig{})
+	storage := &logical.InmemStorage{}
+
+	writeAppDBSecret(t, b, storage, "initial")
+	createFakeDestination(t, b, storage, "default")
+	associationResp := createFakeAssociationWithResolvedName(t, b, storage, "prod/rate-limit/app/db")
+	operationID := operationIDsFromResponse(t, associationResp)[0]
+
+	runPeriodicAllowed(t, b, storage, "periodic")
+	operation := assertOutboxOperation(t, storage, operationID, 1, outboxStateRetryWait)
+	assertFutureNotBefore(t, operation.NotBefore)
+
+	drainResp := handleRequest(t, b, storage, logical.UpdateOperation, "queue/drain", map[string]interface{}{
+		"max_operations": 1,
+	})
+	assertNoErrorResponse(t, drainResp)
+	if got := drainResp.Data["processed"]; got != 0 {
+		t.Fatalf("processed = %v, want 0 for future retry_wait operation", got)
+	}
+	assertOutboxOperation(t, storage, operationID, 1, outboxStateRetryWait)
 }
 
 func TestQueueDrainHonorsRestoreGuard(t *testing.T) {
@@ -2711,7 +3929,7 @@ func TestQueueDrainHonorsDisabledConfig(t *testing.T) {
 	}
 }
 
-func TestQueueOperationRejectsRetryAfterSuccess(t *testing.T) {
+func TestQueueOperationPrunesAfterSuccess(t *testing.T) {
 	b := Backend(&logical.BackendConfig{})
 	storage := &logical.InmemStorage{}
 
@@ -2721,13 +3939,18 @@ func TestQueueOperationRejectsRetryAfterSuccess(t *testing.T) {
 	operationID := operationIDsFromResponse(t, associationResp)[0]
 	runPeriodicAllowed(t, b, storage, "periodic")
 
+	assertOutboxMissing(t, storage, operationID)
+	readResp := handleRequest(t, b, storage, logical.ReadOperation, "queue/"+operationID, nil)
+	if readResp != nil {
+		t.Fatalf("read pruned operation response = %#v, want nil", readResp)
+	}
 	retryResp := handleRequest(t, b, storage, logical.UpdateOperation, "queue/"+operationID+"/retry", nil)
-	if retryResp == nil || !retryResp.IsError() {
-		t.Fatalf("retry succeeded operation response = %#v, want error", retryResp)
+	if retryResp != nil {
+		t.Fatalf("retry pruned operation response = %#v, want nil", retryResp)
 	}
 	cancelResp := handleRequest(t, b, storage, logical.UpdateOperation, "queue/"+operationID+"/cancel", nil)
-	if cancelResp == nil || !cancelResp.IsError() {
-		t.Fatalf("cancel succeeded operation response = %#v, want error", cancelResp)
+	if cancelResp != nil {
+		t.Fatalf("cancel pruned operation response = %#v, want nil", cancelResp)
 	}
 }
 
@@ -2753,30 +3976,25 @@ func TestPeriodicRecoversIncompleteEnqueueIntent(t *testing.T) {
 	if err := deleteOutbox(context.Background(), storage, *operation); err != nil {
 		t.Fatalf("delete outbox operation: %v", err)
 	}
-	intent, err := getEnqueueIntent(context.Background(), storage, "app/db", 2)
-	if err != nil {
-		t.Fatalf("read enqueue intent: %v", err)
-	}
-	intent.Complete = false
-	intent.CompletedTime = ""
-	if err := putEnqueueIntent(context.Background(), storage, *intent); err != nil {
+	intent := newEnqueueIntentRecord(
+		"app/db",
+		sourceGeneration(t, storage),
+		2,
+		[]outboxRecord{*operation},
+		operation.CreatedTime,
+	)
+	if err := putEnqueueIntent(context.Background(), storage, intent); err != nil {
 		t.Fatalf("write incomplete enqueue intent: %v", err)
 	}
 
 	runPeriodicAllowed(t, b, storage, "periodic recovery")
-	recovered, err := getOutbox(context.Background(), storage, operationID)
-	if err != nil {
-		t.Fatalf("read recovered outbox operation: %v", err)
-	}
-	if recovered == nil || recovered.State != outboxStateSucceeded {
-		t.Fatalf("recovered operation = %#v, want succeeded operation", recovered)
-	}
-	intent, err = getEnqueueIntent(context.Background(), storage, "app/db", 2)
+	assertOutboxMissing(t, storage, operationID)
+	intentRecord, err := getEnqueueIntent(context.Background(), storage, "app/db", 2)
 	if err != nil {
 		t.Fatalf("read recovered enqueue intent: %v", err)
 	}
-	if intent == nil || !intent.Complete {
-		t.Fatalf("recovered enqueue intent = %#v, want complete", intent)
+	if intentRecord != nil {
+		t.Fatalf("recovered enqueue intent = %#v, want pruned", intentRecord)
 	}
 }
 
@@ -2786,7 +4004,7 @@ func TestRecoveryRestoresDeleteIntentAfterSourceDelete(t *testing.T) {
 
 	writeAppDBSecret(t, b, storage, "initial")
 	createFakeDestination(t, b, storage, "default")
-	createFakeAssociationWithDeleteMode(t, b, storage, deleteModeDelete)
+	createFakeDeleteModeAssociation(t, b, storage)
 	runPeriodicAllowed(t, b, storage, "periodic upsert")
 	deleteResp := handleRequest(t, b, storage, logical.DeleteOperation, "data/app/db", nil)
 	assertNoErrorResponse(t, deleteResp)
@@ -2801,13 +4019,14 @@ func TestRecoveryRestoresDeleteIntentAfterSourceDelete(t *testing.T) {
 	if err := deleteOutbox(context.Background(), storage, *operation); err != nil {
 		t.Fatalf("delete outbox operation: %v", err)
 	}
-	intent, err := getEnqueueIntent(context.Background(), storage, "app/db", 1)
-	if err != nil {
-		t.Fatalf("read delete enqueue intent: %v", err)
-	}
-	intent.Complete = false
-	intent.CompletedTime = ""
-	if err := putEnqueueIntent(context.Background(), storage, *intent); err != nil {
+	intent := newEnqueueIntentRecord(
+		"app/db",
+		sourceGeneration(t, storage),
+		1,
+		[]outboxRecord{*operation},
+		operation.CreatedTime,
+	)
+	if err := putEnqueueIntent(context.Background(), storage, intent); err != nil {
 		t.Fatalf("write incomplete delete enqueue intent: %v", err)
 	}
 
@@ -2833,8 +4052,9 @@ func TestRecoveryCompletesIntentWithoutCommittedVersion(t *testing.T) {
 		t.Fatalf("read association: %v", err)
 	}
 	now := nowUTC().Format(timeFormatRFC3339)
-	operation := newAssociationOutboxRecord(*association, 99, syncObjectIDSecretPath, now)
-	intent := newEnqueueIntentRecord("app/db", 99, []outboxRecord{operation}, now)
+	generation := sourceGeneration(t, storage)
+	operation := newAssociationOutboxRecord(*association, generation, 99, syncObjectIDSecretPath, now)
+	intent := newEnqueueIntentRecord("app/db", generation, 99, []outboxRecord{operation}, now)
 	if err := putEnqueueIntent(context.Background(), storage, intent); err != nil {
 		t.Fatalf("write enqueue intent: %v", err)
 	}
@@ -2846,8 +4066,8 @@ func TestRecoveryCompletesIntentWithoutCommittedVersion(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read recovered enqueue intent: %v", err)
 	}
-	if recoveredIntent == nil || !recoveredIntent.Complete {
-		t.Fatalf("recovered enqueue intent = %#v, want complete", recoveredIntent)
+	if recoveredIntent != nil {
+		t.Fatalf("recovered enqueue intent = %#v, want pruned", recoveredIntent)
 	}
 	recoveredOperation, err := getOutbox(context.Background(), storage, operation.ID)
 	if err != nil {
@@ -2855,6 +4075,51 @@ func TestRecoveryCompletesIntentWithoutCommittedVersion(t *testing.T) {
 	}
 	if recoveredOperation != nil {
 		t.Fatalf("recovered operation = %#v, want nil without committed version", recoveredOperation)
+	}
+}
+
+func TestRecoveryPrunesCompletedEnqueueIntent(t *testing.T) {
+	storage := &logical.InmemStorage{}
+	now := nowUTC().Format(timeFormatRFC3339)
+	intent := newEnqueueIntentRecord("app/db", "gen-test", 1, nil, now)
+	intent.Complete = true
+	intent.CompletedTime = now
+	if err := putEnqueueIntent(context.Background(), storage, intent); err != nil {
+		t.Fatalf("write completed enqueue intent: %v", err)
+	}
+
+	if err := recoverIncompleteEnqueueIntents(context.Background(), storage, nowUTC()); err != nil {
+		t.Fatalf("recover incomplete enqueue intents: %v", err)
+	}
+	prunedIntent, err := getEnqueueIntent(context.Background(), storage, "app/db", 1)
+	if err != nil {
+		t.Fatalf("read pruned enqueue intent: %v", err)
+	}
+	if prunedIntent != nil {
+		t.Fatalf("enqueue intent = %#v, want pruned", prunedIntent)
+	}
+}
+
+func TestPeriodicLimitsRecoveredEnqueueIntents(t *testing.T) {
+	b := Backend(&logical.BackendConfig{})
+	storage := &logical.InmemStorage{}
+	now := nowUTC().Format(timeFormatRFC3339)
+	for index := 0; index < defaultPeriodicRecoveryMaxIntents+1; index++ {
+		intent := newEnqueueIntentRecord(fmt.Sprintf("app/db-%03d", index), "gen-test", 1, nil, now)
+		intent.Complete = true
+		intent.CompletedTime = now
+		if err := putEnqueueIntent(context.Background(), storage, intent); err != nil {
+			t.Fatalf("write completed enqueue intent %d: %v", index, err)
+		}
+	}
+
+	runPeriodicAllowed(t, b, storage, "bounded periodic recovery")
+	intents, err := listEnqueueIntents(context.Background(), storage)
+	if err != nil {
+		t.Fatalf("list enqueue intents: %v", err)
+	}
+	if len(intents) != 1 {
+		t.Fatalf("enqueue intents after bounded periodic = %d, want 1", len(intents))
 	}
 }
 
@@ -2895,7 +4160,7 @@ func TestQueueCapacityCountsQueuedOperationsOnly(t *testing.T) {
 	if got := metadata["version"]; got != 2 {
 		t.Fatalf("second write version = %v, want 2", got)
 	}
-	assertCompleteEnqueueIntent(t, storage, "app/db", 2, metadata)
+	assertPrunedEnqueueIntentAndOutbox(t, storage, "app/db", 2, metadata)
 }
 
 func handleRequest(
@@ -2949,7 +4214,7 @@ func assertNoErrorResponse(t *testing.T, resp *logical.Response) {
 	}
 }
 
-func assertCompleteEnqueueIntent(
+func assertPrunedEnqueueIntentAndOutbox(
 	t *testing.T,
 	storage logical.Storage,
 	path string,
@@ -2962,11 +4227,8 @@ func assertCompleteEnqueueIntent(
 	if err != nil {
 		t.Fatalf("read enqueue intent: %v", err)
 	}
-	if intent == nil || !intent.Complete {
-		t.Fatalf("enqueue intent = %#v, want complete intent", intent)
-	}
-	if got := intent.OperationIDs; len(got) != len(operationIDs) || got[0] != operationIDs[0] {
-		t.Fatalf("enqueue intent operation IDs = %v, want %v", got, operationIDs)
+	if intent != nil {
+		t.Fatalf("enqueue intent = %#v, want pruned", intent)
 	}
 	operation, err := getOutbox(context.Background(), storage, operationIDs[0])
 	if err != nil {
@@ -2977,6 +4239,23 @@ func assertCompleteEnqueueIntent(
 	}
 	if got := operation.ObjectID; got != syncObjectIDSecretPath {
 		t.Fatalf("outbox object ID = %v, want %s", got, syncObjectIDSecretPath)
+	}
+}
+
+func claimOperationFixture(t *testing.T, storage logical.Storage, operationID string) {
+	t.Helper()
+	operation, err := getOutbox(context.Background(), storage, operationID)
+	if err != nil {
+		t.Fatalf("read operation to claim: %v", err)
+	}
+	if operation == nil {
+		t.Fatalf("operation %s must exist", operationID)
+	}
+	operation.ClaimOwner = "worker-active"
+	operation.ClaimExpiresTime = nowUTC().Add(time.Hour).Format(timeFormatRFC3339)
+	operation.ClaimAttempt = operation.Attempts + 1
+	if err := putOutbox(context.Background(), storage, *operation); err != nil {
+		t.Fatalf("write claimed operation: %v", err)
 	}
 }
 
@@ -3009,6 +4288,35 @@ func assertStringSlice(t *testing.T, got []string, want []string) {
 		if got[i] != want[i] {
 			t.Fatalf("string slice = %v, want %v", got, want)
 		}
+	}
+}
+
+func assertStringSet(t *testing.T, got []string, want []string) {
+	t.Helper()
+	if len(got) != len(want) {
+		t.Fatalf("string set = %v, want %v", got, want)
+	}
+	counts := make(map[string]int, len(want))
+	for _, value := range want {
+		counts[value]++
+	}
+	for _, value := range got {
+		counts[value]--
+	}
+	for value, count := range counts {
+		if count != 0 {
+			t.Fatalf("string set = %v, want %v; count for %q = %d", got, want, value, count)
+		}
+	}
+}
+
+func assertNoPayloadHash(t *testing.T, object map[string]interface{}) {
+	t.Helper()
+	if _, ok := object["payload_sha256"]; ok {
+		t.Fatalf("payload_sha256 must not be exposed in response object: %#v", object)
+	}
+	if _, ok := object["remote_payload_sha256"]; ok {
+		t.Fatalf("remote_payload_sha256 must not be exposed in response object: %#v", object)
 	}
 }
 
@@ -3085,9 +4393,7 @@ func assertPlanObject(
 	if got := object["action"]; got != providers.PlanActionCreate {
 		t.Fatalf("%s action = %v, want %s", objectID, got, providers.PlanActionCreate)
 	}
-	if got := object["payload_sha256"].(string); !strings.HasPrefix(got, "sha256:") {
-		t.Fatalf("%s payload_sha256 = %q, want sha256 prefix", objectID, got)
-	}
+	assertNoPayloadHash(t, object)
 	if got := object["payload_bytes"].(int); got <= 0 {
 		t.Fatalf("%s payload_bytes = %d, want positive", objectID, got)
 	}
@@ -3148,9 +4454,7 @@ func assertSecretKeySyncedStatusObject(
 	if got := object["remote_version"]; got != "fake" {
 		t.Fatalf("%s remote_version = %v, want fake", objectID, got)
 	}
-	if got := object["payload_sha256"].(string); !strings.HasPrefix(got, "sha256:") {
-		t.Fatalf("%s payload_sha256 = %q, want sha256 prefix", objectID, got)
-	}
+	assertNoPayloadHash(t, object)
 }
 
 func assertStatusObjectErrorClass(
@@ -3207,6 +4511,39 @@ func assertOutboxOperation(
 	return operation
 }
 
+func assertOutboxMissing(t *testing.T, storage logical.Storage, operationID string) {
+	t.Helper()
+	operation, err := getOutbox(context.Background(), storage, operationID)
+	if err != nil {
+		t.Fatalf("read outbox operation: %v", err)
+	}
+	if operation != nil {
+		t.Fatalf("outbox operation %s = %#v, want pruned", operationID, operation)
+	}
+}
+
+func assertOutboxStateIndexed(t *testing.T, storage logical.Storage, state string, operationID string, want bool) {
+	t.Helper()
+	entry, err := storage.Get(context.Background(), outboxByStateStorageKey(state, operationID))
+	if err != nil {
+		t.Fatalf("read outbox state index: %v", err)
+	}
+	if got := entry != nil; got != want {
+		t.Fatalf("outbox state index %s/%s exists = %t, want %t", state, operationID, got, want)
+	}
+}
+
+func assertOutboxDueIndexed(t *testing.T, storage logical.Storage, dueTime string, operationID string, want bool) {
+	t.Helper()
+	entry, err := storage.Get(context.Background(), outboxByDueStorageKey(dueTime, operationID))
+	if err != nil {
+		t.Fatalf("read outbox due index: %v", err)
+	}
+	if got := entry != nil; got != want {
+		t.Fatalf("outbox due index %s/%s exists = %t, want %t", dueTime, operationID, got, want)
+	}
+}
+
 func assertFutureNotBefore(t *testing.T, raw string) {
 	t.Helper()
 	notBefore, err := time.Parse(timeFormatRFC3339, raw)
@@ -3255,6 +4592,22 @@ func requireSingleOperationID(t *testing.T, operationIDs []string, label string)
 		t.Fatalf("%s operation IDs = %v, want one operation", label, operationIDs)
 	}
 	return operationIDs[0]
+}
+
+func sourceGeneration(t *testing.T, storage logical.Storage) string {
+	t.Helper()
+	path := "app/db"
+	metadata, err := getMetadata(context.Background(), storage, path)
+	if err != nil {
+		t.Fatalf("read source metadata: %v", err)
+	}
+	if metadata == nil {
+		t.Fatalf("source metadata %s must exist", path)
+	}
+	if metadata.Generation == "" {
+		t.Fatalf("source metadata %s generation must be set", path)
+	}
+	return metadata.Generation
 }
 
 func operationIDsFromMetadata(t *testing.T, metadata map[string]interface{}) []string {
@@ -3377,12 +4730,11 @@ func createFakeSecretKeyAssociation(
 	return resp
 }
 
-func createFakeAssociationWithDeleteMode(
+func createFakeDeleteModeAssociation(
 	t *testing.T,
 	b logical.Backend,
 	storage logical.Storage,
-	deleteMode string,
-) {
+) *logical.Response {
 	t.Helper()
 	markAppDBSyncable(t, b, storage)
 	resp := handleRequest(t, b, storage, logical.UpdateOperation, "associations/app/db", map[string]interface{}{
@@ -3391,9 +4743,10 @@ func createFakeAssociationWithDeleteMode(
 		"resolved_name":    "prod/app/db",
 		"granularity":      syncObjectIDSecretPath,
 		"format":           defaultAssociationFormat,
-		"delete_mode":      deleteMode,
+		"delete_mode":      deleteModeDelete,
 	})
 	assertNoErrorResponse(t, resp)
+	return resp
 }
 
 func createFakeAssociationWithResolvedName(
@@ -3429,6 +4782,91 @@ func planDefaultFakeAssociation(
 	})
 }
 
+type recordingObserver struct {
+	operations []observability.OperationEvent
+}
+
+func (*recordingObserver) QueueDepth(context.Context, string, int) {}
+
+func (r *recordingObserver) Operation(_ context.Context, event observability.OperationEvent) {
+	r.operations = append(r.operations, event)
+}
+
+func (*recordingObserver) ProviderRequest(context.Context, observability.ProviderRequestEvent) {}
+
+func (*recordingObserver) ReadinessCheck(context.Context, observability.ReadinessCheckEvent) {}
+
+func (*recordingObserver) RemoteMutationBlocked(context.Context, observability.RemoteMutationBlockedEvent) {
+}
+
+func (*recordingObserver) ReconcileRun(context.Context, observability.ReconcileRunEvent) {}
+
+func (*recordingObserver) QueueCapacity(context.Context, observability.QueueCapacityEvent) {}
+
+func (*recordingObserver) RestoreGuardActive(context.Context, bool) {}
+
+type contextCanceledProvider struct {
+	cancel context.CancelFunc
+}
+
+func (contextCanceledProvider) Type() string {
+	return "ctxcancel"
+}
+
+func (contextCanceledProvider) Capabilities() providers.Capabilities {
+	return providers.Capabilities{
+		SupportsValueReadback:       true,
+		SupportsMetadataReadback:    true,
+		SupportsPayloadHashMetadata: true,
+		SupportsUpdateIfOwned:       true,
+		SupportsDeleteIfOwned:       true,
+		SupportsSecretPath:          true,
+		MaxPayloadBytes:             1024 * 1024,
+	}
+}
+
+func (contextCanceledProvider) Validate(context.Context, providers.DestinationConfig) error {
+	return nil
+}
+
+func (contextCanceledProvider) Plan(context.Context, providers.PlanRequest) (*providers.PlanResult, error) {
+	return &providers.PlanResult{Action: providers.PlanActionCreate}, nil
+}
+
+func (p contextCanceledProvider) Upsert(ctx context.Context, _ providers.UpsertRequest) (*providers.SyncResult, error) {
+	if p.cancel != nil {
+		p.cancel()
+	}
+	if ctx.Err() != nil {
+		return nil, &providers.Error{
+			Class:   providers.ErrorClassUnavailable,
+			Message: "redacted provider request failed",
+		}
+	}
+	return &providers.SyncResult{RemoteVersion: "ctxcancel"}, nil
+}
+
+func (p contextCanceledProvider) Delete(ctx context.Context, _ providers.DeleteRequest) (*providers.SyncResult, error) {
+	if p.cancel != nil {
+		p.cancel()
+	}
+	if ctx.Err() != nil {
+		return nil, &providers.Error{
+			Class:   providers.ErrorClassUnavailable,
+			Message: "redacted provider request failed",
+		}
+	}
+	return &providers.SyncResult{RemoteVersion: "ctxcancel-deleted"}, nil
+}
+
+func (contextCanceledProvider) ReadState(context.Context, providers.ReadStateRequest) (*providers.RemoteState, error) {
+	return &providers.RemoteState{Exists: true, OwnershipKnown: true, Owned: true}, nil
+}
+
+func (contextCanceledProvider) Health(context.Context, providers.DestinationConfig) (*providers.HealthResult, error) {
+	return &providers.HealthResult{Healthy: true}, nil
+}
+
 func markAppDBSyncable(t *testing.T, b logical.Backend, storage logical.Storage) {
 	t.Helper()
 	resp := handleRequest(t, b, storage, logical.UpdateOperation, "metadata/app/db", map[string]interface{}{
@@ -3458,7 +4896,5 @@ func assertSyncedStatusObject(t *testing.T, raw interface{}, operationID string)
 	if got := object["remote_version"]; got != "fake" {
 		t.Fatalf("object remote version = %v, want fake", got)
 	}
-	if got := object["payload_sha256"].(string); !strings.HasPrefix(got, "sha256:") {
-		t.Fatalf("object payload_sha256 = %q, want sha256 prefix", got)
-	}
+	assertNoPayloadHash(t, object)
 }

@@ -2,13 +2,22 @@ package backend
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/adfinis/openbao-plugin-secrets-sync/internal/outbox"
 	"github.com/openbao/openbao/sdk/v2/logical"
 )
+
+var errQueuedOperationClaimed = errors.New("queued operation is currently claimed")
+
+func isQueuedOperationClaimedError(err error) bool {
+	return errors.Is(err, errQueuedOperationClaimed)
+}
 
 func getMetadata(ctx context.Context, storage logical.Storage, path string) (*metadataRecord, error) {
 	entry, err := storage.Get(ctx, metadataStorageKey(path))
@@ -127,12 +136,19 @@ func pruneExcessVersions(ctx context.Context, storage logical.Storage, path stri
 		metadata.OldestVersion = oldestMetadataVersion(metadata)
 		return nil
 	}
+	protectedVersions, err := queuedUpsertVersionsForPath(ctx, storage, path)
+	if err != nil {
+		return err
+	}
 	for version := range metadata.Versions {
 		versionNumber, err := strconv.Atoi(version)
 		if err != nil {
 			return err
 		}
 		if versionNumber >= keepFrom {
+			continue
+		}
+		if _, protected := protectedVersions[versionNumber]; protected {
 			continue
 		}
 		if err := deleteVersion(ctx, storage, path, versionNumber); err != nil {
@@ -165,6 +181,25 @@ func metadataVersionNumbers(metadata *metadataRecord) []int {
 	return versions
 }
 
+func queuedUpsertVersionsForPath(ctx context.Context, storage logical.Storage, path string) (map[int]struct{}, error) {
+	ids, err := listQueuedOutboxIDsForPath(ctx, storage, path)
+	if err != nil {
+		return nil, err
+	}
+	versions := make(map[int]struct{})
+	for _, id := range ids {
+		record, err := getOutbox(ctx, storage, id)
+		if err != nil {
+			return nil, err
+		}
+		if record == nil || record.Type != outbox.OperationTypeUpsert {
+			continue
+		}
+		versions[record.Version] = struct{}{}
+	}
+	return versions, nil
+}
+
 func putEnqueueIntent(ctx context.Context, storage logical.Storage, record enqueueIntentRecord) error {
 	entry, err := logical.StorageEntryJSON(enqueueIntentStorageKey(record.Path, record.Version), record)
 	if err != nil {
@@ -191,6 +226,10 @@ func getEnqueueIntent(
 		return nil, err
 	}
 	return &record, nil
+}
+
+func deleteEnqueueIntent(ctx context.Context, storage logical.Storage, path string, version int) error {
+	return storage.Delete(ctx, enqueueIntentStorageKey(path, version))
 }
 
 func listEnqueueIntents(ctx context.Context, storage logical.Storage) ([]enqueueIntentRecord, error) {
@@ -312,7 +351,7 @@ func putAssociation(ctx context.Context, storage logical.Storage, record associa
 		return err
 	}
 	reservationEntry, err := logical.StorageEntryJSON(
-		associationNameStorageKey(record.DestinationRef, record.ResolvedName, record.ID),
+		associationNameStorageKey(record.DestinationRef, record.reservationName(), record.ID),
 		record.Path,
 	)
 	if err != nil {
@@ -353,7 +392,7 @@ func deleteAssociation(ctx context.Context, storage logical.Storage, record asso
 	); err != nil {
 		return err
 	}
-	return storage.Delete(ctx, associationNameStorageKey(record.DestinationRef, record.ResolvedName, record.ID))
+	return storage.Delete(ctx, associationNameStorageKey(record.DestinationRef, record.reservationName(), record.ID))
 }
 
 func listAssociationIDsForPath(ctx context.Context, storage logical.Storage, path string) ([]string, error) {
@@ -397,6 +436,15 @@ func listAssociationNameReservationIDs(
 }
 
 func putOutbox(ctx context.Context, storage logical.Storage, record outboxRecord) error {
+	existing, err := getOutbox(ctx, storage, record.ID)
+	if err != nil {
+		return err
+	}
+	if existing != nil {
+		if err := deleteOutboxIndexes(ctx, storage, *existing); err != nil {
+			return err
+		}
+	}
 	entry, err := logical.StorageEntryJSON(outboxStorageKey(record.ID), record)
 	if err != nil {
 		return err
@@ -404,18 +452,69 @@ func putOutbox(ctx context.Context, storage logical.Storage, record outboxRecord
 	if err := storage.Put(ctx, entry); err != nil {
 		return err
 	}
+	return putOutboxIndexes(ctx, storage, record)
+}
+
+func putOutboxIndexes(ctx context.Context, storage logical.Storage, record outboxRecord) error {
 	indexEntry, err := logical.StorageEntryJSON(outboxByPathStorageKey(record.Path, record.ID), record.ID)
 	if err != nil {
 		return err
 	}
-	return storage.Put(ctx, indexEntry)
+	if err := storage.Put(ctx, indexEntry); err != nil {
+		return err
+	}
+	if record.State == "" {
+		return nil
+	}
+	stateEntry, err := logical.StorageEntryJSON(outboxByStateStorageKey(record.State, record.ID), record.ID)
+	if err != nil {
+		return err
+	}
+	if err := storage.Put(ctx, stateEntry); err != nil {
+		return err
+	}
+	if dueTime := outboxDueIndexTime(record); dueTime != "" {
+		dueEntry, err := logical.StorageEntryJSON(outboxByDueStorageKey(dueTime, record.ID), record.ID)
+		if err != nil {
+			return err
+		}
+		return storage.Put(ctx, dueEntry)
+	}
+	return nil
 }
 
 func deleteOutbox(ctx context.Context, storage logical.Storage, record outboxRecord) error {
+	existing, err := getOutbox(ctx, storage, record.ID)
+	if err != nil {
+		return err
+	}
 	if err := storage.Delete(ctx, outboxStorageKey(record.ID)); err != nil {
 		return err
 	}
-	return storage.Delete(ctx, outboxByPathStorageKey(record.Path, record.ID))
+	if err := deleteOutboxIndexes(ctx, storage, record); err != nil {
+		return err
+	}
+	if existing != nil {
+		return deleteOutboxIndexes(ctx, storage, *existing)
+	}
+	return nil
+}
+
+func deleteOutboxIndexes(ctx context.Context, storage logical.Storage, record outboxRecord) error {
+	if record.Path != "" {
+		if err := storage.Delete(ctx, outboxByPathStorageKey(record.Path, record.ID)); err != nil {
+			return err
+		}
+	}
+	if record.State != "" {
+		if err := storage.Delete(ctx, outboxByStateStorageKey(record.State, record.ID)); err != nil {
+			return err
+		}
+	}
+	if dueTime := outboxDueIndexTime(record); dueTime != "" {
+		return storage.Delete(ctx, outboxByDueStorageKey(dueTime, record.ID))
+	}
+	return nil
 }
 
 func getOutbox(ctx context.Context, storage logical.Storage, id string) (*outboxRecord, error) {
@@ -433,16 +532,56 @@ func getOutbox(ctx context.Context, storage logical.Storage, id string) (*outbox
 	return &record, nil
 }
 
-func listOutboxIDs(ctx context.Context, storage logical.Storage) ([]string, error) {
-	return storage.List(ctx, outboxStoragePrefix)
+func listQueuedOutboxIDs(ctx context.Context, storage logical.Storage) ([]string, error) {
+	return listOutboxIDsForStates(ctx, storage, outboxStatePending, outboxStateRetryWait)
 }
 
-func listQueuedOutboxIDs(ctx context.Context, storage logical.Storage) ([]string, error) {
-	ids, err := listOutboxIDs(ctx, storage)
+func listOutboxIDsForState(ctx context.Context, storage logical.Storage, state string) ([]string, error) {
+	return storage.List(ctx, outboxByStateStoragePrefix+state+"/")
+}
+
+func listOutboxIDsForStates(ctx context.Context, storage logical.Storage, states ...string) ([]string, error) {
+	ids := []string{}
+	for _, state := range states {
+		stateIDs, err := listOutboxIDsForState(ctx, storage, state)
+		if err != nil {
+			return nil, err
+		}
+		ids = append(ids, stateIDs...)
+	}
+	return ids, nil
+}
+
+func listDueOutboxIDs(ctx context.Context, storage logical.Storage, now time.Time) ([]string, error) {
+	keys, err := logical.CollectKeysWithPrefix(ctx, storage, outboxByDueStoragePrefix)
 	if err != nil {
 		return nil, err
 	}
-	return filterQueuedOutboxIDs(ctx, storage, ids)
+	sort.Strings(keys)
+	ids := []string{}
+	nowString := now.Format(timeFormatRFC3339)
+	for _, key := range keys {
+		trimmed := strings.TrimPrefix(key, outboxByDueStoragePrefix)
+		dueTime, id, ok := strings.Cut(trimmed, "/")
+		if !ok {
+			continue
+		}
+		if dueTime > nowString {
+			break
+		}
+		ids = append(ids, id)
+	}
+	return ids, nil
+}
+
+func outboxDueIndexTime(record outboxRecord) string {
+	if !isQueuedOutboxState(record.State) {
+		return ""
+	}
+	if _, err := time.Parse(timeFormatRFC3339, record.NotBefore); err == nil {
+		return record.NotBefore
+	}
+	return "0001-01-01T00:00:00Z"
 }
 
 func listOutboxIDsForPath(ctx context.Context, storage logical.Storage, path string) ([]string, error) {
@@ -466,6 +605,9 @@ func deleteQueuedOutboxForAssociation(
 		if record == nil || record.AssociationID != association.ID {
 			continue
 		}
+		if isOutboxClaimActive(*record, nowUTC()) {
+			return fmt.Errorf("%w: %s", errQueuedOperationClaimed, record.ID)
+		}
 		if err := deleteOutbox(ctx, storage, *record); err != nil {
 			return err
 		}
@@ -477,7 +619,6 @@ func cancelQueuedOutboxForAssociation(
 	ctx context.Context,
 	storage logical.Storage,
 	association associationRecord,
-	now string,
 ) ([]string, error) {
 	ids, err := listQueuedOutboxIDsForPath(ctx, storage, association.Path)
 	if err != nil {
@@ -492,10 +633,10 @@ func cancelQueuedOutboxForAssociation(
 		if record == nil || record.AssociationID != association.ID {
 			continue
 		}
-		record.State = outboxStateCanceled
-		record.UpdatedTime = now
-		clearOutboxClaim(record)
-		if err := putOutbox(ctx, storage, *record); err != nil {
+		if isOutboxClaimActive(*record, nowUTC()) {
+			return nil, fmt.Errorf("%w: %s", errQueuedOperationClaimed, record.ID)
+		}
+		if err := deleteOutbox(ctx, storage, *record); err != nil {
 			return nil, err
 		}
 		canceledIDs = append(canceledIDs, record.ID)
@@ -527,7 +668,7 @@ func queuedUpsertIDsForPathVersion(
 	return matchingIDs, nil
 }
 
-func cancelQueuedOutboxIDs(ctx context.Context, storage logical.Storage, ids []string, now string) error {
+func cancelQueuedOutboxIDs(ctx context.Context, storage logical.Storage, ids []string) error {
 	for _, id := range ids {
 		record, err := getOutbox(ctx, storage, id)
 		if err != nil {
@@ -536,11 +677,27 @@ func cancelQueuedOutboxIDs(ctx context.Context, storage logical.Storage, ids []s
 		if record == nil || !isQueuedOutboxState(record.State) {
 			continue
 		}
-		record.State = outboxStateCanceled
-		record.UpdatedTime = now
-		clearOutboxClaim(record)
-		if err := putOutbox(ctx, storage, *record); err != nil {
+		if isOutboxClaimActive(*record, nowUTC()) {
+			return fmt.Errorf("%w: %s", errQueuedOperationClaimed, record.ID)
+		}
+		if err := deleteOutbox(ctx, storage, *record); err != nil {
 			return err
+		}
+	}
+	return nil
+}
+
+func ensureQueuedOutboxIDsUnclaimed(ctx context.Context, storage logical.Storage, ids []string) error {
+	for _, id := range ids {
+		record, err := getOutbox(ctx, storage, id)
+		if err != nil {
+			return err
+		}
+		if record == nil || !isQueuedOutboxState(record.State) {
+			continue
+		}
+		if isOutboxClaimActive(*record, nowUTC()) {
+			return fmt.Errorf("%w: %s", errQueuedOperationClaimed, record.ID)
 		}
 	}
 	return nil
@@ -576,6 +733,13 @@ func isQueuedOutboxState(state string) bool {
 }
 
 func putStatus(ctx context.Context, storage logical.Storage, record statusRecord) error {
+	existing, err := getStatus(ctx, storage, record.Path, record.AssociationID, record.ObjectID)
+	if err != nil {
+		return err
+	}
+	if existing != nil && record.Version < existing.Version {
+		return nil
+	}
 	entry, err := logical.StorageEntryJSON(
 		statusStorageKey(record.Path, record.AssociationID, record.ObjectID),
 		record,

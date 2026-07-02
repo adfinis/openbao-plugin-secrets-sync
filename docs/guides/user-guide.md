@@ -79,12 +79,21 @@ bao write secret-sync/destinations/PROVIDER_TYPE/NAME \
   allowed_resolved_name_prefixes=openbao-plugin-secrets-sync/team-a/
 ```
 
+Destination writes validate the merged provider config before storing it.
+Non-empty fields from another provider type are rejected.
+
 `allowed_source_path_prefixes` uses OpenBao source path segment boundaries:
 `apps/team-a` allows `apps/team-a/db` but not `apps/team-alpha/db`.
-`allowed_resolved_name_prefixes` is a literal remote-name prefix. Keep a
-trailing `/` when you want a folder-like boundary.
+`allowed_resolved_name_prefixes` uses exact or `/`-boundary matches:
+`openbao-plugin-secrets-sync/team-a` allows
+`openbao-plugin-secrets-sync/team-a/db` but not
+`openbao-plugin-secrets-sync/team-alpha/db`.
 
 ## Write source data
+
+Source paths are slash-separated OpenBao paths. They cannot contain empty,
+`.` or `..` segments, cannot contain the reserved `versions` segment, and
+cannot end in the reserved `plan` segment.
 
 Mark a source path as syncable:
 
@@ -137,6 +146,14 @@ destination needs a different remote name, payload shape, or delete behavior.
 Create and plan responses include a `defaults` object beside the effective
 values so these defaults are visible in CLI and API output.
 
+When updating an existing association, omitted optional fields keep the stored
+values if the source path and destination match exactly one association. A
+partial update such as changing only `delete_mode` will not change granularity,
+name template, format, or enabled state.
+Changing an existing association from `enabled=false` to `enabled=true`
+through the same write path queues the current source version, matching the
+explicit lifecycle enable endpoint.
+
 For provider-specific association examples, supported granularities, and remote
 name constraints, see the [provider guides](../providers/README.md).
 
@@ -165,9 +182,17 @@ Inspect queue summary:
 bao read secret-sync/queue
 ```
 
-Queue summaries include pending, retry-wait, terminal, and canceled counters.
+Queue summaries include pending, retry-wait, claimed, and terminal counters.
+`queue_capacity=0` is an explicit enqueue freeze: writes that would create
+sync work fail before committing a new source version.
 `oldest_age_seconds` reports the age of the oldest pending or retry-wait
-operation.
+operation. Successful and canceled operations are removed from the queue;
+inspect `status/<path>` for success evidence.
+
+Newer writes supersede older inactive queued upserts for the same association
+object. Current-version deletes and destroys cancel queued upserts and queue
+remote deletes when the association uses `delete_mode=delete`; undeleting the
+current version queues replacement upserts for enabled associations.
 
 Inspect, retry, or cancel one operation:
 
@@ -176,6 +201,9 @@ bao read secret-sync/queue/<operation-id>
 bao write -force secret-sync/queue/<operation-id>/retry
 bao write -force secret-sync/queue/<operation-id>/cancel
 ```
+
+Cancel discards queued work. Re-enqueue with an association sync or source
+write if the remote mutation is needed again.
 
 ## Reconcile remote state
 
@@ -219,10 +247,10 @@ Common states in the current implementation include:
 
 For the common single-object case, status includes top-level summary fields
 such as `association_id`, `destination_ref`, `resolved_name`,
-`payload_sha256`, `remote_version`, and `last_operation_id`. The full
-per-object list is still available under `objects`. Status records include
-versions, destination references, remote names, and payload hashes. They must
-not include secret payload values.
+`remote_version`, and `last_operation_id`. The full per-object list is still
+available under `objects`. Status records include versions, destination
+references, remote names, operation ids, and error classes. They must not
+include secret payload values or payload hashes.
 
 Use JSON output when copying identifiers into follow-up commands:
 

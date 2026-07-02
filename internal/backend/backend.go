@@ -16,6 +16,7 @@ import (
 	"github.com/adfinis/openbao-plugin-secrets-sync/internal/version"
 	"github.com/openbao/openbao/sdk/v2/framework"
 	"github.com/openbao/openbao/sdk/v2/helper/consts"
+	"github.com/openbao/openbao/sdk/v2/helper/locksutil"
 	"github.com/openbao/openbao/sdk/v2/logical"
 )
 
@@ -44,6 +45,7 @@ func Backend(_ *logical.BackendConfig) *secretSyncBackend {
 		),
 		observer:         observability.New(),
 		dispatchWorkerID: bestEffortRuntimeID("worker"),
+		writeLocks:       locksutil.CreateLocks(),
 	}
 	b.Backend = &framework.Backend{
 		Help: strings.TrimSpace(backendHelp),
@@ -80,8 +82,9 @@ type secretSyncBackend struct {
 	*framework.Backend
 
 	cacheMu          sync.Mutex
-	dispatchMu       sync.Mutex
+	enqueueMu        sync.Mutex
 	dispatchWorkerID string
+	writeLocks       []*locksutil.LockEntry
 	providerRegistry *providers.Registry
 	observer         observability.Recorder
 }
@@ -127,10 +130,16 @@ func (b *secretSyncBackend) periodic(ctx context.Context, req *logical.Request) 
 		return nil
 	}
 	now := nowUTC()
-	if err := recoverIncompleteEnqueueIntents(ctx, req.Storage, now); err != nil {
+	if err := recoverIncompleteEnqueueIntentsLimit(
+		ctx,
+		req.Storage,
+		now,
+		defaultPeriodicRecoveryMaxIntents,
+	); err != nil {
 		return err
 	}
-	return b.processDueOutbox(ctx, req.Storage, now)
+	_, err = b.processDueOutboxLimit(ctx, req.Storage, now, defaultPeriodicMaxOperations)
+	return err
 }
 
 func (b *secretSyncBackend) remoteMutationAllowed() bool {
@@ -159,7 +168,7 @@ const backendHelp = `
 The OpenBao secret sync backend stores local source secrets and asynchronously
 synchronizes eligible secrets to configured external destinations.
 
-This scaffold exposes the initial plugin paths and versioned backend shape. The
-KV, outbox, provider, and reconciliation implementations are added in focused
-implementation phases.
+It provides versioned source storage, destination configuration, associations,
+durable outbox dispatch, queue inspection, status reporting, and manual
+reconciliation for this mount.
 `

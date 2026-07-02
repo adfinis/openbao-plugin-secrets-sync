@@ -80,9 +80,9 @@ account_id
 
 The first implementation has unit tests that validate generated metric
 attributes against this policy. Status and API responses may still expose
-operator-facing metadata such as paths and payload hashes; this policy is
-specific to telemetry labels because telemetry is usually aggregated and
-exported outside the OpenBao trust boundary.
+operator-facing metadata such as paths and remote names, but not payload
+hashes; this policy is stricter for telemetry labels because telemetry is
+usually aggregated and exported outside the OpenBao trust boundary.
 
 ## Exporter Boundary
 

@@ -22,14 +22,15 @@ const (
 	associationByDestPrefix    = "associations_by_destination/"
 	associationNamePrefix      = "association_names/"
 	outboxStoragePrefix        = "outbox/"
+	outboxByDueStoragePrefix   = "outbox_by_due/"
 	outboxByPathStoragePrefix  = "outbox_by_path/"
+	outboxByStateStoragePrefix = "outbox_by_state/"
 	defaultQueueCapacity       = 1000
 	defaultMaxVersions         = 10
 	defaultDeleteVersionAfter  = "0s"
 	outboxStatePending         = "pending"
 	outboxStateRetryWait       = "retry_wait"
 	outboxStateFailedTerminal  = "failed_terminal"
-	outboxStateSucceeded       = "succeeded"
 	outboxStateCanceled        = "canceled"
 	syncGranularitySecretPath  = "secret-path"
 	syncGranularitySecretKey   = "secret-key"
@@ -85,6 +86,7 @@ type versionMetadata struct {
 }
 
 type metadataRecord struct {
+	Generation         string                     `json:"generation"`
 	CurrentVersion     int                        `json:"current_version"`
 	OldestVersion      int                        `json:"oldest_version"`
 	MaxVersions        int                        `json:"max_versions"`
@@ -131,10 +133,17 @@ type associationRecord struct {
 	UpdatedTime     string `json:"updated_time"`
 }
 
+func (record associationRecord) reservationName() string {
+	if record.Granularity == syncGranularitySecretKey {
+		return record.NameTemplate
+	}
+	return record.ResolvedName
+}
+
 type enqueueIntentRecord struct {
 	Path          string                   `json:"path"`
+	Generation    string                   `json:"generation"`
 	Version       int                      `json:"version"`
-	OperationIDs  []string                 `json:"operation_ids"`
 	Operations    []enqueueIntentOperation `json:"operations"`
 	Complete      bool                     `json:"complete"`
 	CreatedTime   string                   `json:"created_time"`
@@ -196,6 +205,12 @@ func normalizeSourcePath(input string) (string, error) {
 		if part == "" || part == "." || part == ".." {
 			return "", fmt.Errorf("path contains invalid segment %q", part)
 		}
+		if part == "versions" {
+			return "", fmt.Errorf("path contains reserved segment %q", part)
+		}
+	}
+	if parts[len(parts)-1] == "plan" {
+		return "", fmt.Errorf("path must not end with reserved segment %q", "plan")
 	}
 	return strings.Join(parts, "/"), nil
 }
@@ -210,6 +225,10 @@ func versionStorageKey(path string, version int) string {
 
 func enqueueIntentStorageKey(path string, version int) string {
 	return enqueueIntentStoragePrefix + path + "/" + strconv.Itoa(version)
+}
+
+func outboxByStateStorageKey(state string, id string) string {
+	return outboxByStateStoragePrefix + state + "/" + id
 }
 
 func destinationStorageKey(destinationType string, name string) string {
@@ -240,6 +259,10 @@ func outboxByPathStorageKey(path string, id string) string {
 	return outboxByPathStoragePrefix + path + "/" + id
 }
 
+func outboxByDueStorageKey(dueTime string, id string) string {
+	return outboxByDueStoragePrefix + dueTime + "/" + id
+}
+
 func statusStorageKey(path string, associationID string, objectID string) string {
 	return statusStoragePrefix + path + "/" + associationID + "/" + objectID
 }
@@ -266,19 +289,21 @@ func nameReservationID(resolvedName string) string {
 }
 
 func newOperationID(
+	generation string,
 	path string,
 	version int,
 	associationID string,
 	objectID string,
 	operationType outbox.OperationType,
 ) string {
-	raw := fmt.Sprintf("%s:%d:%s:%s:%s", path, version, associationID, objectID, operationType)
+	raw := fmt.Sprintf("%s:%s:%d:%s:%s:%s", generation, path, version, associationID, objectID, operationType)
 	sum := sha256.Sum256([]byte(raw))
 	return "op-" + hex.EncodeToString(sum[:8]) + "-" + strconv.Itoa(version)
 }
 
 func newMetadataRecord() metadataRecord {
 	return metadataRecord{
+		Generation:         bestEffortRuntimeID("gen"),
 		MaxVersions:        defaultMaxVersions,
 		DeleteVersionAfter: defaultDeleteVersionAfter,
 		CustomMetadata:     make(map[string]string),

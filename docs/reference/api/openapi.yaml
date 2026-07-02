@@ -107,6 +107,7 @@ paths:
       tags: [destinations]
       operationId: writeDestination
       summary: Create or update one destination configuration.
+      description: Validates merged provider config before storage. Non-empty fields outside the selected provider type are rejected.
       x-openbao-operation: update
       parameters:
         - $ref: "#/components/parameters/DestinationType"
@@ -119,7 +120,7 @@ paths:
               $ref: "#/components/schemas/DestinationWriteRequest"
       responses:
         "200":
-          description: Destination stored. Empty response body on success.
+          description: Destination validated and stored. Empty response body on success.
           content:
             application/json:
               schema:
@@ -345,6 +346,7 @@ paths:
       tags: [source-data]
       operationId: deleteLatestSourceData
       summary: Soft-delete the latest local source secret version.
+      description: Cancels queued upserts for the latest version and enqueues remote deletes for associations with `delete_mode=delete`.
       x-openbao-operation: delete
       parameters:
         - $ref: "#/components/parameters/SourcePath"
@@ -361,6 +363,7 @@ paths:
       tags: [source-data]
       operationId: softDeleteSourceVersions
       summary: Soft-delete selected local source versions.
+      description: When the current version is selected, queued upserts are canceled and remote deletes are enqueued for associations with `delete_mode=delete`.
       x-openbao-operation: update
       parameters:
         - $ref: "#/components/parameters/SourcePath"
@@ -379,6 +382,7 @@ paths:
       tags: [source-data]
       operationId: undeleteSourceVersions
       summary: Undelete selected local source versions.
+      description: When the current version is selected, replacement upserts are enqueued for enabled associations.
       x-openbao-operation: update
       parameters:
         - $ref: "#/components/parameters/SourcePath"
@@ -397,6 +401,7 @@ paths:
       tags: [source-data]
       operationId: destroySourceVersions
       summary: Permanently destroy selected local source versions.
+      description: When the current version is selected, queued upserts are canceled and remote deletes are enqueued for associations with `delete_mode=delete`.
       x-openbao-operation: update
       parameters:
         - $ref: "#/components/parameters/SourcePath"
@@ -443,6 +448,7 @@ paths:
       tags: [associations]
       operationId: writeAssociation
       summary: Create or update a source-to-destination association.
+      description: On update, omitted optional fields inherit stored values when the source path and destination identify exactly one existing association. Enabling an existing disabled association queues the current source version.
       x-openbao-operation: update
       parameters:
         - $ref: "#/components/parameters/SourcePath"
@@ -606,7 +612,7 @@ paths:
         - $ref: "#/components/parameters/OperationID"
       responses:
         "200":
-          description: Durable queue operation without source payload data.
+          description: Durable queue operation without source payload data. Successful operations are pruned after status persistence.
           content:
             application/json:
               schema:
@@ -616,13 +622,13 @@ paths:
     post:
       tags: [queue]
       operationId: retryQueueOperation
-      summary: Move one queue operation back to pending.
+      summary: Retry one retry-wait or terminal failed queue operation.
       x-openbao-operation: update
       parameters:
         - $ref: "#/components/parameters/OperationID"
       responses:
         "200":
-          description: Updated operation.
+          description: Operation moved back to pending.
           content:
             application/json:
               schema:
@@ -632,13 +638,13 @@ paths:
     post:
       tags: [queue]
       operationId: cancelQueueOperation
-      summary: Cancel one pending or retry-wait operation.
+      summary: Discard one pending or retry-wait operation.
       x-openbao-operation: update
       parameters:
         - $ref: "#/components/parameters/OperationID"
       responses:
         "200":
-          description: Updated operation.
+          description: Canceled operation snapshot. The operation is removed from durable queue storage.
           content:
             application/json:
               schema:
@@ -708,7 +714,7 @@ components:
       schema:
         type: string
         example: app/db
-      description: Slash-containing OpenBao source path. Clients may need to preserve or encode slashes.
+      description: Slash-containing OpenBao source path. Clients may need to preserve or encode slashes. Segments must not be empty, `.`, `..`, or `versions`; the path must not end in `plan`.
     AssociationID:
       name: association_id
       in: path
@@ -767,6 +773,7 @@ components:
           type: integer
           minimum: 0
           default: 1000
+          description: Maximum queued operations; 0 rejects new enqueue-producing writes.
       additionalProperties: false
 
     ConfigResponse:
@@ -795,6 +802,7 @@ components:
           type: integer
         queue_capacity:
           type: integer
+          description: Maximum queued operations; 0 rejects new enqueue-producing writes.
 
     DestinationWriteRequest:
       type: object
@@ -813,7 +821,7 @@ components:
           type: array
           items:
             type: string
-          description: Resolved remote-name prefixes allowed to use the destination.
+          description: Resolved remote-name prefixes allowed to use the destination. Matches are exact or on a `/` boundary.
         region:
           type: string
           description: AWS region.
@@ -916,6 +924,7 @@ components:
           type: array
           items:
             type: string
+          description: Resolved remote-name prefixes allowed to use the destination. Matches are exact or on a `/` boundary.
         config:
           type: object
           additionalProperties:
@@ -1244,14 +1253,12 @@ components:
                   type: integer
                 deletion_time:
                   type: string
-                delete_operation_ids:
+                sync_operation_ids:
                   type: array
                   items:
                     type: string
-                canceled_operation_ids:
-                  type: array
-                  items:
-                    type: string
+                sync_state:
+                  type: string
 
     VersionMutationRequest:
       type: object
@@ -1266,6 +1273,7 @@ components:
 
     AssociationWriteRequest:
       type: object
+      description: Create defaults apply to new associations. Updates inherit omitted optional fields from the matching stored association when path and destination are unambiguous. Setting enabled=true on an existing disabled association queues the current source version.
       properties:
         destination_type:
           type: string
@@ -1435,8 +1443,6 @@ components:
               type: string
             format:
               type: string
-            payload_sha256:
-              type: string
             payload_bytes:
               type: integer
             error_class:
@@ -1459,8 +1465,6 @@ components:
         action:
           type: string
           enum: [create, update, noop, conflict, blocked]
-        payload_sha256:
-          type: string
         payload_bytes:
           type: integer
         error_class:
@@ -1491,8 +1495,6 @@ components:
             destination_ref:
               type: string
             resolved_name:
-              type: string
-            payload_sha256:
               type: string
             remote_version:
               type: string
@@ -1525,8 +1527,6 @@ components:
           $ref: "#/components/schemas/SyncState"
         version:
           type: integer
-        payload_sha256:
-          type: string
         remote_version:
           type: string
         last_operation_id:
@@ -1572,8 +1572,6 @@ components:
               type: integer
             queue_terminal:
               type: integer
-            queue_canceled:
-              type: integer
             queue_oldest_age_seconds:
               type: integer
             queue_capacity:
@@ -1595,8 +1593,6 @@ components:
         claimed:
           type: integer
         terminal:
-          type: integer
-        canceled:
           type: integer
         oldest_age_seconds:
           type: integer
@@ -1633,7 +1629,7 @@ components:
           type: string
         state:
           type: string
-          enum: [pending, retry_wait, failed_terminal, succeeded, canceled]
+          enum: [pending, retry_wait, failed_terminal, canceled]
         attempts:
           type: integer
         not_before:
@@ -1688,16 +1684,12 @@ components:
           $ref: "#/components/schemas/SyncState"
         version:
           type: integer
-        payload_sha256:
-          type: string
         remote_exists:
           type: boolean
         remote_ownership_known:
           type: boolean
         remote_owned:
           type: boolean
-        remote_payload_sha256:
-          type: string
         remote_source_version:
           type: integer
         remote_version:

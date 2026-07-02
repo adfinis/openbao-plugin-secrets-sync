@@ -106,6 +106,18 @@ bao write secret-sync/associations/app/db/plan \
 Association create and plan responses also include a `defaults` object so the
 implicit shape is visible in CLI and API output.
 
+When updating an existing association, omitted optional fields keep the stored
+association values when the source path and destination identify a single
+existing association. This prevents partial updates from changing granularity,
+name template, delete mode, or enabled state by accident. Use the read output
+above when you need to make the update shape explicit.
+
+Current-version source lifecycle endpoints participate in sync. `DELETE
+data/<path>`, `delete/<path>`, and `destroy/<path>` cancel stale queued upserts
+and enqueue remote deletes for associations with `delete_mode=delete`.
+`undelete/<path>` on the current version queues replacement upserts for enabled
+associations.
+
 Read existing associations:
 
 ```sh
@@ -131,6 +143,11 @@ bao read secret-sync/queue
 Queue summaries include `capacity` and `utilization`. Treat sustained high
 utilization as backpressure: increase drain frequency, reduce producer rate, or
 raise `queue_capacity` after checking storage and provider limits.
+Set `queue_capacity=0` only for a deliberate enqueue freeze; existing queued
+work can still drain.
+Successful operations are removed from the queue after object status is
+persisted; use `status/<path>` rather than `queue/<operation-id>` to confirm
+completed sync.
 
 For deterministic local testing or controlled catch-up, drain due operations:
 
@@ -150,6 +167,8 @@ Retry or cancel one operation:
 bao write -force secret-sync/queue/<operation-id>/retry
 bao write -force secret-sync/queue/<operation-id>/cancel
 ```
+
+Cancel discards queued work; it is not retained in the queue summary.
 
 `queue/drain` can execute remote mutations. Keep it operator-scoped.
 

@@ -449,9 +449,7 @@ func assertStatusModelFailure(
 	if strings.Contains(fmt.Sprint(object), modelSecretCanary) {
 		t.Fatalf("status object leaks secret canary: %#v", object)
 	}
-	if got := object["payload_sha256"].(string); !strings.HasPrefix(got, "sha256:") {
-		t.Fatalf("payload_sha256 = %q, want sha256 prefix", got)
-	}
+	assertNoPayloadHash(t, object)
 }
 
 func boolToInt(value bool) int {

@@ -16,16 +16,13 @@ import (
 )
 
 const (
-	maxAutomaticRetryAttempts = 3
-	retryBaseDelay            = 30 * time.Second
-	retryMaxDelay             = 5 * time.Minute
-	outboxClaimLease          = 5 * time.Minute
+	maxAutomaticRetryAttempts         = 3
+	retryBaseDelay                    = 30 * time.Second
+	retryMaxDelay                     = 5 * time.Minute
+	outboxClaimLease                  = 5 * time.Minute
+	defaultPeriodicMaxOperations      = 100
+	defaultPeriodicRecoveryMaxIntents = 100
 )
-
-func (b *secretSyncBackend) processDueOutbox(ctx context.Context, storage logical.Storage, now time.Time) error {
-	_, err := b.processDueOutboxLimit(ctx, storage, now, 0)
-	return err
-}
 
 func (b *secretSyncBackend) processDueOutboxLimit(
 	ctx context.Context,
@@ -33,14 +30,11 @@ func (b *secretSyncBackend) processDueOutboxLimit(
 	now time.Time,
 	maxOperations int,
 ) (int, error) {
-	b.dispatchMu.Lock()
-	defer b.dispatchMu.Unlock()
-
 	claimOwner, err := b.outboxClaimOwner(ctx, storage)
 	if err != nil {
 		return 0, err
 	}
-	ids, err := listOutboxIDs(ctx, storage)
+	ids, err := listDueOutboxIDs(ctx, storage, now)
 	if err != nil {
 		return 0, err
 	}
@@ -53,13 +47,15 @@ func (b *secretSyncBackend) processDueOutboxLimit(
 		if record == nil || !isDispatchableOutboxState(record.State) {
 			continue
 		}
-		if !isOutboxDue(*record, now) {
-			continue
-		}
 		if !isSupportedOperation(*record) {
+			if err := discardUnsupportedOutboxOperation(ctx, storage, *record); err != nil {
+				return processed, err
+			}
 			continue
 		}
+		b.enqueueMu.Lock()
 		claimed, ok, err := claimOutboxRecord(ctx, storage, *record, claimOwner, now)
+		b.enqueueMu.Unlock()
 		if err != nil {
 			return processed, err
 		}
@@ -133,22 +129,15 @@ func clearOutboxClaim(record *outboxRecord) {
 	record.ClaimAttempt = 0
 }
 
-func isOutboxDue(record outboxRecord, now time.Time) bool {
-	if record.NotBefore == "" {
-		return true
-	}
-	notBefore, err := time.Parse(timeFormatRFC3339, record.NotBefore)
-	if err != nil {
-		return true
-	}
-	return !notBefore.After(now)
-}
-
 func isSupportedOperation(record outboxRecord) bool {
 	if record.ObjectID == "" {
 		return false
 	}
 	return record.Type == outbox.OperationTypeUpsert || record.Type == outbox.OperationTypeDelete
+}
+
+func discardUnsupportedOutboxOperation(ctx context.Context, storage logical.Storage, record outboxRecord) error {
+	return deleteOutbox(ctx, storage, record)
 }
 
 func isDispatchableOutboxState(state string) bool {
@@ -177,6 +166,13 @@ func (b *secretSyncBackend) processUpsert(
 	record outboxRecord,
 	now time.Time,
 ) error {
+	stale, err := staleUpsertForCurrentVersion(ctx, storage, record)
+	if err != nil {
+		return err
+	}
+	if stale {
+		return cancelOutboxOperation(ctx, storage, record)
+	}
 	upsertContext, failure, err := b.loadUpsertContext(ctx, storage, record)
 	if err != nil {
 		return err
@@ -232,6 +228,12 @@ func (b *secretSyncBackend) processUpsert(
 		AssociationID: record.AssociationID,
 		ObjectID:      record.ObjectID,
 	})
+	if isDispatchContextCanceled(ctx, err) {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return ctxErr
+		}
+		return err
+	}
 	b.recordProviderRequest(
 		ctx,
 		upsertContext.provider.Type(),
@@ -253,15 +255,11 @@ func (b *secretSyncBackend) processUpsert(
 		result = &providers.SyncResult{}
 	}
 
-	record.State = outboxStateSucceeded
 	record.Attempts++
 	record.UpdatedTime = now.Format(timeFormatRFC3339)
 	clearOutboxClaim(&record)
-	if err := putOutbox(ctx, storage, record); err != nil {
-		return err
-	}
 	b.recordOperationSuccess(ctx, record)
-	return putStatus(ctx, storage, statusRecord{
+	if err := putStatus(ctx, storage, statusRecord{
 		Path:            record.Path,
 		Version:         record.Version,
 		AssociationID:   record.AssociationID,
@@ -274,7 +272,10 @@ func (b *secretSyncBackend) processUpsert(
 		LastOperationID: record.ID,
 		LastSuccessTime: now.Format(timeFormatRFC3339),
 		UpdatedTime:     now.Format(timeFormatRFC3339),
-	})
+	}); err != nil {
+		return err
+	}
+	return deleteOutbox(ctx, storage, record)
 }
 
 func (b *secretSyncBackend) processDelete(
@@ -328,6 +329,12 @@ func (b *secretSyncBackend) processDelete(
 		AssociationID: record.AssociationID,
 		ObjectID:      record.ObjectID,
 	})
+	if isDispatchContextCanceled(ctx, err) {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return ctxErr
+		}
+		return err
+	}
 	b.recordProviderRequest(
 		ctx,
 		deleteContext.provider.Type(),
@@ -348,15 +355,11 @@ func (b *secretSyncBackend) processDelete(
 		result = &providers.SyncResult{}
 	}
 
-	record.State = outboxStateSucceeded
 	record.Attempts++
 	record.UpdatedTime = now.Format(timeFormatRFC3339)
 	clearOutboxClaim(&record)
-	if err := putOutbox(ctx, storage, record); err != nil {
-		return err
-	}
 	b.recordOperationSuccess(ctx, record)
-	return putStatus(ctx, storage, statusRecord{
+	if err := putStatus(ctx, storage, statusRecord{
 		Path:            record.Path,
 		Version:         record.Version,
 		AssociationID:   record.AssociationID,
@@ -368,7 +371,10 @@ func (b *secretSyncBackend) processDelete(
 		LastOperationID: record.ID,
 		LastSuccessTime: now.Format(timeFormatRFC3339),
 		UpdatedTime:     now.Format(timeFormatRFC3339),
-	})
+	}); err != nil {
+		return err
+	}
+	return deleteOutbox(ctx, storage, record)
 }
 
 type upsertContext struct {
@@ -588,6 +594,19 @@ func providerErrorClass(err error) providers.ErrorClass {
 	return providers.ErrorClassInternal
 }
 
+func isDispatchContextCanceled(ctx context.Context, err error) bool {
+	if err == nil {
+		return false
+	}
+	if ctx.Err() != nil {
+		return true
+	}
+	if errors.Is(err, context.Canceled) {
+		return true
+	}
+	return errors.Is(err, context.DeadlineExceeded)
+}
+
 type operationFailure struct {
 	class         providers.ErrorClass
 	message       string
@@ -637,6 +656,21 @@ func markOperationFailed(
 	})
 }
 
+func staleUpsertForCurrentVersion(ctx context.Context, storage logical.Storage, record outboxRecord) (bool, error) {
+	if record.Type != outbox.OperationTypeUpsert {
+		return false, nil
+	}
+	metadata, err := getMetadata(ctx, storage, record.Path)
+	if err != nil {
+		return false, err
+	}
+	return metadata != nil && metadata.CurrentVersion > record.Version, nil
+}
+
+func cancelOutboxOperation(ctx context.Context, storage logical.Storage, record outboxRecord) error {
+	return deleteOutbox(ctx, storage, record)
+}
+
 func syncStateForFailureClass(errorClass providers.ErrorClass) domain.SyncState {
 	switch errorClass {
 	case providers.ErrorClassAuthn:
@@ -665,7 +699,7 @@ func (b *secretSyncBackend) recordOperationSuccess(ctx context.Context, record o
 		Operation:       observabilityOperation(record.Type),
 		Result:          observability.ResultSuccess,
 		DestinationType: destinationTypeFromRef(record.DestinationRef),
-		Granularity:     record.ObjectID,
+		Granularity:     operationGranularity(record),
 	})
 }
 
@@ -683,8 +717,18 @@ func (b *secretSyncBackend) recordOperationFailure(
 		Result:          result,
 		ErrorClass:      string(errorClass),
 		DestinationType: destinationTypeFromRef(record.DestinationRef),
-		Granularity:     record.ObjectID,
+		Granularity:     operationGranularity(record),
 	})
+}
+
+func operationGranularity(record outboxRecord) string {
+	if record.ObjectID == "" {
+		return observability.ValueUnknown
+	}
+	if record.ObjectID == syncObjectIDSecretPath {
+		return syncGranularitySecretPath
+	}
+	return syncGranularitySecretKey
 }
 
 func (b *secretSyncBackend) recordProviderRequest(

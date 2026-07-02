@@ -86,7 +86,7 @@ association_names/<destination-ref>/<resolved-name>/<association-id>
 outbox/<operation-id>
 outbox_by_due/<timestamp>/<operation-id>
 outbox_by_path/<normalized-path>/<operation-id>
-outbox_by_association/<association-id>/<operation-id>
+outbox_by_state/<state>/<operation-id>
 enqueue_intent/<normalized-path>/<version>
 
 status/<normalized-path>/<association-id>/<object-id>
@@ -95,6 +95,10 @@ status_by_destination/<type>/<name>/<association-id>/<object-id>
 reconcile_cursors/<scope>
 locks/<lock-name>
 ```
+
+Destination writes accept only the public and sensitive config keys for the
+selected provider type. The backend validates the merged destination config
+with the provider before storing either public or seal-wrapped sensitive data.
 
 ### Schema And Identity
 
@@ -112,6 +116,12 @@ using the same remote destination.
 `identity/restore-epoch` is generated once per mount and rotates when an active
 restore guard is acknowledged. Provider requests carry it, and providers
 include it in remote ownership metadata where supported.
+
+Each source metadata record carries a random generation. Operation IDs and
+provider idempotency keys include that generation alongside path, source
+version, association, object, and operation type. Deleting and recreating a
+source path therefore cannot reuse historical operation IDs even when version
+numbers restart at 1.
 
 ### Secret Version Record
 
@@ -158,7 +168,7 @@ include it in remote ownership metadata where supported.
     "type": "aws-sm",
     "name": "prod"
   },
-  "name_template": "{{ mount }}/{{ path }}",
+  "name_template": "{{ path }}",
   "resolved_name": "sync-kv/app/db",
   "granularity": "secret-path",
   "format": "json",
@@ -212,7 +222,6 @@ include it in remote ownership metadata where supported.
   },
   "resolved_name": "sync-kv/app/db",
   "state": "SYNCED",
-  "payload_sha256": "sha256:...",
   "remote_version": "provider-version",
   "last_operation_id": "op_01",
   "last_success_time": "2026-06-30T12:00:03Z",
@@ -235,23 +244,37 @@ If transactions are not available, use a recoverable state:
 
 1. acquire per-path write lock;
 2. validate CAS and compute next version;
-3. write version record;
-4. write `enqueue_intent/<path>/<version>` with expected associations;
-5. create outbox records;
-6. mark enqueue intent complete;
-7. update metadata current version;
-8. release lock.
+3. compute expected outbox records and stale inactive upserts they supersede;
+4. reserve queue capacity after accounting for superseded work;
+5. write `enqueue_intent/<path>/<version>` with expected associations;
+6. write version record;
+7. cancel superseded queued upsert records;
+8. create outbox records;
+9. remove the enqueue intent after outbox records are durable;
+10. update metadata current version;
+11. release lock.
 
 The reconciler must scan incomplete enqueue intents and committed versions to
-recreate missing outbox records. This makes crash recovery explicit.
+recreate missing outbox records. Enqueue intents store structured operation
+descriptors, including operation IDs and source generation. Completed enqueue
+intents are removed after the corresponding outbox records are durable. This
+makes crash recovery explicit without retaining unbounded completed intent
+history.
+
+Source metadata writes, source version mutations, and association lifecycle
+mutations use the same source-path lock. Association writes also lock the
+destination-name reservation identity and destination identity so concurrent
+association creation cannot reserve the same remote object or race destination
+deletion. Destination writes and deletes take the destination identity lock.
+Queue capacity checks and outbox replacement writes are serialized across
+enqueue paths.
 
 ## Operation State Machine
 
 ```text
-pending -> claimed -> applying -> succeeded
+pending -> claimed -> applying -> status_persisted -> pruned
                      -> retry_wait
                      -> failed_terminal
-                     -> canceled
 
 retry_wait -> pending
 claimed    -> pending        when claim expires
@@ -261,10 +284,17 @@ applying   -> pending        when claim expires and provider operation is idempo
 The dispatcher persists claim owner, expiry, and attempt metadata directly on
 the outbox record rather than exposing `claimed` as a separate public operation
 state. Due `pending` and `retry_wait` records with an unexpired claim are
-skipped; expired claims are reclaimable. Automatic retry is reserved for
+skipped; expired claims are reclaimable. Successful operations write object
+status first and are then pruned from the outbox, so success evidence lives in
+`status/` rather than durable queue history. Automatic retry is reserved for
 provider `rate_limit` and `unavailable` classes, with a bounded attempt budget
-and `not_before` delay. Manual queue retry moves canceled, retry-wait, or
-terminal failed work back to `pending` and resets the attempt counter.
+and `not_before` delay. Manual queue retry moves retry-wait or terminal failed
+work back to `pending` and resets the attempt counter. Manual queue cancel and
+automatic supersede/delete cancellation discard pending or retry-wait records.
+Lifecycle paths that cancel queued work refuse operations with active claims.
+The dispatcher serializes claim writes with enqueue/cancel paths, then releases
+that lock before provider I/O; active work must finish or expire before
+association disable/delete or source delete can discard it.
 
 The `queue/drain` path runs the same due-operation dispatcher as background
 work with a request-bounded operation limit. It first checks global mutation
@@ -274,12 +304,14 @@ without exposing source payload data. The path exists for deterministic tests,
 operator-controlled catch-up, and break-glass workflows; normal progress should
 come from the periodic function.
 
-Source delete uses the same durable outbox model. Deleting the latest local
-version cancels queued upsert work for that version. Associations with
-`delete_mode=delete` enqueue provider delete operations; other delete modes
-leave the remote object untouched. Delete enqueue intent recovery is
-type-aware: upsert intents recover only while the source version is live,
-delete intents recover only after the source version is deleted.
+Source delete uses the same durable outbox model. Deleting, soft-deleting, or
+destroying the current local version cancels queued upsert work for that
+version. Associations with `delete_mode=delete` enqueue provider delete
+operations; other delete modes leave the remote object untouched. Undeleting
+the current version enqueues replacement upserts for enabled associations.
+Delete enqueue intent recovery is type-aware: upsert intents recover only while
+the source version is live, delete intents recover only after the source version
+is deleted.
 
 Claims include owner, expiry, and attempt number. In-memory locks are only an
 optimization. Correctness comes from durable claims, idempotency keys, and
@@ -296,8 +328,13 @@ Allowed strategies:
 - allow newer versions to supersede older pending operations before dispatch;
 - provider compares desired source version metadata before upserting.
 
-The MVP should prefer superseding stale pending operations before dispatch and
-provider-side version checks where supported.
+The current implementation supersedes older inactive pending upserts before
+dispatch and keeps provider-side version checks where supported. Active claims
+are allowed to finish or expire because provider mutation may already be in
+flight. When an older claimed upsert becomes dispatchable again after claim
+expiry, dispatch rechecks the current source version and cancels the stale
+upsert before provider mutation. Status writes are guarded by source version so
+older operations cannot overwrite newer object status.
 
 ## Queue Capacity And Backpressure
 
@@ -305,7 +342,13 @@ Global configuration must define queue capacity. When the queue is full, the
 write path must return a clear error before accepting a new source version, or
 must accept the version only if enqueue intent recovery guarantees later queue
 creation. The MVP should fail the write before committing the source version
-when capacity is known to be exceeded.
+when capacity is known to be exceeded. `queue_capacity=0` intentionally closes
+the queue to new enqueues while leaving reads, status inspection, and existing
+queue processing available.
+
+Queue capacity checks and queue summaries start from the `outbox_by_state/`
+index. Dispatch starts from the `outbox_by_due/` index, which contains only
+pending and retry-wait operations.
 
 Queue listing should expose:
 
@@ -333,6 +376,10 @@ process_due_outbox(limit=B)
 enqueue_reconciliation_work_if_due(limit=C)
 process_due_reconciliation(limit=D)
 ```
+
+The current implementation bounds enqueue-intent recovery and due outbox
+processing per periodic tick. Reconciliation is manual per path until cursor
+storage and limits C/D are implemented.
 
 Outbox processing:
 

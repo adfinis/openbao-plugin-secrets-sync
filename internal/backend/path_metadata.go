@@ -10,7 +10,7 @@ import (
 	"github.com/openbao/openbao/sdk/v2/logical"
 )
 
-func pathMetadata(_ *secretSyncBackend) []*framework.Path {
+func pathMetadata(b *secretSyncBackend) []*framework.Path {
 	return []*framework.Path{
 		{
 			Pattern: "metadata/?",
@@ -49,11 +49,11 @@ func pathMetadata(_ *secretSyncBackend) []*framework.Path {
 			},
 			Operations: map[logical.Operation]framework.OperationHandler{
 				logical.CreateOperation: &framework.PathOperation{
-					Callback: pathMetadataWrite,
+					Callback: b.pathMetadataWrite,
 					Summary:  "Create local source metadata policy.",
 				},
 				logical.UpdateOperation: &framework.PathOperation{
-					Callback: pathMetadataWrite,
+					Callback: b.pathMetadataWrite,
 					Summary:  "Update local source metadata policy.",
 				},
 				logical.ListOperation: &framework.PathOperation{
@@ -65,7 +65,7 @@ func pathMetadata(_ *secretSyncBackend) []*framework.Path {
 					Summary:  "Read local source metadata.",
 				},
 				logical.DeleteOperation: &framework.PathOperation{
-					Callback: pathMetadataDelete,
+					Callback: b.pathMetadataDelete,
 					Summary:  "Delete local source metadata and versions.",
 				},
 			},
@@ -124,7 +124,7 @@ func pathMetadataRead(ctx context.Context, req *logical.Request, data *framework
 	)}, nil
 }
 
-func pathMetadataWrite(
+func (b *secretSyncBackend) pathMetadataWrite(
 	ctx context.Context,
 	req *logical.Request,
 	data *framework.FieldData,
@@ -133,6 +133,9 @@ func pathMetadataWrite(
 	if err != nil {
 		return logical.ErrorResponse(err.Error()), nil
 	}
+	unlock := b.lockSourcePath(path)
+	defer unlock()
+
 	metadata, err := getMetadata(ctx, req.Storage, path)
 	if err != nil {
 		return nil, err
@@ -168,7 +171,7 @@ func pathMetadataWrite(
 	)}, nil
 }
 
-func pathMetadataDelete(
+func (b *secretSyncBackend) pathMetadataDelete(
 	ctx context.Context,
 	req *logical.Request,
 	data *framework.FieldData,
@@ -177,6 +180,9 @@ func pathMetadataDelete(
 	if err != nil {
 		return logical.ErrorResponse(err.Error()), nil
 	}
+	unlock := b.lockSourcePath(path)
+	defer unlock()
+
 	associations, err := listAssociationsForPath(ctx, req.Storage, path)
 	if err != nil {
 		return nil, err

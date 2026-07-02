@@ -166,6 +166,8 @@ Current backend security-boundary coverage asserts that:
 
 - AWS and GitLab sensitive destination fields are stored separately from public
   destination metadata and redacted on read;
+- destination writes validate provider config before storage and reject
+  non-empty config fields for other provider types;
 - source payload canaries do not appear in association plan/create responses,
   queue summaries, queue operation reads, drain responses, status responses,
   or reconcile plan/apply responses.
@@ -173,19 +175,54 @@ Current backend security-boundary coverage asserts that:
 Current destination policy coverage asserts that:
 
 - destination prefix constraints are normalized and visible on read;
+- source path validation rejects reserved storage/control segments;
 - association create and plan reject disallowed source paths and resolved
-  remote names;
+  remote names with exact or slash-boundary prefix matching;
 - queued dispatch rechecks destination policy and blocks remote mutation if a
   destination policy is tightened after enqueue.
 
 Current queue hardening coverage asserts that:
 
+- concurrent source writes preserve monotonically increasing versions;
+- concurrent association writes reserve a remote name only once;
+- association writes lock destination identity and enqueue when an existing
+  association transitions from disabled to enabled;
 - unexpired outbox claims are skipped by manual drain and block operator cancel;
-- expired outbox claims are reclaimable and cleared after successful dispatch;
+- unexpired outbox claims block association disable/delete and source delete
+  cancellation paths;
+- dispatcher context cancellation leaves the claimed operation for lease-based
+  recovery instead of marking terminal failure;
+- newer source writes supersede older inactive queued upserts for the same
+  association object;
+- expired claims on stale upserts are pruned before provider mutation;
+- older operations cannot overwrite newer per-object status records;
+- incomplete enqueue intents recover missing outbox work and completed enqueue
+  intents are pruned;
+- periodic work processes bounded enqueue-intent and outbox batches;
+- `queue_capacity=0` blocks new enqueue-producing writes;
+- recreated source paths rotate source generation so operation IDs are not
+  reused with reset version numbers;
+- version pruning keeps source versions that are still referenced by queued
+  upserts;
+- successful dispatch writes object status and prunes the completed outbox
+  operation;
+- outbox state and due indexes are updated when operation state or schedule
+  changes, and when records are deleted;
+- unsupported queued operation records are removed instead of consuming
+  capacity indefinitely;
+- operation metrics label sync granularity without using source key names;
+- disabling a secret-key association with an unavailable current version does
+  not create a synthetic secret-path status object;
+- expired outbox claims are reclaimable and successful dispatch prunes the
+  reclaimed operation;
 - retryable provider failures clear claim metadata before moving to
   `retry_wait`;
 - periodic processing skips unsafe OpenBao replication states;
 - manual drain returns an operator-visible error on unsafe replication states.
+
+Current source lifecycle coverage asserts that current-version `delete/` and
+`destroy/` use the durable delete workflow, and current-version `undelete/`
+queues replacement upserts when a remote delete has completed.
 
 ## Hardening Order
 

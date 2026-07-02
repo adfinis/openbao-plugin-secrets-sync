@@ -2,7 +2,6 @@ package backend
 
 import (
 	"context"
-	"strconv"
 	"time"
 
 	"github.com/adfinis/openbao-plugin-secrets-sync/internal/outbox"
@@ -10,16 +9,37 @@ import (
 )
 
 func recoverIncompleteEnqueueIntents(ctx context.Context, storage logical.Storage, now time.Time) error {
+	return recoverIncompleteEnqueueIntentsLimit(ctx, storage, now, 0)
+}
+
+func recoverIncompleteEnqueueIntentsLimit(
+	ctx context.Context,
+	storage logical.Storage,
+	now time.Time,
+	maxIntents int,
+) error {
 	intents, err := listEnqueueIntents(ctx, storage)
 	if err != nil {
 		return err
 	}
+	recovered := 0
 	for _, intent := range intents {
 		if intent.Complete {
+			if err := deleteEnqueueIntent(ctx, storage, intent.Path, intent.Version); err != nil {
+				return err
+			}
+			recovered++
+			if maxIntents > 0 && recovered >= maxIntents {
+				break
+			}
 			continue
 		}
 		if err := recoverEnqueueIntent(ctx, storage, intent, now.Format(timeFormatRFC3339)); err != nil {
 			return err
+		}
+		recovered++
+		if maxIntents > 0 && recovered >= maxIntents {
+			break
 		}
 	}
 	return nil
@@ -52,7 +72,7 @@ func recoverEnqueueIntent(
 			return err
 		}
 	}
-	return completeRecoveredIntent(ctx, storage, intent, now)
+	return pruneRecoveredIntent(ctx, storage, intent)
 }
 
 func recoverableIntentOperations(
@@ -62,10 +82,7 @@ func recoverableIntentOperations(
 	now string,
 	versionAvailable bool,
 ) ([]outboxRecord, error) {
-	if len(intent.Operations) > 0 {
-		return outboxRecordsFromIntentOperations(ctx, storage, intent, now, versionAvailable)
-	}
-	return legacyOutboxRecordsForIntent(ctx, storage, intent, now, versionAvailable)
+	return outboxRecordsFromIntentOperations(ctx, storage, intent, now, versionAvailable)
 }
 
 func outboxRecordsFromIntentOperations(
@@ -99,36 +116,15 @@ func outboxRecordsFromIntentOperations(
 			NotBefore:      now,
 			CreatedTime:    intent.CreatedTime,
 			UpdatedTime:    now,
-			IdempotencyKey: intent.Path + ":" + strconv.Itoa(intent.Version) + ":" +
-				operation.AssociationID + ":" + operation.ObjectID + ":" + string(operation.Type),
+			IdempotencyKey: operationIdempotencyKey(
+				intent.Generation,
+				intent.Path,
+				intent.Version,
+				operation.AssociationID,
+				operation.ObjectID,
+				operation.Type,
+			),
 		})
-	}
-	return records, nil
-}
-
-func legacyOutboxRecordsForIntent(
-	ctx context.Context,
-	storage logical.Storage,
-	intent enqueueIntentRecord,
-	now string,
-	versionAvailable bool,
-) ([]outboxRecord, error) {
-	if !versionAvailable {
-		return nil, nil
-	}
-	associations, err := listAssociationsForPath(ctx, storage, intent.Path)
-	if err != nil {
-		return nil, err
-	}
-	records := []outboxRecord{}
-	for _, association := range associations {
-		operation := newAssociationOutboxRecord(association, intent.Version, syncObjectIDSecretPath, now)
-		for _, id := range intent.OperationIDs {
-			if operation.ID == id {
-				records = append(records, operation)
-				break
-			}
-		}
 	}
 	return records, nil
 }
@@ -144,14 +140,10 @@ func shouldRecoverIntentOperation(operationType outbox.OperationType, versionAva
 	}
 }
 
-func completeRecoveredIntent(
+func pruneRecoveredIntent(
 	ctx context.Context,
 	storage logical.Storage,
 	intent enqueueIntentRecord,
-	now string,
 ) error {
-	intent.Complete = true
-	intent.CompletedTime = now
-	intent.UpdatedTime = now
-	return putEnqueueIntent(ctx, storage, intent)
+	return deleteEnqueueIntent(ctx, storage, intent.Path, intent.Version)
 }

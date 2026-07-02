@@ -85,8 +85,8 @@ Still planned:
 
 - maximum destinations per secret;
 - maximum secret size;
-- broader forbidden path patterns beyond normalized OpenBao source path
-  validation.
+- provider-specific forbidden path patterns beyond the backend's normalized
+  OpenBao source path validation.
 
 Delegated app owners should not be able to use a broad platform destination to
 write arbitrary remote names. Destination records can constrain source paths and
@@ -180,8 +180,10 @@ Current delete behavior:
 - association `delete_mode` defaults to `retain`;
 - remote delete is enqueued only for `delete_mode=delete`;
 - provider delete must prove ownership or return an `ownership` error;
-- local source delete cancels queued upserts for the deleted version before any
-  remote delete is processed.
+- deleting, soft-deleting, or destroying the current local source version
+  cancels queued upserts for that version before any remote delete is processed;
+- undeleting the current local source version queues replacement upserts for
+  enabled associations.
 
 ## Audit Model
 

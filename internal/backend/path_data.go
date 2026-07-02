@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strconv"
+	"time"
 
 	"github.com/adfinis/openbao-plugin-secrets-sync/internal/domain"
 	"github.com/adfinis/openbao-plugin-secrets-sync/internal/outbox"
@@ -12,7 +13,7 @@ import (
 	"github.com/openbao/openbao/sdk/v2/logical"
 )
 
-func pathData(_ *secretSyncBackend) *framework.Path {
+func pathData(b *secretSyncBackend) *framework.Path {
 	return &framework.Path{
 		Pattern: "data/" + framework.MatchAllRegex("path"),
 		Fields: map[string]*framework.FieldSchema{
@@ -35,11 +36,11 @@ func pathData(_ *secretSyncBackend) *framework.Path {
 		},
 		Operations: map[logical.Operation]framework.OperationHandler{
 			logical.CreateOperation: &framework.PathOperation{
-				Callback: pathDataWrite,
+				Callback: b.pathDataWrite,
 				Summary:  "Write a new local source secret version.",
 			},
 			logical.UpdateOperation: &framework.PathOperation{
-				Callback: pathDataWrite,
+				Callback: b.pathDataWrite,
 				Summary:  "Write a new local source secret version.",
 			},
 			logical.ReadOperation: &framework.PathOperation{
@@ -47,7 +48,7 @@ func pathData(_ *secretSyncBackend) *framework.Path {
 				Summary:  "Read a local source secret version.",
 			},
 			logical.DeleteOperation: &framework.PathOperation{
-				Callback: pathDataDelete,
+				Callback: b.pathDataDelete,
 				Summary:  "Soft-delete the latest local source secret version.",
 			},
 		},
@@ -56,7 +57,11 @@ func pathData(_ *secretSyncBackend) *framework.Path {
 	}
 }
 
-func pathDataWrite(ctx context.Context, req *logical.Request, data *framework.FieldData) (*logical.Response, error) {
+func (b *secretSyncBackend) pathDataWrite(
+	ctx context.Context,
+	req *logical.Request,
+	data *framework.FieldData,
+) (*logical.Response, error) {
 	path, err := normalizeSourcePath(data.Get("path").(string))
 	if err != nil {
 		return logical.ErrorResponse(err.Error()), nil
@@ -65,10 +70,47 @@ func pathDataWrite(ctx context.Context, req *logical.Request, data *framework.Fi
 	if err != nil {
 		return logical.ErrorResponse(err.Error()), nil
 	}
+	unlock := b.lockSourcePath(path)
+	defer unlock()
 
-	metadata, err := getMetadata(ctx, req.Storage, path)
+	plan, response, err := dataWritePlanFromRequest(ctx, req.Storage, path, payload, data)
+	if response != nil || err != nil {
+		return response, err
+	}
+	response, err = b.commitDataWritePlan(ctx, req.Storage, path, payload, plan)
+	if response != nil || err != nil {
+		return response, err
+	}
+
+	return &logical.Response{Data: newResponseData(
+		responseField("metadata", newResponseData(
+			responseField("version", plan.nextVersion),
+			responseField("created_time", plan.now),
+			responseField("sync_operation_ids", plan.operationIDs),
+			responseField("sync_state", string(syncStateForOperationIDs(plan.operationIDs))),
+		)),
+	)}, nil
+}
+
+type dataWritePlan struct {
+	metadata     *metadataRecord
+	nextVersion  int
+	nowTime      time.Time
+	now          string
+	operations   []outboxRecord
+	operationIDs []string
+}
+
+func dataWritePlanFromRequest(
+	ctx context.Context,
+	storage logical.Storage,
+	path string,
+	payload secretPayload,
+	data *framework.FieldData,
+) (dataWritePlan, *logical.Response, error) {
+	metadata, err := getMetadata(ctx, storage, path)
 	if err != nil {
-		return nil, err
+		return dataWritePlan{}, nil, err
 	}
 	if metadata == nil {
 		metadata = newMetadataRecordPtr()
@@ -76,51 +118,91 @@ func pathDataWrite(ctx context.Context, req *logical.Request, data *framework.Fi
 
 	cas, casSet, err := casFromOptions(data)
 	if err != nil {
-		return logical.ErrorResponse(err.Error()), nil
+		return dataWritePlan{}, logical.ErrorResponse(err.Error()), nil
 	}
 	if err := checkCAS(*metadata, cas, casSet); err != nil {
-		return logical.ErrorResponse(err.Error()), nil
+		return dataWritePlan{}, logical.ErrorResponse(err.Error()), nil
 	}
 
-	associations, err := enabledAssociationsForPath(ctx, req.Storage, path)
+	associations, err := enabledAssociationsForPath(ctx, storage, path)
 	if err != nil {
-		return nil, err
+		return dataWritePlan{}, nil, err
 	}
 
 	nextVersion := metadata.CurrentVersion + 1
-	now := nowUTC().Format(timeFormatRFC3339)
-	operations, operationIDs, err := newAssociationOutboxRecords(associations, nextVersion, payload, now)
+	nowTime := nowUTC()
+	now := nowTime.Format(timeFormatRFC3339)
+	operations, operationIDs, err := newAssociationOutboxRecords(
+		associations,
+		metadata.Generation,
+		nextVersion,
+		payload,
+		now,
+	)
 	if err != nil {
+		return dataWritePlan{}, logical.ErrorResponse(err.Error()), nil
+	}
+	return dataWritePlan{
+		metadata:     metadata,
+		nextVersion:  nextVersion,
+		nowTime:      nowTime,
+		now:          now,
+		operations:   operations,
+		operationIDs: operationIDs,
+	}, nil, nil
+}
+
+func (b *secretSyncBackend) commitDataWritePlan(
+	ctx context.Context,
+	storage logical.Storage,
+	path string,
+	payload secretPayload,
+	plan dataWritePlan,
+) (*logical.Response, error) {
+	if len(plan.operations) > 0 {
+		b.enqueueMu.Lock()
+		defer b.enqueueMu.Unlock()
+	}
+	staleUpsertIDs, err := staleQueuedUpsertIDsForOperations(ctx, storage, plan.operations, plan.nowTime)
+	if err != nil {
+		return nil, err
+	}
+	additionalOperations, err := additionalQueuedOperationCount(ctx, storage, plan.operations)
+	if err != nil {
+		return nil, err
+	}
+	if err := ensureQueueCapacityAfterReplacement(
+		ctx,
+		storage,
+		additionalOperations,
+		len(staleUpsertIDs),
+	); err != nil {
 		return logical.ErrorResponse(err.Error()), nil
 	}
-	if err := ensureQueueCapacityFor(ctx, req.Storage, len(operations)); err != nil {
-		return logical.ErrorResponse(err.Error()), nil
-	}
-	if err := putPendingEnqueueIntent(ctx, req.Storage, path, nextVersion, operations, now); err != nil {
+	if err := putPendingEnqueueIntent(
+		ctx,
+		storage,
+		path,
+		plan.metadata.Generation,
+		plan.nextVersion,
+		plan.operations,
+		plan.now,
+	); err != nil {
 		return nil, err
 	}
-
-	if err := putSourceVersionRecord(ctx, req.Storage, path, nextVersion, payload, now); err != nil {
+	if err := putSourceVersionRecord(ctx, storage, path, plan.nextVersion, payload, plan.now); err != nil {
 		return nil, err
 	}
-	if err := putOutboxRecords(ctx, req.Storage, operations); err != nil {
+	if err := cancelQueuedOutboxIDs(ctx, storage, staleUpsertIDs); err != nil {
 		return nil, err
 	}
-	if err := completeEnqueueIntent(ctx, req.Storage, path, nextVersion, operations, now); err != nil {
+	if err := putOutboxRecords(ctx, storage, plan.operations); err != nil {
 		return nil, err
 	}
-	if err := commitSourceMetadata(ctx, req.Storage, path, metadata, nextVersion, now); err != nil {
+	if err := completeEnqueueIntent(ctx, storage, path, plan.nextVersion, plan.operations, plan.now); err != nil {
 		return nil, err
 	}
-
-	return &logical.Response{Data: newResponseData(
-		responseField("metadata", newResponseData(
-			responseField("version", nextVersion),
-			responseField("created_time", now),
-			responseField("sync_operation_ids", operationIDs),
-			responseField("sync_state", string(syncStateForOperationIDs(operationIDs))),
-		)),
-	)}, nil
+	return nil, commitSourceMetadata(ctx, storage, path, plan.metadata, plan.nextVersion, plan.now)
 }
 
 func putSourceVersionRecord(
@@ -200,11 +282,18 @@ func pathDataRead(ctx context.Context, req *logical.Request, data *framework.Fie
 	)}, nil
 }
 
-func pathDataDelete(ctx context.Context, req *logical.Request, data *framework.FieldData) (*logical.Response, error) {
+func (b *secretSyncBackend) pathDataDelete(
+	ctx context.Context,
+	req *logical.Request,
+	data *framework.FieldData,
+) (*logical.Response, error) {
 	path, err := normalizeSourcePath(data.Get("path").(string))
 	if err != nil {
 		return logical.ErrorResponse(err.Error()), nil
 	}
+	unlock := b.lockSourcePath(path)
+	defer unlock()
+
 	metadata, shouldDelete, err := metadataForSourceDelete(ctx, req.Storage, path)
 	if err != nil {
 		return nil, err
@@ -213,7 +302,9 @@ func pathDataDelete(ctx context.Context, req *logical.Request, data *framework.F
 		return nil, nil
 	}
 	now := nowUTC().Format(timeFormatRFC3339)
-	deletePlan, err := buildSourceDeletePlan(ctx, req.Storage, path, metadata.CurrentVersion, now)
+	b.enqueueMu.Lock()
+	defer b.enqueueMu.Unlock()
+	deletePlan, err := buildSourceDeletePlan(ctx, req.Storage, path, metadata.Generation, metadata.CurrentVersion, now)
 	if err != nil {
 		return nil, err
 	}
@@ -225,10 +316,17 @@ func pathDataDelete(ctx context.Context, req *logical.Request, data *framework.F
 	); err != nil {
 		return logical.ErrorResponse(err.Error()), nil
 	}
+	if err := ensureQueuedOutboxIDsUnclaimed(ctx, req.Storage, deletePlan.staleUpsertIDs); err != nil {
+		if isQueuedOperationClaimedError(err) {
+			return logical.ErrorResponse(err.Error()), nil
+		}
+		return nil, err
+	}
 	if err := putPendingEnqueueIntent(
 		ctx,
 		req.Storage,
 		path,
+		metadata.Generation,
 		metadata.CurrentVersion,
 		deletePlan.operations,
 		now,
@@ -238,7 +336,7 @@ func pathDataDelete(ctx context.Context, req *logical.Request, data *framework.F
 	if err := softDeleteVersion(ctx, req.Storage, metadata, path, metadata.CurrentVersion, now); err != nil {
 		return logical.ErrorResponse(err.Error()), nil
 	}
-	if err := cancelQueuedOutboxIDs(ctx, req.Storage, deletePlan.staleUpsertIDs, now); err != nil {
+	if err := cancelQueuedOutboxIDs(ctx, req.Storage, deletePlan.staleUpsertIDs); err != nil {
 		return nil, err
 	}
 	if err := putOutboxRecords(ctx, req.Storage, deletePlan.operations); err != nil {
@@ -300,6 +398,7 @@ func buildSourceDeletePlan(
 	ctx context.Context,
 	storage logical.Storage,
 	path string,
+	generation string,
 	version int,
 	now string,
 ) (sourceDeletePlan, error) {
@@ -314,7 +413,13 @@ func buildSourceDeletePlan(
 	if versionRecord == nil {
 		return sourceDeletePlan{}, fmt.Errorf("source version is unavailable")
 	}
-	operations, operationIDs, err := newAssociationDeleteOutboxRecords(associations, version, versionRecord.Data, now)
+	operations, operationIDs, err := newAssociationDeleteOutboxRecords(
+		associations,
+		generation,
+		version,
+		versionRecord.Data,
+		now,
+	)
 	if err != nil {
 		return sourceDeletePlan{}, err
 	}
@@ -444,6 +549,7 @@ func ensureQueueCapacityAfterReplacement(
 
 func newAssociationOutboxRecords(
 	associations []associationRecord,
+	generation string,
 	version int,
 	payload secretPayload,
 	now string,
@@ -456,7 +562,7 @@ func newAssociationOutboxRecords(
 			return nil, nil, err
 		}
 		for _, objectID := range objectIDs {
-			operation := newAssociationOutboxRecord(association, version, objectID, now)
+			operation := newAssociationOutboxRecord(association, generation, version, objectID, now)
 			operations = append(operations, operation)
 			operationIDs = append(operationIDs, operation.ID)
 		}
@@ -466,6 +572,7 @@ func newAssociationOutboxRecords(
 
 func newAssociationDeleteOutboxRecords(
 	associations []associationRecord,
+	generation string,
 	version int,
 	payload secretPayload,
 	now string,
@@ -481,7 +588,7 @@ func newAssociationDeleteOutboxRecords(
 			return nil, nil, err
 		}
 		for _, objectID := range objectIDs {
-			operation := newAssociationDeleteOutboxRecord(association, version, objectID, now)
+			operation := newAssociationDeleteOutboxRecord(association, generation, version, objectID, now)
 			operations = append(operations, operation)
 			operationIDs = append(operationIDs, operation.ID)
 		}
@@ -507,10 +614,101 @@ func additionalQueuedOperationCount(
 	return count, nil
 }
 
+func staleQueuedUpsertIDsForOperations(
+	ctx context.Context,
+	storage logical.Storage,
+	operations []outboxRecord,
+	now time.Time,
+) ([]string, error) {
+	targetVersions := make(map[string]int, len(operations))
+	path := ""
+	for _, operation := range operations {
+		if operation.Type != outbox.OperationTypeUpsert {
+			continue
+		}
+		if path == "" {
+			path = operation.Path
+		}
+		targetVersions[outboxObjectKey(operation.AssociationID, operation.ObjectID)] = operation.Version
+	}
+	if len(targetVersions) == 0 || path == "" {
+		return nil, nil
+	}
+	ids, err := listQueuedOutboxIDsForPath(ctx, storage, path)
+	if err != nil {
+		return nil, err
+	}
+	staleIDs := []string{}
+	for _, id := range ids {
+		record, err := getOutbox(ctx, storage, id)
+		if err != nil {
+			return nil, err
+		}
+		if record == nil || record.Type != outbox.OperationTypeUpsert {
+			continue
+		}
+		if isOutboxClaimActive(*record, now) {
+			continue
+		}
+		targetVersion, ok := targetVersions[outboxObjectKey(record.AssociationID, record.ObjectID)]
+		if !ok || record.Version >= targetVersion {
+			continue
+		}
+		staleIDs = append(staleIDs, record.ID)
+	}
+	return staleIDs, nil
+}
+
+func queuedDeleteIDsForUpsertOperations(
+	ctx context.Context,
+	storage logical.Storage,
+	operations []outboxRecord,
+) ([]string, error) {
+	targetVersions := make(map[string]int, len(operations))
+	path := ""
+	for _, operation := range operations {
+		if operation.Type != outbox.OperationTypeUpsert {
+			continue
+		}
+		if path == "" {
+			path = operation.Path
+		}
+		targetVersions[outboxObjectKey(operation.AssociationID, operation.ObjectID)] = operation.Version
+	}
+	if len(targetVersions) == 0 || path == "" {
+		return nil, nil
+	}
+	ids, err := listQueuedOutboxIDsForPath(ctx, storage, path)
+	if err != nil {
+		return nil, err
+	}
+	matchingIDs := []string{}
+	for _, id := range ids {
+		record, err := getOutbox(ctx, storage, id)
+		if err != nil {
+			return nil, err
+		}
+		if record == nil || record.Type != outbox.OperationTypeDelete {
+			continue
+		}
+		targetVersion, ok := targetVersions[outboxObjectKey(record.AssociationID, record.ObjectID)]
+		if !ok || record.Version != targetVersion {
+			continue
+		}
+		matchingIDs = append(matchingIDs, record.ID)
+	}
+	return matchingIDs, nil
+}
+
+func outboxObjectKey(associationID string, objectID string) string {
+	return associationID + "\x00" + objectID
+}
+
 func putPendingEnqueueIntent(
 	ctx context.Context,
 	storage logical.Storage,
 	path string,
+	generation string,
 	version int,
 	operations []outboxRecord,
 	now string,
@@ -518,7 +716,7 @@ func putPendingEnqueueIntent(
 	if len(operations) == 0 {
 		return nil
 	}
-	return putEnqueueIntent(ctx, storage, newEnqueueIntentRecord(path, version, operations, now))
+	return putEnqueueIntent(ctx, storage, newEnqueueIntentRecord(path, generation, version, operations, now))
 }
 
 func putOutboxRecords(ctx context.Context, storage logical.Storage, operations []outboxRecord) error {
@@ -536,16 +734,12 @@ func completeEnqueueIntent(
 	path string,
 	version int,
 	operations []outboxRecord,
-	now string,
+	_ string,
 ) error {
 	if len(operations) == 0 {
 		return nil
 	}
-	intent := newEnqueueIntentRecord(path, version, operations, now)
-	intent.Complete = true
-	intent.CompletedTime = now
-	intent.UpdatedTime = now
-	return putEnqueueIntent(ctx, storage, intent)
+	return deleteEnqueueIntent(ctx, storage, path, version)
 }
 
 func syncStateForOperationIDs(operationIDs []string) domain.SyncState {
@@ -555,23 +749,21 @@ func syncStateForOperationIDs(operationIDs []string) domain.SyncState {
 	return domain.SyncStateNoAssociation
 }
 
-func newEnqueueIntentRecord(path string, version int, operations []outboxRecord, now string) enqueueIntentRecord {
+func newEnqueueIntentRecord(
+	path string,
+	generation string,
+	version int,
+	operations []outboxRecord,
+	now string,
+) enqueueIntentRecord {
 	return enqueueIntentRecord{
-		Path:         path,
-		Version:      version,
-		OperationIDs: outboxOperationIDs(operations),
-		Operations:   enqueueIntentOperations(operations),
-		CreatedTime:  now,
-		UpdatedTime:  now,
+		Path:        path,
+		Generation:  generation,
+		Version:     version,
+		Operations:  enqueueIntentOperations(operations),
+		CreatedTime: now,
+		UpdatedTime: now,
 	}
-}
-
-func outboxOperationIDs(operations []outboxRecord) []string {
-	ids := make([]string, 0, len(operations))
-	for _, operation := range operations {
-		ids = append(ids, operation.ID)
-	}
-	return ids
 }
 
 func enqueueIntentOperations(operations []outboxRecord) []enqueueIntentOperation {
@@ -588,8 +780,15 @@ func enqueueIntentOperations(operations []outboxRecord) []enqueueIntentOperation
 	return intentOperations
 }
 
-func newAssociationOutboxRecord(association associationRecord, version int, objectID string, now string) outboxRecord {
+func newAssociationOutboxRecord(
+	association associationRecord,
+	generation string,
+	version int,
+	objectID string,
+	now string,
+) outboxRecord {
 	id := newOperationID(
+		generation,
 		association.Path,
 		version,
 		association.ID,
@@ -608,17 +807,26 @@ func newAssociationOutboxRecord(association associationRecord, version int, obje
 		NotBefore:      now,
 		CreatedTime:    now,
 		UpdatedTime:    now,
-		IdempotencyKey: association.Path + ":" + strconv.Itoa(version) + ":" + association.ID + ":" + objectID + ":upsert",
+		IdempotencyKey: operationIdempotencyKey(
+			generation,
+			association.Path,
+			version,
+			association.ID,
+			objectID,
+			outbox.OperationTypeUpsert,
+		),
 	}
 }
 
 func newAssociationDeleteOutboxRecord(
 	association associationRecord,
+	generation string,
 	version int,
 	objectID string,
 	now string,
 ) outboxRecord {
 	id := newOperationID(
+		generation,
 		association.Path,
 		version,
 		association.ID,
@@ -637,8 +845,31 @@ func newAssociationDeleteOutboxRecord(
 		NotBefore:      now,
 		CreatedTime:    now,
 		UpdatedTime:    now,
-		IdempotencyKey: association.Path + ":" + strconv.Itoa(version) + ":" + association.ID + ":" + objectID + ":delete",
+		IdempotencyKey: operationIdempotencyKey(
+			generation,
+			association.Path,
+			version,
+			association.ID,
+			objectID,
+			outbox.OperationTypeDelete,
+		),
 	}
+}
+
+func operationIdempotencyKey(
+	generation string,
+	path string,
+	version int,
+	associationID string,
+	objectID string,
+	operationType outbox.OperationType,
+) string {
+	return generation + ":" +
+		path + ":" +
+		strconv.Itoa(version) + ":" +
+		associationID + ":" +
+		objectID + ":" +
+		string(operationType)
 }
 
 func enabledAssociationsForPath(
