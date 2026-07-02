@@ -46,7 +46,7 @@ func TestOpenBaoPluginSyncsToGitLabProjectVariables(t *testing.T) {
 		_ = gitLabClient.deleteVariable(context.Background(), variableKey)
 	})
 
-	writeGitLabDestination(t, baoClient)
+	writeGitLabDestination(t, baoClient, nil)
 	assertDestinationValid(t, baoClient)
 	assertDestinationHealthy(t, baoClient)
 	acknowledgeRestoreGuard(t, baoClient)
@@ -66,9 +66,10 @@ func TestOpenBaoPluginSyncsToGitLabProjectVariables(t *testing.T) {
 	if ids := stringSlice(t, association.Data["sync_operation_ids"]); len(ids) != 1 {
 		t.Fatalf("sync_operation_ids = %v, want one operation", ids)
 	}
+	associationID := associationIDFromResponse(t, association)
 	drainQueue(t, baoClient, 1)
-	assertGitLabVariable(t, ctx, gitLabClient, variableKey, "initial", "1")
 	assertStatusObject(t, baoClient, variableKey, "SYNCED", "")
+	assertGitLabVariable(t, ctx, gitLabClient, variableKey, "initial", "1")
 	assertReconcilePlan(t, baoClient, variableKey, "SYNCED")
 	assertReconcileApply(t, baoClient, variableKey, "SYNCED")
 
@@ -81,6 +82,27 @@ func TestOpenBaoPluginSyncsToGitLabProjectVariables(t *testing.T) {
 	drainQueue(t, baoClient, 1)
 	assertGitLabVariable(t, ctx, gitLabClient, variableKey, "updated", "2")
 
+	writeSource(t, baoClient, variableKey, "token_123")
+	drainQueue(t, baoClient, 1)
+	assertGitLabVariable(t, ctx, gitLabClient, variableKey, "token_123", "3")
+	assertGitLabVariableAttributes(t, ctx, gitLabClient, variableKey, false, false, true, gitlab.VariableTypeEnvVar)
+
+	writeGitLabDestination(t, baoClient, map[string]interface{}{
+		gitlab.ConfigKeyProtected: "true",
+		gitlab.ConfigKeyMasked:    "true",
+	})
+	attributePlan := write(t, baoClient, mountPath+"/associations/app/db/plan", associationRequest())
+	if got := attributePlan.Data["action"]; got != "update" {
+		t.Fatalf("attribute drift plan action = %v, want update", got)
+	}
+	sync := write(t, baoClient, mountPath+"/associations/app/db/"+associationID+"/sync", map[string]interface{}{})
+	if ids := stringSlice(t, sync.Data["sync_operation_ids"]); len(ids) != 1 {
+		t.Fatalf("attribute drift sync_operation_ids = %v, want one operation", ids)
+	}
+	drainQueue(t, baoClient, 1)
+	assertGitLabVariable(t, ctx, gitLabClient, variableKey, "token_123", "3")
+	assertGitLabVariableAttributes(t, ctx, gitLabClient, variableKey, true, true, true, gitlab.VariableTypeEnvVar)
+
 	deleteSecret := deletePath(t, baoClient, mountPath+"/data/app/db")
 	if ids := metadataOperationIDs(t, deleteSecret); len(ids) != 1 {
 		t.Fatalf("delete sync_operation_ids = %v, want one operation", ids)
@@ -90,9 +112,9 @@ func TestOpenBaoPluginSyncsToGitLabProjectVariables(t *testing.T) {
 	assertStatusObject(t, baoClient, variableKey, "REMOTE_MISSING", "")
 }
 
-func writeGitLabDestination(t *testing.T, client *api.Client) {
+func writeGitLabDestination(t *testing.T, client *api.Client, overrides map[string]interface{}) {
 	t.Helper()
-	write(t, client, mountPath+"/destinations/gitlab/local", map[string]interface{}{
+	config := map[string]interface{}{
 		gitlab.ConfigKeyBaseURL:           env("E2E_GITLAB_BASE_URL_IN_BAO", "http://gitlab"),
 		gitlab.ConfigKeyProjectID:         env("E2E_GITLAB_PROJECT_PATH", "root/openbao-plugin-secrets-sync-e2e"),
 		gitlab.ConfigKeyEnvironmentScope:  env("E2E_GITLAB_ENVIRONMENT_SCOPE", "production"),
@@ -100,7 +122,11 @@ func writeGitLabDestination(t *testing.T, client *api.Client) {
 		gitlab.ConfigKeyVariableRaw:       "true",
 		gitlab.ConfigKeyVariableType:      gitlab.VariableTypeEnvVar,
 		gitlab.ConfigKeyAllowInsecureHTTP: "true",
-	})
+	}
+	for key, value := range overrides {
+		config[key] = value
+	}
+	write(t, client, mountPath+"/destinations/gitlab/local", config)
 }
 
 func associationRequest() map[string]interface{} {
@@ -307,17 +333,23 @@ type gitLabVariable struct {
 	Key              string `json:"key"`
 	Value            string `json:"value"`
 	EnvironmentScope string `json:"environment_scope"`
+	Protected        bool   `json:"protected"`
+	Masked           bool   `json:"masked"`
+	VariableRaw      bool   `json:"raw"`
+	VariableType     string `json:"variable_type"`
 	Description      string `json:"description"`
 }
 
 type variableMetadata struct {
-	ManagedBy     string `json:"m"`
-	AssociationID string `json:"a"`
-	SourcePath    string `json:"p"`
-	ObjectID      string `json:"o"`
-	SourceVersion int    `json:"v"`
-	PayloadSHA256 string `json:"h"`
-	PayloadFormat string `json:"f"`
+	ManagedBy      string `json:"m"`
+	AssociationID  string `json:"a"`
+	SourcePath     string `json:"p"`
+	SourcePathHash string `json:"ph"`
+	ObjectID       string `json:"o"`
+	ObjectIDHash   string `json:"oh"`
+	SourceVersion  int    `json:"v"`
+	PayloadSHA256  string `json:"h"`
+	PayloadFormat  string `json:"f"`
 }
 
 func newGitLabClient(t *testing.T) gitLabClient {
@@ -419,11 +451,11 @@ func assertGitLabVariable(
 		if metadata.SourceVersion != intFromString(t, expectedVersion) {
 			return fmt.Errorf("metadata source version = %d, want %s", metadata.SourceVersion, expectedVersion)
 		}
-		if metadata.ObjectID != key {
-			return fmt.Errorf("metadata object id = %q, want %q", metadata.ObjectID, key)
+		if err := assertMetadataIdentity(metadata.ObjectID, metadata.ObjectIDHash, key, "object id"); err != nil {
+			return err
 		}
-		if metadata.SourcePath != "app/db" {
-			return fmt.Errorf("metadata source path = %q, want app/db", metadata.SourcePath)
+		if err := assertMetadataIdentity(metadata.SourcePath, metadata.SourcePathHash, "app/db", "source path"); err != nil {
+			return err
 		}
 		if metadata.PayloadFormat != "raw" {
 			return fmt.Errorf("metadata payload format = %q, want raw", metadata.PayloadFormat)
@@ -433,6 +465,54 @@ func assertGitLabVariable(
 		}
 		if strings.Contains(variable.Description, expectedValue) {
 			return errors.New("variable description contains secret value")
+		}
+		return nil
+	})
+}
+
+func assertMetadataIdentity(actual string, actualHash string, expected string, label string) error {
+	if actual == expected {
+		return nil
+	}
+	if actual == "" && actualHash != "" {
+		return nil
+	}
+	if actual == "" {
+		return fmt.Errorf("metadata %s is empty and has no compact hash", label)
+	}
+	return fmt.Errorf("metadata %s = %q, want %q", label, actual, expected)
+}
+
+func assertGitLabVariableAttributes(
+	t *testing.T,
+	ctx context.Context,
+	client gitLabClient,
+	key string,
+	protected bool,
+	masked bool,
+	variableRaw bool,
+	variableType string,
+) {
+	t.Helper()
+	waitFor(t, ctx, func() error {
+		variable, err := client.getVariable(ctx, key)
+		if err != nil {
+			return err
+		}
+		if variable == nil {
+			return fmt.Errorf("gitlab variable %s missing", key)
+		}
+		if variable.Protected != protected {
+			return fmt.Errorf("protected = %t, want %t", variable.Protected, protected)
+		}
+		if variable.Masked != masked {
+			return fmt.Errorf("masked = %t, want %t", variable.Masked, masked)
+		}
+		if variable.VariableRaw != variableRaw {
+			return fmt.Errorf("raw = %t, want %t", variable.VariableRaw, variableRaw)
+		}
+		if variable.VariableType != variableType {
+			return fmt.Errorf("variable type = %q, want %q", variable.VariableType, variableType)
 		}
 		return nil
 	})
@@ -462,6 +542,19 @@ func variableMetadataFromDescription(t *testing.T, description string) variableM
 		t.Fatalf("metadata managed_by = %q, want 1", metadata.ManagedBy)
 	}
 	return metadata
+}
+
+func associationIDFromResponse(t *testing.T, secret *api.Secret) string {
+	t.Helper()
+	association, ok := secret.Data["association"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("association = %T, want map[string]interface{}", secret.Data["association"])
+	}
+	id, ok := association["id"].(string)
+	if !ok || id == "" {
+		t.Fatalf("association id = %v, want non-empty string", association["id"])
+	}
+	return id
 }
 
 func metadataOperationIDs(t *testing.T, secret *api.Secret) []string {

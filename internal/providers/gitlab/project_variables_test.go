@@ -28,6 +28,7 @@ const (
 	testPayloadSHANew   = "sha256:new"
 	testPluginInstance  = "inst-test"
 	testRestoreEpoch    = "epoch-test"
+	testBoolTrue        = "true"
 )
 
 func TestProviderConformance(t *testing.T) {
@@ -142,10 +143,10 @@ func TestValidateDestinationConfig(t *testing.T) {
 				ConfigKeyProjectID:        testProjectID,
 				ConfigKeyToken:            testToken,
 				ConfigKeyEnvironmentScope: testEnvScope,
-				ConfigKeyProtected:        "true",
-				ConfigKeyMasked:           "true",
+				ConfigKeyProtected:        testBoolTrue,
+				ConfigKeyMasked:           testBoolTrue,
 				ConfigKeyHidden:           "false",
-				ConfigKeyVariableRaw:      "true",
+				ConfigKeyVariableRaw:      testBoolTrue,
 				ConfigKeyVariableType:     VariableTypeFile,
 			},
 		},
@@ -178,7 +179,7 @@ func TestValidateDestinationConfig(t *testing.T) {
 				ConfigKeyBaseURL:           "http://gitlab",
 				ConfigKeyProjectID:         testProjectID,
 				ConfigKeyToken:             testToken,
-				ConfigKeyAllowInsecureHTTP: "true",
+				ConfigKeyAllowInsecureHTTP: testBoolTrue,
 			},
 		},
 		{
@@ -217,6 +218,21 @@ func TestValidateDestinationConfig(t *testing.T) {
 			})
 			assertProviderErrorClass(t, err, tt.errorClass)
 		})
+	}
+}
+
+func TestHiddenDestinationImpliesMasked(t *testing.T) {
+	options, err := gitlabDestinationOptionsFromConfig(destinationConfigWith(map[string]string{
+		ConfigKeyHidden: testBoolTrue,
+	}))
+	if err != nil {
+		t.Fatalf("destination options: %v", err)
+	}
+	if !options.hidden {
+		t.Fatal("hidden option = false, want true")
+	}
+	if !options.masked {
+		t.Fatal("hidden destinations must request masked variables")
 	}
 }
 
@@ -271,6 +287,325 @@ func TestPlanDetectsConflictAndDrift(t *testing.T) {
 	}
 }
 
+func TestPlanRejectsKnownIncompatibleMaskedPayloads(t *testing.T) {
+	tests := []struct {
+		name       string
+		overrides  map[string]string
+		format     string
+		payloadLen int
+	}{
+		{
+			name: "too short",
+			overrides: map[string]string{
+				ConfigKeyMasked: testBoolTrue,
+			},
+			format:     payload.FormatRaw,
+			payloadLen: 7,
+		},
+		{
+			name: "json with variable expansion",
+			overrides: map[string]string{
+				ConfigKeyMasked:      testBoolTrue,
+				ConfigKeyVariableRaw: "false",
+			},
+			format:     payload.FormatJSON,
+			payloadLen: 16,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			req := defaultPlanRequest(testPayloadSHANew, 1)
+			req.Destination = destinationConfigWith(tt.overrides)
+			req.Format = tt.format
+			req.PayloadBytes = tt.payloadLen
+
+			plan, err := (Provider{client: newMemoryProjectVariableClient()}).Plan(context.Background(), req)
+			if err != nil {
+				t.Fatalf("plan: %v", err)
+			}
+			if plan.Action != providers.PlanActionBlocked {
+				t.Fatalf("plan action = %s, want %s", plan.Action, providers.PlanActionBlocked)
+			}
+			if plan.ErrorClass != providers.ErrorClassValidation {
+				t.Fatalf("plan error class = %s, want %s", plan.ErrorClass, providers.ErrorClassValidation)
+			}
+			if plan.Message == "" {
+				t.Fatal("plan message must explain the GitLab masked payload validation failure")
+			}
+		})
+	}
+}
+
+func TestUpsertRejectsIncompatibleMaskedPayloads(t *testing.T) {
+	tests := []struct {
+		name      string
+		overrides map[string]string
+		format    string
+		value     []byte
+	}{
+		{
+			name: "too short",
+			overrides: map[string]string{
+				ConfigKeyMasked: testBoolTrue,
+			},
+			format: payload.FormatRaw,
+			value:  []byte("short"),
+		},
+		{
+			name: "contains whitespace",
+			overrides: map[string]string{
+				ConfigKeyHidden: testBoolTrue,
+			},
+			format: payload.FormatRaw,
+			value:  []byte("line one"),
+		},
+		{
+			name: "invalid expansion character",
+			overrides: map[string]string{
+				ConfigKeyMasked:      testBoolTrue,
+				ConfigKeyVariableRaw: "false",
+			},
+			format: payload.FormatRaw,
+			value:  []byte("abc$defg"),
+		},
+		{
+			name: "json with variable expansion",
+			overrides: map[string]string{
+				ConfigKeyMasked:      testBoolTrue,
+				ConfigKeyVariableRaw: "false",
+			},
+			format: payload.FormatJSON,
+			value:  []byte(`{"p":"abcdef"}`),
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			client := newMemoryProjectVariableClient()
+			req := defaultUpsertRequest(testPayloadSHANew, tt.value, 1)
+			req.Destination = destinationConfigWith(tt.overrides)
+			req.Format = tt.format
+
+			_, err := (Provider{client: client}).Upsert(context.Background(), req)
+			assertProviderErrorClass(t, err, providers.ErrorClassValidation)
+			if len(client.variables) != 0 {
+				t.Fatalf("variables = %#v, want no GitLab write", client.variables)
+			}
+		})
+	}
+}
+
+func TestUpsertCreatesCompatibleHiddenVariable(t *testing.T) {
+	cfg := destinationConfigWith(map[string]string{
+		ConfigKeyHidden: testBoolTrue,
+	})
+	client := newMemoryProjectVariableClient()
+	req := defaultUpsertRequest(testPayloadSHANew, []byte("token_123"), 1)
+	req.Destination = cfg
+
+	result, err := (Provider{client: client}).Upsert(context.Background(), req)
+	if err != nil {
+		t.Fatalf("upsert: %v", err)
+	}
+	if result.RemoteVersion != testPayloadSHANew {
+		t.Fatalf("remote version = %s, want %s", result.RemoteVersion, testPayloadSHANew)
+	}
+	options, err := gitlabDestinationOptionsFromConfig(cfg)
+	if err != nil {
+		t.Fatalf("destination options: %v", err)
+	}
+	variable, err := client.GetVariable(context.Background(), options, testResolvedName)
+	if err != nil {
+		t.Fatalf("get variable: %v", err)
+	}
+	if !variable.Masked {
+		t.Fatal("created hidden variable must also be masked")
+	}
+	if !variable.Hidden {
+		t.Fatal("created variable hidden = false, want true")
+	}
+}
+
+func TestPlanUpdatesWhenAttributesDriftWithMatchingPayload(t *testing.T) {
+	tests := []struct {
+		name      string
+		overrides map[string]string
+	}{
+		{
+			name: "protected",
+			overrides: map[string]string{
+				ConfigKeyProtected: testBoolTrue,
+			},
+		},
+		{
+			name: "masked",
+			overrides: map[string]string{
+				ConfigKeyMasked: testBoolTrue,
+			},
+		},
+		{
+			name: "raw",
+			overrides: map[string]string{
+				ConfigKeyVariableRaw: "false",
+			},
+		},
+		{
+			name: "variable type",
+			overrides: map[string]string{
+				ConfigKeyVariableType: VariableTypeFile,
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			variable := ownedVariable(variableMetadata{
+				ManagedBy:     metadataManagedBy,
+				AssociationID: testAssociationID,
+				SourcePath:    testSourcePath,
+				ObjectID:      testObjectID,
+				SourceVersion: 1,
+				PayloadSHA256: testPayloadSHAOld,
+				PayloadFormat: payload.FormatRaw,
+			})
+			req := defaultPlanRequest(testPayloadSHAOld, 1)
+			req.Destination = destinationConfigWith(tt.overrides)
+			req.PayloadBytes = len("token_123")
+
+			plan, err := (Provider{client: gitlabClientWithVariable(variable)}).Plan(context.Background(), req)
+			if err != nil {
+				t.Fatalf("plan: %v", err)
+			}
+			if plan.Action != providers.PlanActionUpdate {
+				t.Fatalf("plan action = %s, want %s", plan.Action, providers.PlanActionUpdate)
+			}
+		})
+	}
+}
+
+func TestUpsertRepairsAttributeDriftWithMatchingPayload(t *testing.T) {
+	tests := []struct {
+		name      string
+		overrides map[string]string
+		assert    func(*testing.T, *gitlabVariable)
+	}{
+		{
+			name: "protected",
+			overrides: map[string]string{
+				ConfigKeyProtected: testBoolTrue,
+			},
+			assert: func(t *testing.T, variable *gitlabVariable) {
+				t.Helper()
+				if !variable.Protected {
+					t.Fatal("protected = false, want true")
+				}
+			},
+		},
+		{
+			name: "masked",
+			overrides: map[string]string{
+				ConfigKeyMasked: testBoolTrue,
+			},
+			assert: func(t *testing.T, variable *gitlabVariable) {
+				t.Helper()
+				if !variable.Masked {
+					t.Fatal("masked = false, want true")
+				}
+			},
+		},
+		{
+			name: "raw",
+			overrides: map[string]string{
+				ConfigKeyVariableRaw: "false",
+			},
+			assert: func(t *testing.T, variable *gitlabVariable) {
+				t.Helper()
+				if variable.VariableRaw {
+					t.Fatal("raw = true, want false")
+				}
+			},
+		},
+		{
+			name: "variable type",
+			overrides: map[string]string{
+				ConfigKeyVariableType: VariableTypeFile,
+			},
+			assert: func(t *testing.T, variable *gitlabVariable) {
+				t.Helper()
+				if variable.VariableType != VariableTypeFile {
+					t.Fatalf("variable type = %s, want %s", variable.VariableType, VariableTypeFile)
+				}
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := destinationConfigWith(tt.overrides)
+			client := gitlabClientWithVariable(ownedVariable(variableMetadata{
+				ManagedBy:     metadataManagedBy,
+				AssociationID: testAssociationID,
+				SourcePath:    testSourcePath,
+				ObjectID:      testObjectID,
+				SourceVersion: 1,
+				PayloadSHA256: testPayloadSHAOld,
+				PayloadFormat: payload.FormatRaw,
+			}))
+			req := defaultUpsertRequest(testPayloadSHAOld, []byte("token_123"), 1)
+			req.Destination = cfg
+
+			result, err := (Provider{client: client}).Upsert(context.Background(), req)
+			if err != nil {
+				t.Fatalf("upsert: %v", err)
+			}
+			if result.RemoteVersion != testPayloadSHAOld {
+				t.Fatalf("remote version = %s, want %s", result.RemoteVersion, testPayloadSHAOld)
+			}
+			options, err := gitlabDestinationOptionsFromConfig(cfg)
+			if err != nil {
+				t.Fatalf("destination options: %v", err)
+			}
+			variable, err := client.GetVariable(context.Background(), options, testResolvedName)
+			if err != nil {
+				t.Fatalf("get variable: %v", err)
+			}
+			tt.assert(t, variable)
+		})
+	}
+}
+
+func TestHiddenUpdateIsBlockedForExistingVisibleVariable(t *testing.T) {
+	cfg := destinationConfigWith(map[string]string{
+		ConfigKeyHidden: testBoolTrue,
+	})
+	variable := ownedVariable(variableMetadata{
+		ManagedBy:     metadataManagedBy,
+		AssociationID: testAssociationID,
+		SourcePath:    testSourcePath,
+		ObjectID:      testObjectID,
+		SourceVersion: 1,
+		PayloadSHA256: testPayloadSHAOld,
+		PayloadFormat: payload.FormatRaw,
+	})
+	client := gitlabClientWithVariable(variable)
+
+	planRequest := defaultPlanRequest(testPayloadSHAOld, 1)
+	planRequest.Destination = cfg
+	planRequest.PayloadBytes = len("token_123")
+	plan, err := (Provider{client: client}).Plan(context.Background(), planRequest)
+	if err != nil {
+		t.Fatalf("plan: %v", err)
+	}
+	if plan.Action != providers.PlanActionBlocked {
+		t.Fatalf("plan action = %s, want %s", plan.Action, providers.PlanActionBlocked)
+	}
+	if plan.ErrorClass != providers.ErrorClassValidation {
+		t.Fatalf("plan error class = %s, want %s", plan.ErrorClass, providers.ErrorClassValidation)
+	}
+
+	upsertRequest := defaultUpsertRequest(testPayloadSHAOld, []byte("token_123"), 1)
+	upsertRequest.Destination = cfg
+	_, err = (Provider{client: client}).Upsert(context.Background(), upsertRequest)
+	assertProviderErrorClass(t, err, providers.ErrorClassValidation)
+}
+
 func TestProviderRejectsInvalidVariableKey(t *testing.T) {
 	_, err := (Provider{client: newMemoryProjectVariableClient()}).Upsert(
 		context.Background(),
@@ -313,7 +648,7 @@ func TestHTTPClientProjectVariableRequests(t *testing.T) {
 		if got := r.Form.Get("value"); got != "secret" {
 			t.Fatalf("form value = %q, want secret", got)
 		}
-		if got := r.Form.Get("raw"); got != "true" {
+		if got := r.Form.Get("raw"); got != testBoolTrue {
 			t.Fatalf("form raw = %q, want true", got)
 		}
 		_ = json.NewEncoder(w).Encode(gitlabVariable{
@@ -521,6 +856,18 @@ func defaultDestinationConfig() providers.DestinationConfig {
 	}
 }
 
+func destinationConfigWith(overrides map[string]string) providers.DestinationConfig {
+	cfg := defaultDestinationConfig()
+	cfg.Config = map[string]string{}
+	for key, value := range defaultDestinationConfig().Config {
+		cfg.Config[key] = value
+	}
+	for key, value := range overrides {
+		cfg.Config[key] = value
+	}
+	return cfg
+}
+
 func defaultOptions() gitlabDestinationOptions {
 	options, err := gitlabDestinationOptionsFromConfig(defaultDestinationConfig())
 	if err != nil {
@@ -607,6 +954,8 @@ func ownedVariable(metadata variableMetadata) *gitlabVariable {
 	return &gitlabVariable{
 		Key:              testResolvedName,
 		EnvironmentScope: testEnvScope,
+		VariableRaw:      true,
+		VariableType:     VariableTypeEnvVar,
 		Description:      metadataDescription(metadata),
 	}
 }
@@ -676,6 +1025,7 @@ func (c *memoryProjectVariableClient) CreateVariable(
 		return nil, gitlabHTTPError{statusCode: http.StatusConflict}
 	}
 	variable := variableFromInput(input)
+	variable.Hidden = input.Hidden
 	c.variables[key] = variable
 	copy := *variable
 	return &copy, nil
@@ -694,7 +1044,9 @@ func (c *memoryProjectVariableClient) UpdateVariable(
 	if _, exists := c.variables[storageKey]; !exists {
 		return nil, gitlabHTTPError{statusCode: http.StatusNotFound}
 	}
+	existing := c.variables[storageKey]
 	variable := variableFromInput(input)
+	variable.Hidden = existing.Hidden
 	c.variables[storageKey] = variable
 	copy := *variable
 	return &copy, nil
@@ -723,6 +1075,7 @@ func variableFromInput(input gitlabVariableInput) *gitlabVariable {
 		EnvironmentScope: input.EnvironmentScope,
 		Protected:        input.Protected,
 		Masked:           input.Masked,
+		Hidden:           input.Hidden,
 		VariableRaw:      input.VariableRaw,
 		VariableType:     input.VariableType,
 		Description:      input.Description,
@@ -778,6 +1131,28 @@ func TestVariableFormOmitsSecretFromDescription(t *testing.T) {
 	}
 }
 
+func TestVariableFormSendsMaskedAndHiddenOnlyOnCreate(t *testing.T) {
+	input := variableInputFromUpsert(defaultOptions(), defaultUpsertRequest(testPayloadSHAOld, []byte("token_123"), 1))
+	input.Masked = true
+	input.Hidden = true
+
+	createForm := input.createForm()
+	if got := createForm.Get("masked"); got != testBoolTrue {
+		t.Fatalf("create masked = %q, want true", got)
+	}
+	if got := createForm.Get("masked_and_hidden"); got != testBoolTrue {
+		t.Fatalf("create masked_and_hidden = %q, want true", got)
+	}
+
+	updateForm := input.updateForm()
+	if got := updateForm.Get("masked"); got != testBoolTrue {
+		t.Fatalf("update masked = %q, want true", got)
+	}
+	if got := updateForm.Get("masked_and_hidden"); got != "" {
+		t.Fatalf("update masked_and_hidden = %q, want empty", got)
+	}
+}
+
 func TestOwnedByRequestRejectsRuntimeIdentityMismatch(t *testing.T) {
 	request := defaultUpsertRequest(testPayloadSHANew, []byte("secret"), 2)
 	metadata, owned := ownershipMetadata(ownedVariable(variableMetadata{
@@ -828,5 +1203,53 @@ func TestVariableMetadataDescriptionFitsGitLabLimit(t *testing.T) {
 	}
 	if metadata.RestoreEpoch != testRestoreEpoch {
 		t.Fatalf("restore epoch = %s, want %s", metadata.RestoreEpoch, testRestoreEpoch)
+	}
+}
+
+func TestVariableMetadataDescriptionFitsGitLabLimitWithRuntimeIdentity(t *testing.T) {
+	request := defaultUpsertRequest("sha256:"+strings.Repeat("a", 64), []byte("secret"), 1)
+	request.AssociationID = "assoc-" + strings.Repeat("a", 16)
+	request.ObjectID = "OPENBAO_SECRET_SYNC_E2E_" + strings.Repeat("1", 19)
+	request.ResolvedName = request.ObjectID
+	request.Runtime.PluginInstanceID = "inst-" + strings.Repeat("b", 32)
+	request.Runtime.RestoreEpoch = "epoch-" + strings.Repeat("c", 32)
+
+	input := variableInputFromUpsert(defaultOptions(), request)
+	if len(input.Description) > variableDescriptionMaxBytes {
+		t.Fatalf(
+			"description length = %d, want <= %d: %s",
+			len(input.Description),
+			variableDescriptionMaxBytes,
+			input.Description,
+		)
+	}
+
+	metadata, owned := ownershipMetadata(&gitlabVariable{Description: input.Description})
+	if metadata.ObjectIDHash == "" {
+		t.Fatalf("metadata object id was not compacted: %#v", metadata)
+	}
+	if metadata.PluginInstanceIDHash == "" && metadata.RestoreEpochHash == "" {
+		t.Fatalf("metadata runtime identity was not compacted: %#v", metadata)
+	}
+	if !ownedByRequest(metadata, owned, ownershipIdentityFromUpsert(request)) {
+		t.Fatalf("compacted metadata does not match request identity: %#v", metadata)
+	}
+}
+
+func TestOwnedByRequestAcceptsLegacyHexMetadataHashes(t *testing.T) {
+	request := defaultUpsertRequest(testPayloadSHANew, []byte("secret"), 2)
+	metadata := variableMetadata{
+		ManagedBy:            metadataManagedBy,
+		AssociationID:        request.AssociationID,
+		SourcePathHash:       legacyMetadataIdentityHash(request.SourcePath),
+		ObjectIDHash:         legacyMetadataIdentityHash(request.ObjectID),
+		PluginInstanceIDHash: legacyMetadataIdentityHash(request.Runtime.PluginInstanceID),
+		RestoreEpochHash:     legacyMetadataIdentityHash(request.Runtime.RestoreEpoch),
+		SourceVersion:        request.SourceVersion,
+		PayloadSHA256:        request.PayloadSHA256,
+		PayloadFormat:        request.Format,
+	}
+	if !ownedByRequest(metadata, true, ownershipIdentityFromUpsert(request)) {
+		t.Fatalf("legacy hashed metadata does not match request identity: %#v", metadata)
 	}
 }
