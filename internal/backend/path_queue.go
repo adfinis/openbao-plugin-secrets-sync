@@ -246,10 +246,13 @@ func (summary *queueSummary) recordQueuedAge(record outboxRecord, now time.Time)
 }
 
 func (summary *queueSummary) applyCapacity(capacity int) {
-	if capacity <= 0 {
-		capacity = defaultQueueCapacity
-	}
 	summary.Capacity = capacity
+	if capacity == 0 {
+		if summary.queuedDepth() > 0 {
+			summary.Utilization = 1
+		}
+		return
+	}
 	summary.Utilization = float64(summary.queuedDepth()) / float64(capacity)
 }
 

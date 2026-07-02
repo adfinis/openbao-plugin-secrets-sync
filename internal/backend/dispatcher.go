@@ -16,16 +16,13 @@ import (
 )
 
 const (
-	maxAutomaticRetryAttempts = 3
-	retryBaseDelay            = 30 * time.Second
-	retryMaxDelay             = 5 * time.Minute
-	outboxClaimLease          = 5 * time.Minute
+	maxAutomaticRetryAttempts         = 3
+	retryBaseDelay                    = 30 * time.Second
+	retryMaxDelay                     = 5 * time.Minute
+	outboxClaimLease                  = 5 * time.Minute
+	defaultPeriodicMaxOperations      = 100
+	defaultPeriodicRecoveryMaxIntents = 100
 )
-
-func (b *secretSyncBackend) processDueOutbox(ctx context.Context, storage logical.Storage, now time.Time) error {
-	_, err := b.processDueOutboxLimit(ctx, storage, now, 0)
-	return err
-}
 
 func (b *secretSyncBackend) processDueOutboxLimit(
 	ctx context.Context,
@@ -33,9 +30,6 @@ func (b *secretSyncBackend) processDueOutboxLimit(
 	now time.Time,
 	maxOperations int,
 ) (int, error) {
-	b.dispatchMu.Lock()
-	defer b.dispatchMu.Unlock()
-
 	claimOwner, err := b.outboxClaimOwner(ctx, storage)
 	if err != nil {
 		return 0, err
@@ -54,6 +48,9 @@ func (b *secretSyncBackend) processDueOutboxLimit(
 			continue
 		}
 		if !isSupportedOperation(*record) {
+			if err := discardUnsupportedOutboxOperation(ctx, storage, *record); err != nil {
+				return processed, err
+			}
 			continue
 		}
 		claimed, ok, err := claimOutboxRecord(ctx, storage, *record, claimOwner, now)
@@ -135,6 +132,10 @@ func isSupportedOperation(record outboxRecord) bool {
 		return false
 	}
 	return record.Type == outbox.OperationTypeUpsert || record.Type == outbox.OperationTypeDelete
+}
+
+func discardUnsupportedOutboxOperation(ctx context.Context, storage logical.Storage, record outboxRecord) error {
+	return deleteOutbox(ctx, storage, record)
 }
 
 func isDispatchableOutboxState(state string) bool {
@@ -696,7 +697,7 @@ func (b *secretSyncBackend) recordOperationSuccess(ctx context.Context, record o
 		Operation:       observabilityOperation(record.Type),
 		Result:          observability.ResultSuccess,
 		DestinationType: destinationTypeFromRef(record.DestinationRef),
-		Granularity:     record.ObjectID,
+		Granularity:     operationGranularity(record),
 	})
 }
 
@@ -714,8 +715,18 @@ func (b *secretSyncBackend) recordOperationFailure(
 		Result:          result,
 		ErrorClass:      string(errorClass),
 		DestinationType: destinationTypeFromRef(record.DestinationRef),
-		Granularity:     record.ObjectID,
+		Granularity:     operationGranularity(record),
 	})
+}
+
+func operationGranularity(record outboxRecord) string {
+	if record.ObjectID == "" {
+		return observability.ValueUnknown
+	}
+	if record.ObjectID == syncObjectIDSecretPath {
+		return syncGranularitySecretPath
+	}
+	return syncGranularitySecretKey
 }
 
 func (b *secretSyncBackend) recordProviderRequest(

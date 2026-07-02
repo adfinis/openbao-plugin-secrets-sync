@@ -333,7 +333,9 @@ Global configuration must define queue capacity. When the queue is full, the
 write path must return a clear error before accepting a new source version, or
 must accept the version only if enqueue intent recovery guarantees later queue
 creation. The MVP should fail the write before committing the source version
-when capacity is known to be exceeded.
+when capacity is known to be exceeded. `queue_capacity=0` intentionally closes
+the queue to new enqueues while leaving reads, status inspection, and existing
+queue processing available.
 
 Queue capacity checks and queue summaries start from the `outbox_by_state/`
 index. Dispatch starts from the `outbox_by_due/` index, which contains only
@@ -365,6 +367,10 @@ process_due_outbox(limit=B)
 enqueue_reconciliation_work_if_due(limit=C)
 process_due_reconciliation(limit=D)
 ```
+
+The current implementation bounds enqueue-intent recovery and due outbox
+processing per periodic tick. Reconciliation is manual per path until cursor
+storage and limits C/D are implemented.
 
 Outbox processing:
 

@@ -82,7 +82,6 @@ type secretSyncBackend struct {
 	*framework.Backend
 
 	cacheMu          sync.Mutex
-	dispatchMu       sync.Mutex
 	enqueueMu        sync.Mutex
 	dispatchWorkerID string
 	writeLocks       []*locksutil.LockEntry
@@ -131,10 +130,11 @@ func (b *secretSyncBackend) periodic(ctx context.Context, req *logical.Request) 
 		return nil
 	}
 	now := nowUTC()
-	if err := recoverIncompleteEnqueueIntents(ctx, req.Storage, now); err != nil {
+	if _, err := recoverIncompleteEnqueueIntentsLimit(ctx, req.Storage, now, defaultPeriodicRecoveryMaxIntents); err != nil {
 		return err
 	}
-	return b.processDueOutbox(ctx, req.Storage, now)
+	_, err = b.processDueOutboxLimit(ctx, req.Storage, now, defaultPeriodicMaxOperations)
+	return err
 }
 
 func (b *secretSyncBackend) remoteMutationAllowed() bool {
@@ -163,7 +163,7 @@ const backendHelp = `
 The OpenBao secret sync backend stores local source secrets and asynchronously
 synchronizes eligible secrets to configured external destinations.
 
-This scaffold exposes the initial plugin paths and versioned backend shape. The
-KV, outbox, provider, and reconciliation implementations are added in focused
-implementation phases.
+It provides versioned source storage, destination configuration, associations,
+durable outbox dispatch, queue inspection, status reporting, and manual
+reconciliation for this mount.
 `

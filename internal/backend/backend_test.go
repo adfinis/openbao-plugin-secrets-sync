@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/adfinis/openbao-plugin-secrets-sync/internal/domain"
+	"github.com/adfinis/openbao-plugin-secrets-sync/internal/observability"
 	"github.com/adfinis/openbao-plugin-secrets-sync/internal/outbox"
 	"github.com/adfinis/openbao-plugin-secrets-sync/internal/providers"
 	"github.com/adfinis/openbao-plugin-secrets-sync/internal/providers/awssecretsmanager"
@@ -82,6 +83,18 @@ func TestConfigWriteMergesDefaultsAndValidatesQueueCapacity(t *testing.T) {
 	}
 	if got := readResp.Data["restore_guard"]; got != true {
 		t.Fatalf("restore_guard = %v, want true", got)
+	}
+
+	zeroResp := handleRequest(t, b, storage, logical.UpdateOperation, configPath, map[string]interface{}{
+		"queue_capacity": 0,
+	})
+	if zeroResp != nil && zeroResp.IsError() {
+		t.Fatalf("unexpected zero queue_capacity error: %v", zeroResp.Error())
+	}
+	readZeroResp := handleRequest(t, b, storage, logical.ReadOperation, configPath, nil)
+	assertNoErrorResponse(t, readZeroResp)
+	if got := readZeroResp.Data["queue_capacity"]; got != 0 {
+		t.Fatalf("queue_capacity = %v, want 0", got)
 	}
 
 	negativeResp := handleRequest(t, b, storage, logical.UpdateOperation, configPath, map[string]interface{}{
@@ -1957,6 +1970,36 @@ func TestAssociationSecretKeyDisableMarksPerSourceKeyStatus(t *testing.T) {
 	}
 }
 
+func TestOperationMetricsUseGranularityLabels(t *testing.T) {
+	b := Backend(&logical.BackendConfig{})
+	recorder := &recordingObserver{}
+	b.observer = recorder
+	storage := &logical.InmemStorage{}
+
+	writeAppDBSecretData(t, b, storage, map[string]interface{}{
+		"password": "initial",
+		"username": "appuser",
+	})
+	createFakeDestination(t, b, storage, "default")
+	createFakeSecretKeyAssociation(t, b, storage, deleteModeRetain)
+
+	runPeriodicAllowed(t, b, storage, "periodic")
+
+	successGranularities := map[string]struct{}{}
+	for _, event := range recorder.operations {
+		if event.Operation != observability.OperationUpsert || event.Result != observability.ResultSuccess {
+			continue
+		}
+		successGranularities[event.Granularity] = struct{}{}
+		if event.Granularity == "password" || event.Granularity == "username" {
+			t.Fatalf("operation metric leaked source key granularity: %#v", recorder.operations)
+		}
+	}
+	if _, ok := successGranularities[syncGranularitySecretKey]; !ok {
+		t.Fatalf("operation granularities = %v, want %s", successGranularities, syncGranularitySecretKey)
+	}
+}
+
 func TestAssociationRequiresSyncableMetadata(t *testing.T) {
 	b := Backend(&logical.BackendConfig{})
 	storage := &logical.InmemStorage{}
@@ -2809,6 +2852,41 @@ func TestQueueCapacityRejectsWriteBeforeVersionCommit(t *testing.T) {
 	}
 }
 
+func TestQueueCapacityZeroBlocksEnqueues(t *testing.T) {
+	b := Backend(&logical.BackendConfig{})
+	storage := &logical.InmemStorage{}
+
+	writeAppDBSecret(t, b, storage, "initial")
+	createFakeDestination(t, b, storage, "default")
+	createDefaultFakeAssociation(t, b, storage)
+	runPeriodicAllowed(t, b, storage, "periodic")
+
+	configResp := handleRequest(t, b, storage, logical.UpdateOperation, configPath, map[string]interface{}{
+		"queue_capacity": 0,
+	})
+	if configResp != nil && configResp.IsError() {
+		t.Fatalf("unexpected config write error: %v", configResp.Error())
+	}
+
+	blockedResp := writeAppDBSecretDataNoAssert(t, b, storage, map[string]interface{}{
+		"password": "blocked",
+	})
+	if blockedResp == nil || !blockedResp.IsError() {
+		t.Fatalf("write with zero queue capacity response = %#v, want error", blockedResp)
+	}
+	readResp := handleRequest(t, b, storage, logical.ReadOperation, "data/app/db", nil)
+	assertNoErrorResponse(t, readResp)
+	readMetadata := readResp.Data["metadata"].(map[string]interface{})
+	if got := readMetadata["version"]; got != 1 {
+		t.Fatalf("blocked write committed version = %v, want 1", got)
+	}
+	queueResp := handleRequest(t, b, storage, logical.ReadOperation, "queue", nil)
+	assertNoErrorResponse(t, queueResp)
+	if got := queueResp.Data["capacity"]; got != 0 {
+		t.Fatalf("queue capacity = %v, want 0", got)
+	}
+}
+
 func TestPeriodicProcessesFakeOutbox(t *testing.T) {
 	b := Backend(&logical.BackendConfig{})
 	storage := &logical.InmemStorage{}
@@ -2851,6 +2929,80 @@ func TestPeriodicProcessesFakeOutbox(t *testing.T) {
 	assertSyncedStatusObject(t, statusResp.Data["objects"], operationID)
 
 	assertOutboxMissing(t, storage, operationID)
+}
+
+func TestPeriodicLimitsProcessedOperations(t *testing.T) {
+	b := Backend(&logical.BackendConfig{})
+	storage := &logical.InmemStorage{}
+
+	writeAppDBSecret(t, b, storage, "initial")
+	createFakeDestination(t, b, storage, "default")
+	associationResp := createDefaultFakeAssociation(t, b, storage)
+	associationID := associationIDFromResponse(t, associationResp)
+	for _, operationID := range operationIDsFromResponse(t, associationResp) {
+		operation, err := getOutbox(context.Background(), storage, operationID)
+		if err != nil {
+			t.Fatalf("read initial operation: %v", err)
+		}
+		if operation != nil {
+			if err := deleteOutbox(context.Background(), storage, *operation); err != nil {
+				t.Fatalf("delete initial operation: %v", err)
+			}
+		}
+	}
+
+	now := nowUTC().Format(timeFormatRFC3339)
+	for index := 0; index < defaultPeriodicMaxOperations+1; index++ {
+		if err := putOutbox(context.Background(), storage, outboxRecord{
+			ID:             fmt.Sprintf("op-periodic-%03d", index),
+			Type:           outbox.OperationTypeUpsert,
+			Path:           "app/db",
+			Version:        1,
+			AssociationID:  associationID,
+			ObjectID:       syncObjectIDSecretPath,
+			DestinationRef: "fake/default",
+			State:          outboxStatePending,
+			NotBefore:      now,
+			CreatedTime:    now,
+			UpdatedTime:    now,
+		}); err != nil {
+			t.Fatalf("write periodic operation %d: %v", index, err)
+		}
+	}
+
+	runPeriodicAllowed(t, b, storage, "bounded periodic")
+	ids, err := listQueuedOutboxIDs(context.Background(), storage)
+	if err != nil {
+		t.Fatalf("list queued outbox IDs: %v", err)
+	}
+	if len(ids) != 1 {
+		t.Fatalf("queued IDs after bounded periodic = %v, want one remaining", ids)
+	}
+}
+
+func TestPeriodicDropsUnsupportedOutboxOperation(t *testing.T) {
+	b := Backend(&logical.BackendConfig{})
+	storage := &logical.InmemStorage{}
+	now := nowUTC().Format(timeFormatRFC3339)
+	record := outboxRecord{
+		ID:             "op-empty-object",
+		Type:           outbox.OperationTypeUpsert,
+		Path:           "app/db",
+		Version:        1,
+		AssociationID:  "assoc-invalid",
+		DestinationRef: "fake/default",
+		State:          outboxStatePending,
+		NotBefore:      now,
+		CreatedTime:    now,
+		UpdatedTime:    now,
+	}
+	if err := putOutbox(context.Background(), storage, record); err != nil {
+		t.Fatalf("write unsupported operation: %v", err)
+	}
+
+	runPeriodicAllowed(t, b, storage, "periodic invalid operation cleanup")
+	assertOutboxMissing(t, storage, record.ID)
+	assertQueueCount(t, b, storage, "pending", 0)
 }
 
 func TestPeriodicHonorsRestoreGuard(t *testing.T) {
@@ -3724,6 +3876,29 @@ func TestRecoveryPrunesCompletedEnqueueIntent(t *testing.T) {
 	}
 }
 
+func TestPeriodicLimitsRecoveredEnqueueIntents(t *testing.T) {
+	b := Backend(&logical.BackendConfig{})
+	storage := &logical.InmemStorage{}
+	now := nowUTC().Format(timeFormatRFC3339)
+	for index := 0; index < defaultPeriodicRecoveryMaxIntents+1; index++ {
+		intent := newEnqueueIntentRecord(fmt.Sprintf("app/db-%03d", index), "gen-test", 1, nil, now)
+		intent.Complete = true
+		intent.CompletedTime = now
+		if err := putEnqueueIntent(context.Background(), storage, intent); err != nil {
+			t.Fatalf("write completed enqueue intent %d: %v", index, err)
+		}
+	}
+
+	runPeriodicAllowed(t, b, storage, "bounded periodic recovery")
+	intents, err := listEnqueueIntents(context.Background(), storage)
+	if err != nil {
+		t.Fatalf("list enqueue intents: %v", err)
+	}
+	if len(intents) != 1 {
+		t.Fatalf("enqueue intents after bounded periodic = %d, want 1", len(intents))
+	}
+}
+
 func TestPeriodicHonorsDisabledConfig(t *testing.T) {
 	b := Backend(&logical.BackendConfig{})
 	storage := &logical.InmemStorage{}
@@ -4358,6 +4533,29 @@ func planDefaultFakeAssociation(
 		"format":           defaultAssociationFormat,
 	})
 }
+
+type recordingObserver struct {
+	operations []observability.OperationEvent
+}
+
+func (*recordingObserver) QueueDepth(context.Context, string, int) {}
+
+func (r *recordingObserver) Operation(_ context.Context, event observability.OperationEvent) {
+	r.operations = append(r.operations, event)
+}
+
+func (*recordingObserver) ProviderRequest(context.Context, observability.ProviderRequestEvent) {}
+
+func (*recordingObserver) ReadinessCheck(context.Context, observability.ReadinessCheckEvent) {}
+
+func (*recordingObserver) RemoteMutationBlocked(context.Context, observability.RemoteMutationBlockedEvent) {
+}
+
+func (*recordingObserver) ReconcileRun(context.Context, observability.ReconcileRunEvent) {}
+
+func (*recordingObserver) QueueCapacity(context.Context, observability.QueueCapacityEvent) {}
+
+func (*recordingObserver) RestoreGuardActive(context.Context, bool) {}
 
 type contextCanceledProvider struct {
 	cancel context.CancelFunc

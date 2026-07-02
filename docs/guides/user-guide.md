@@ -177,6 +177,8 @@ bao read secret-sync/queue
 ```
 
 Queue summaries include pending, retry-wait, claimed, and terminal counters.
+`queue_capacity=0` is an explicit enqueue freeze: writes that would create
+sync work fail before committing a new source version.
 `oldest_age_seconds` reports the age of the oldest pending or retry-wait
 operation. Successful and canceled operations are removed from the queue;
 inspect `status/<path>` for success evidence.

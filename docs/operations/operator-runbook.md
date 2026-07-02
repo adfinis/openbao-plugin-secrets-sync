@@ -143,6 +143,8 @@ bao read secret-sync/queue
 Queue summaries include `capacity` and `utilization`. Treat sustained high
 utilization as backpressure: increase drain frequency, reduce producer rate, or
 raise `queue_capacity` after checking storage and provider limits.
+Set `queue_capacity=0` only for a deliberate enqueue freeze; existing queued
+work can still drain.
 Successful operations are removed from the queue after object status is
 persisted; use `status/<path>` rather than `queue/<operation-id>` to confirm
 completed sync.

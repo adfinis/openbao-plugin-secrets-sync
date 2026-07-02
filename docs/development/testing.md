@@ -192,6 +192,8 @@ Current queue hardening coverage asserts that:
 - older operations cannot overwrite newer per-object status records;
 - incomplete enqueue intents recover missing outbox work and completed enqueue
   intents are pruned;
+- periodic work processes bounded enqueue-intent and outbox batches;
+- `queue_capacity=0` blocks new enqueue-producing writes;
 - recreated source paths rotate source generation so operation IDs are not
   reused with reset version numbers;
 - version pruning keeps source versions that are still referenced by queued
@@ -200,6 +202,9 @@ Current queue hardening coverage asserts that:
   operation;
 - outbox state and due indexes are updated when operation state or schedule
   changes, and when records are deleted;
+- unsupported queued operation records are removed instead of consuming
+  capacity indefinitely;
+- operation metrics label sync granularity without using source key names;
 - expired outbox claims are reclaimable and successful dispatch prunes the
   reclaimed operation;
 - retryable provider failures clear claim metadata before moving to

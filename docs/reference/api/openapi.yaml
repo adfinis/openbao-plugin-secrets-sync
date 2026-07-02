@@ -772,6 +772,7 @@ components:
           type: integer
           minimum: 0
           default: 1000
+          description: Maximum queued operations; 0 rejects new enqueue-producing writes.
       additionalProperties: false
 
     ConfigResponse:
@@ -800,6 +801,7 @@ components:
           type: integer
         queue_capacity:
           type: integer
+          description: Maximum queued operations; 0 rejects new enqueue-producing writes.
 
     DestinationWriteRequest:
       type: object

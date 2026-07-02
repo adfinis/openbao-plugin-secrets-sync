@@ -116,9 +116,6 @@ func (b *secretSyncBackend) pathConfigWrite(
 		}
 		cfg.QueueCapacity = queueCapacity
 	}
-	if cfg.QueueCapacity == 0 {
-		cfg.QueueCapacity = defaultQueueCapacity
-	}
 	cfg.UpdatedTime = nowUTC().Format(timeFormatRFC3339)
 	if err := putGlobalConfig(ctx, req.Storage, cfg); err != nil {
 		return nil, err
@@ -188,9 +185,6 @@ func readGlobalConfig(ctx context.Context, storage logical.Storage) (globalConfi
 	}
 	if cfg.QueueCapacity < 0 {
 		return globalConfig{}, fmt.Errorf("stored queue_capacity must be greater than or equal to zero")
-	}
-	if cfg.QueueCapacity == 0 {
-		cfg.QueueCapacity = defaultQueueCapacity
 	}
 	return cfg, nil
 }
