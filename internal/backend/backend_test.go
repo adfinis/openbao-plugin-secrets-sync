@@ -430,6 +430,59 @@ func TestIncompatibleStorageSchemaFailsClosed(t *testing.T) {
 	}
 }
 
+func TestNormalizeSourcePathRejectsReservedSegments(t *testing.T) {
+	for _, input := range []string{
+		"app/versions/5/x",
+		"versions",
+		"team/plan",
+	} {
+		t.Run(input, func(t *testing.T) {
+			if _, err := normalizeSourcePath(input); err == nil {
+				t.Fatalf("normalizeSourcePath(%q) succeeded, want error", input)
+			}
+		})
+	}
+	for _, input := range []string{
+		"app/versions2/5/x",
+		"plan/team",
+		"team/plans",
+	} {
+		t.Run(input, func(t *testing.T) {
+			if _, err := normalizeSourcePath(input); err != nil {
+				t.Fatalf("normalizeSourcePath(%q): %v", input, err)
+			}
+		})
+	}
+}
+
+func TestResolvedNameAllowedUsesSegmentBoundary(t *testing.T) {
+	prefixes := []string{"prod/app", "shared/team/"}
+	for _, name := range []string{
+		"prod/app",
+		"prod/app/db",
+		"/prod/app/db",
+		"shared/team",
+		"shared/team/api",
+	} {
+		t.Run("allow "+name, func(t *testing.T) {
+			if !resolvedNameAllowed(name, prefixes) {
+				t.Fatalf("resolvedNameAllowed(%q) = false, want true", name)
+			}
+		})
+	}
+	for _, name := range []string{
+		"prod/apple-secrets",
+		"prod/application/db",
+		"shared/team-alpha",
+	} {
+		t.Run("deny "+name, func(t *testing.T) {
+			if resolvedNameAllowed(name, prefixes) {
+				t.Fatalf("resolvedNameAllowed(%q) = true, want false", name)
+			}
+		})
+	}
+}
+
 func TestDestinationLifecycle(t *testing.T) {
 	b := Backend(&logical.BackendConfig{})
 	storage := &logical.InmemStorage{}

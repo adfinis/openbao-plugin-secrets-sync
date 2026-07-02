@@ -81,10 +81,16 @@ bao write secret-sync/destinations/PROVIDER_TYPE/NAME \
 
 `allowed_source_path_prefixes` uses OpenBao source path segment boundaries:
 `apps/team-a` allows `apps/team-a/db` but not `apps/team-alpha/db`.
-`allowed_resolved_name_prefixes` is a literal remote-name prefix. Keep a
-trailing `/` when you want a folder-like boundary.
+`allowed_resolved_name_prefixes` uses exact or `/`-boundary matches:
+`openbao-plugin-secrets-sync/team-a` allows
+`openbao-plugin-secrets-sync/team-a/db` but not
+`openbao-plugin-secrets-sync/team-alpha/db`.
 
 ## Write source data
+
+Source paths are slash-separated OpenBao paths. They cannot contain empty,
+`.` or `..` segments, cannot contain the reserved `versions` segment, and
+cannot end in the reserved `plan` segment.
 
 Mark a source path as syncable:
 

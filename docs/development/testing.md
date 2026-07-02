@@ -173,8 +173,9 @@ Current backend security-boundary coverage asserts that:
 Current destination policy coverage asserts that:
 
 - destination prefix constraints are normalized and visible on read;
+- source path validation rejects reserved storage/control segments;
 - association create and plan reject disallowed source paths and resolved
-  remote names;
+  remote names with exact or slash-boundary prefix matching;
 - queued dispatch rechecks destination policy and blocks remote mutation if a
   destination policy is tightened after enqueue.
 

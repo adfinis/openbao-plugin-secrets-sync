@@ -85,8 +85,8 @@ Still planned:
 
 - maximum destinations per secret;
 - maximum secret size;
-- broader forbidden path patterns beyond normalized OpenBao source path
-  validation.
+- provider-specific forbidden path patterns beyond the backend's normalized
+  OpenBao source path validation.
 
 Delegated app owners should not be able to use a broad platform destination to
 write arbitrary remote names. Destination records can constrain source paths and

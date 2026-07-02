@@ -1036,8 +1036,13 @@ func resolvedNameAllowed(name string, prefixes []string) bool {
 	if len(prefixes) == 0 {
 		return true
 	}
+	name = strings.TrimLeft(name, "/")
 	for _, prefix := range prefixes {
-		if strings.HasPrefix(name, prefix) {
+		prefix = strings.TrimRight(prefix, "/")
+		if prefix == "" {
+			continue
+		}
+		if name == prefix || strings.HasPrefix(name, prefix+"/") {
 			return true
 		}
 	}

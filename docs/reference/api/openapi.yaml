@@ -713,7 +713,7 @@ components:
       schema:
         type: string
         example: app/db
-      description: Slash-containing OpenBao source path. Clients may need to preserve or encode slashes.
+      description: Slash-containing OpenBao source path. Clients may need to preserve or encode slashes. Segments must not be empty, `.`, `..`, or `versions`; the path must not end in `plan`.
     AssociationID:
       name: association_id
       in: path
@@ -818,7 +818,7 @@ components:
           type: array
           items:
             type: string
-          description: Resolved remote-name prefixes allowed to use the destination.
+          description: Resolved remote-name prefixes allowed to use the destination. Matches are exact or on a `/` boundary.
         region:
           type: string
           description: AWS region.
@@ -921,6 +921,7 @@ components:
           type: array
           items:
             type: string
+          description: Resolved remote-name prefixes allowed to use the destination. Matches are exact or on a `/` boundary.
         config:
           type: object
           additionalProperties:
