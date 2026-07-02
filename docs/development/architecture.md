@@ -260,7 +260,7 @@ replacement writes are serialized across enqueue paths.
 ## Operation State Machine
 
 ```text
-pending -> claimed -> applying -> succeeded
+pending -> claimed -> applying -> status_persisted -> pruned
                      -> retry_wait
                      -> failed_terminal
                      -> canceled
@@ -273,7 +273,9 @@ applying   -> pending        when claim expires and provider operation is idempo
 The dispatcher persists claim owner, expiry, and attempt metadata directly on
 the outbox record rather than exposing `claimed` as a separate public operation
 state. Due `pending` and `retry_wait` records with an unexpired claim are
-skipped; expired claims are reclaimable. Automatic retry is reserved for
+skipped; expired claims are reclaimable. Successful operations write object
+status first and are then pruned from the outbox, so success evidence lives in
+`status/` rather than durable queue history. Automatic retry is reserved for
 provider `rate_limit` and `unavailable` classes, with a bounded attempt budget
 and `not_before` delay. Manual queue retry moves canceled, retry-wait, or
 terminal failed work back to `pending` and resets the attempt counter.

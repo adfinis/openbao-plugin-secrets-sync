@@ -611,7 +611,7 @@ paths:
         - $ref: "#/components/parameters/OperationID"
       responses:
         "200":
-          description: Durable queue operation without source payload data.
+          description: Durable queue operation without source payload data. Successful operations are pruned after status persistence.
           content:
             application/json:
               schema:
@@ -1637,7 +1637,7 @@ components:
           type: string
         state:
           type: string
-          enum: [pending, retry_wait, failed_terminal, succeeded, canceled]
+          enum: [pending, retry_wait, failed_terminal, canceled]
         attempts:
           type: integer
         not_before:

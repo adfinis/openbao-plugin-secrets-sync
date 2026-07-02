@@ -143,6 +143,9 @@ bao read secret-sync/queue
 Queue summaries include `capacity` and `utilization`. Treat sustained high
 utilization as backpressure: increase drain frequency, reduce producer rate, or
 raise `queue_capacity` after checking storage and provider limits.
+Successful operations are removed from the queue after object status is
+persisted; use `status/<path>` rather than `queue/<operation-id>` to confirm
+completed sync.
 
 For deterministic local testing or controlled catch-up, drain due operations:
 

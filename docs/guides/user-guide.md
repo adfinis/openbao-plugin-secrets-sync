@@ -172,7 +172,8 @@ bao read secret-sync/queue
 
 Queue summaries include pending, retry-wait, terminal, and canceled counters.
 `oldest_age_seconds` reports the age of the oldest pending or retry-wait
-operation.
+operation. Successful operations are removed from the queue after their status
+record is persisted; inspect `status/<path>` for success evidence.
 
 Newer writes supersede older inactive queued upserts for the same association
 object. Current-version deletes and destroys cancel queued upserts and queue

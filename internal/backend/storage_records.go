@@ -31,7 +31,6 @@ const (
 	outboxStatePending         = "pending"
 	outboxStateRetryWait       = "retry_wait"
 	outboxStateFailedTerminal  = "failed_terminal"
-	outboxStateSucceeded       = "succeeded"
 	outboxStateCanceled        = "canceled"
 	syncGranularitySecretPath  = "secret-path"
 	syncGranularitySecretKey   = "secret-key"

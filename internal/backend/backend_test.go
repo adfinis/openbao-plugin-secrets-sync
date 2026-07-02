@@ -1086,7 +1086,8 @@ func TestUndeleteCurrentVersionQueuesUpsertAfterRemoteDelete(t *testing.T) {
 		outbox.OperationTypeDelete,
 	)
 	runPeriodicAllowed(t, b, storage, "periodic delete")
-	assertOutboxOperation(t, storage, deleteOperationID, 1, outboxStateSucceeded)
+	assertOutboxMissing(t, storage, deleteOperationID)
+	assertStatusObjectState(t, b, storage, domain.SyncStateRemoteMissing)
 
 	undeleteResp := handleRequest(t, b, storage, logical.UpdateOperation, "undelete/app/db", map[string]interface{}{
 		"versions": []int{1},
@@ -1097,7 +1098,7 @@ func TestUndeleteCurrentVersionQueuesUpsertAfterRemoteDelete(t *testing.T) {
 	assertOutboxOperation(t, storage, upsertOperationID, 1, outboxStatePending)
 
 	runPeriodicAllowed(t, b, storage, "periodic undelete upsert")
-	assertOutboxOperation(t, storage, upsertOperationID, 1, outboxStateSucceeded)
+	assertOutboxMissing(t, storage, upsertOperationID)
 	statusResp := handleRequest(t, b, storage, logical.ReadOperation, "status/app/db", nil)
 	assertNoErrorResponse(t, statusResp)
 	objects := statusResp.Data["objects"].([]map[string]interface{})
@@ -1151,10 +1152,7 @@ func TestDataDeleteDeleteModeQueuesRemoteDelete(t *testing.T) {
 	}
 
 	runPeriodicAllowed(t, b, storage, "periodic delete")
-	deleteOperation = assertOutboxOperation(t, storage, deleteOperationID, 1, outboxStateSucceeded)
-	if got := deleteOperation.Type; got != outbox.OperationTypeDelete {
-		t.Fatalf("succeeded delete operation type = %s, want %s", got, outbox.OperationTypeDelete)
-	}
+	assertOutboxMissing(t, storage, deleteOperationID)
 	statusResp := handleRequest(t, b, storage, logical.ReadOperation, "status/app/db", nil)
 	assertNoErrorResponse(t, statusResp)
 	objects := statusResp.Data["objects"].([]map[string]interface{})
@@ -2731,13 +2729,7 @@ func TestPeriodicProcessesFakeOutbox(t *testing.T) {
 	}
 	assertSyncedStatusObject(t, statusResp.Data["objects"], operationID)
 
-	operation, err := getOutbox(context.Background(), storage, operationID)
-	if err != nil {
-		t.Fatalf("read outbox operation: %v", err)
-	}
-	if operation == nil || operation.State != outboxStateSucceeded {
-		t.Fatalf("outbox operation = %#v, want succeeded", operation)
-	}
+	assertOutboxMissing(t, storage, operationID)
 }
 
 func TestPeriodicHonorsRestoreGuard(t *testing.T) {
@@ -2756,7 +2748,8 @@ func TestPeriodicHonorsRestoreGuard(t *testing.T) {
 	assertQueueCount(t, b, storage, "pending", 1)
 
 	runPeriodicAllowed(t, b, storage, "periodic after restore guard acknowledgement")
-	assertOutboxOperation(t, storage, operationID, 1, outboxStateSucceeded)
+	assertOutboxMissing(t, storage, operationID)
+	assertStatusObjectState(t, b, storage, domain.SyncStateSynced)
 }
 
 func TestPeriodicSkipsUnsafeReplicationNode(t *testing.T) {
@@ -3179,8 +3172,27 @@ func TestOutboxIndexesTrackPutAndDelete(t *testing.T) {
 	if err := deleteOutbox(context.Background(), storage, record); err != nil {
 		t.Fatalf("delete outbox: %v", err)
 	}
+	assertOutboxMissing(t, storage, record.ID)
 	assertOutboxStateIndexed(t, storage, outboxStateRetryWait, record.ID, false)
 	assertOutboxDueIndexed(t, storage, future, record.ID, false)
+
+	record.State = outboxStatePending
+	record.NotBefore = now
+	if err := putOutbox(context.Background(), storage, record); err != nil {
+		t.Fatalf("rewrite pending outbox: %v", err)
+	}
+	assertOutboxStateIndexed(t, storage, outboxStatePending, record.ID, true)
+	assertOutboxDueIndexed(t, storage, now, record.ID, true)
+
+	partial := record
+	partial.State = ""
+	partial.NotBefore = ""
+	if err := deleteOutbox(context.Background(), storage, partial); err != nil {
+		t.Fatalf("delete outbox with partial caller copy: %v", err)
+	}
+	assertOutboxMissing(t, storage, record.ID)
+	assertOutboxStateIndexed(t, storage, outboxStatePending, record.ID, false)
+	assertOutboxDueIndexed(t, storage, now, record.ID, false)
 }
 
 func TestQueueDrainProcessesDueOperations(t *testing.T) {
@@ -3207,7 +3219,8 @@ func TestQueueDrainProcessesDueOperations(t *testing.T) {
 	if got := queue["pending"]; got != 0 {
 		t.Fatalf("pending = %v, want 0", got)
 	}
-	assertOutboxOperation(t, storage, operationID, 1, outboxStateSucceeded)
+	assertOutboxMissing(t, storage, operationID)
+	assertStatusObjectState(t, b, storage, domain.SyncStateSynced)
 }
 
 func TestQueueDrainSkipsUnexpiredClaim(t *testing.T) {
@@ -3278,15 +3291,11 @@ func TestQueueDrainReclaimsExpiredClaimAndClearsIt(t *testing.T) {
 	if got := drainResp.Data["processed"]; got != 1 {
 		t.Fatalf("processed = %v, want 1", got)
 	}
-	operation = assertOutboxOperation(t, storage, operationID, 1, outboxStateSucceeded)
-	if operation.ClaimOwner != "" || operation.ClaimExpiresTime != "" || operation.ClaimAttempt != 0 {
-		t.Fatalf("claim fields after success = %#v, want cleared", operation)
-	}
+	assertOutboxMissing(t, storage, operationID)
 
 	readResp := handleRequest(t, b, storage, logical.ReadOperation, "queue/"+operationID, nil)
-	assertNoErrorResponse(t, readResp)
-	if got := readResp.Data["claimed"]; got != false {
-		t.Fatalf("claimed response = %v, want false", got)
+	if readResp != nil {
+		t.Fatalf("read pruned operation response = %#v, want nil", readResp)
 	}
 }
 
@@ -3438,7 +3447,7 @@ func TestQueueDrainHonorsDisabledConfig(t *testing.T) {
 	}
 }
 
-func TestQueueOperationRejectsRetryAfterSuccess(t *testing.T) {
+func TestQueueOperationPrunesAfterSuccess(t *testing.T) {
 	b := Backend(&logical.BackendConfig{})
 	storage := &logical.InmemStorage{}
 
@@ -3448,13 +3457,18 @@ func TestQueueOperationRejectsRetryAfterSuccess(t *testing.T) {
 	operationID := operationIDsFromResponse(t, associationResp)[0]
 	runPeriodicAllowed(t, b, storage, "periodic")
 
+	assertOutboxMissing(t, storage, operationID)
+	readResp := handleRequest(t, b, storage, logical.ReadOperation, "queue/"+operationID, nil)
+	if readResp != nil {
+		t.Fatalf("read pruned operation response = %#v, want nil", readResp)
+	}
 	retryResp := handleRequest(t, b, storage, logical.UpdateOperation, "queue/"+operationID+"/retry", nil)
-	if retryResp == nil || !retryResp.IsError() {
-		t.Fatalf("retry succeeded operation response = %#v, want error", retryResp)
+	if retryResp != nil {
+		t.Fatalf("retry pruned operation response = %#v, want nil", retryResp)
 	}
 	cancelResp := handleRequest(t, b, storage, logical.UpdateOperation, "queue/"+operationID+"/cancel", nil)
-	if cancelResp == nil || !cancelResp.IsError() {
-		t.Fatalf("cancel succeeded operation response = %#v, want error", cancelResp)
+	if cancelResp != nil {
+		t.Fatalf("cancel pruned operation response = %#v, want nil", cancelResp)
 	}
 }
 
@@ -3486,13 +3500,7 @@ func TestPeriodicRecoversIncompleteEnqueueIntent(t *testing.T) {
 	}
 
 	runPeriodicAllowed(t, b, storage, "periodic recovery")
-	recovered, err := getOutbox(context.Background(), storage, operationID)
-	if err != nil {
-		t.Fatalf("read recovered outbox operation: %v", err)
-	}
-	if recovered == nil || recovered.State != outboxStateSucceeded {
-		t.Fatalf("recovered operation = %#v, want succeeded operation", recovered)
-	}
+	assertOutboxMissing(t, storage, operationID)
 	intentRecord, err := getEnqueueIntent(context.Background(), storage, "app/db", 2)
 	if err != nil {
 		t.Fatalf("read recovered enqueue intent: %v", err)
@@ -3941,6 +3949,17 @@ func assertOutboxOperation(
 		t.Fatalf("outbox operation state = %s, want %s", got, state)
 	}
 	return operation
+}
+
+func assertOutboxMissing(t *testing.T, storage logical.Storage, operationID string) {
+	t.Helper()
+	operation, err := getOutbox(context.Background(), storage, operationID)
+	if err != nil {
+		t.Fatalf("read outbox operation: %v", err)
+	}
+	if operation != nil {
+		t.Fatalf("outbox operation %s = %#v, want pruned", operationID, operation)
+	}
 }
 
 func assertOutboxStateIndexed(t *testing.T, storage logical.Storage, state string, operationID string, want bool) {

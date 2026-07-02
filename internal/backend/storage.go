@@ -458,20 +458,41 @@ func putOutbox(ctx context.Context, storage logical.Storage, record outboxRecord
 }
 
 func deleteOutbox(ctx context.Context, storage logical.Storage, record outboxRecord) error {
+	existing, err := getOutbox(ctx, storage, record.ID)
+	if err != nil {
+		return err
+	}
 	if err := storage.Delete(ctx, outboxStorageKey(record.ID)); err != nil {
 		return err
 	}
 	if err := storage.Delete(ctx, outboxByPathStorageKey(record.Path, record.ID)); err != nil {
 		return err
 	}
-	if record.State == "" {
-		return nil
+	if existing != nil && existing.Path != "" && existing.Path != record.Path {
+		if err := storage.Delete(ctx, outboxByPathStorageKey(existing.Path, existing.ID)); err != nil {
+			return err
+		}
 	}
-	if err := storage.Delete(ctx, outboxByStateStorageKey(record.State, record.ID)); err != nil {
+	if record.State == "" {
+		if existing == nil || existing.State == "" {
+			return nil
+		}
+	} else if err := storage.Delete(ctx, outboxByStateStorageKey(record.State, record.ID)); err != nil {
 		return err
 	}
-	if dueTime := outboxDueIndexTime(record); dueTime != "" {
-		return storage.Delete(ctx, outboxByDueStorageKey(dueTime, record.ID))
+	if existing != nil && existing.State != "" && existing.State != record.State {
+		if err := storage.Delete(ctx, outboxByStateStorageKey(existing.State, existing.ID)); err != nil {
+			return err
+		}
+	}
+	dueTime := outboxDueIndexTime(record)
+	if dueTime != "" {
+		if err := storage.Delete(ctx, outboxByDueStorageKey(dueTime, record.ID)); err != nil {
+			return err
+		}
+	}
+	if existingDueTime := outboxDueIndexTimeFromPointer(existing); existingDueTime != "" && existingDueTime != dueTime {
+		return storage.Delete(ctx, outboxByDueStorageKey(existingDueTime, record.ID))
 	}
 	return nil
 }
@@ -545,6 +566,13 @@ func outboxDueIndexTime(record outboxRecord) string {
 		return record.NotBefore
 	}
 	return "0001-01-01T00:00:00Z"
+}
+
+func outboxDueIndexTimeFromPointer(record *outboxRecord) string {
+	if record == nil {
+		return ""
+	}
+	return outboxDueIndexTime(*record)
 }
 
 func listOutboxIDsForPath(ctx context.Context, storage logical.Storage, path string) ([]string, error) {

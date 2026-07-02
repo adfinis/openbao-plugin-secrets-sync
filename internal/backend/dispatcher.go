@@ -252,15 +252,11 @@ func (b *secretSyncBackend) processUpsert(
 		result = &providers.SyncResult{}
 	}
 
-	record.State = outboxStateSucceeded
 	record.Attempts++
 	record.UpdatedTime = now.Format(timeFormatRFC3339)
 	clearOutboxClaim(&record)
-	if err := putOutbox(ctx, storage, record); err != nil {
-		return err
-	}
 	b.recordOperationSuccess(ctx, record)
-	return putStatus(ctx, storage, statusRecord{
+	if err := putStatus(ctx, storage, statusRecord{
 		Path:            record.Path,
 		Version:         record.Version,
 		AssociationID:   record.AssociationID,
@@ -273,7 +269,10 @@ func (b *secretSyncBackend) processUpsert(
 		LastOperationID: record.ID,
 		LastSuccessTime: now.Format(timeFormatRFC3339),
 		UpdatedTime:     now.Format(timeFormatRFC3339),
-	})
+	}); err != nil {
+		return err
+	}
+	return deleteOutbox(ctx, storage, record)
 }
 
 func (b *secretSyncBackend) processDelete(
@@ -353,15 +352,11 @@ func (b *secretSyncBackend) processDelete(
 		result = &providers.SyncResult{}
 	}
 
-	record.State = outboxStateSucceeded
 	record.Attempts++
 	record.UpdatedTime = now.Format(timeFormatRFC3339)
 	clearOutboxClaim(&record)
-	if err := putOutbox(ctx, storage, record); err != nil {
-		return err
-	}
 	b.recordOperationSuccess(ctx, record)
-	return putStatus(ctx, storage, statusRecord{
+	if err := putStatus(ctx, storage, statusRecord{
 		Path:            record.Path,
 		Version:         record.Version,
 		AssociationID:   record.AssociationID,
@@ -373,7 +368,10 @@ func (b *secretSyncBackend) processDelete(
 		LastOperationID: record.ID,
 		LastSuccessTime: now.Format(timeFormatRFC3339),
 		UpdatedTime:     now.Format(timeFormatRFC3339),
-	})
+	}); err != nil {
+		return err
+	}
+	return deleteOutbox(ctx, storage, record)
 }
 
 type upsertContext struct {

@@ -191,9 +191,12 @@ Current queue hardening coverage asserts that:
 - older operations cannot overwrite newer per-object status records;
 - incomplete enqueue intents recover missing outbox work and completed enqueue
   intents are pruned;
+- successful dispatch writes object status and prunes the completed outbox
+  operation;
 - outbox state and due indexes are updated when operation state or schedule
   changes, and when records are deleted;
-- expired outbox claims are reclaimable and cleared after successful dispatch;
+- expired outbox claims are reclaimable and successful dispatch prunes the
+  reclaimed operation;
 - retryable provider failures clear claim metadata before moving to
   `retry_wait`;
 - periodic processing skips unsafe OpenBao replication states;
