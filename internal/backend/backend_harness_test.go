@@ -915,17 +915,32 @@ func (contextCanceledProvider) Capabilities() providers.Capabilities {
 	}
 }
 
-func (contextCanceledProvider) Validate(context.Context, providers.DestinationConfig) error {
+func (contextCanceledProvider) ValidateConfig(context.Context, providers.DestinationConfig) error {
 	return nil
 }
 
-func (contextCanceledProvider) Plan(context.Context, providers.PlanRequest) (*providers.PlanResult, error) {
+func (p contextCanceledProvider) OpenDestination(
+	context.Context,
+	providers.DestinationConfig,
+) (providers.DestinationRuntime, error) {
+	return contextCanceledRuntime(p), nil
+}
+
+type contextCanceledRuntime struct {
+	cancel context.CancelFunc
+}
+
+func (contextCanceledRuntime) Health(context.Context) (*providers.HealthResult, error) {
+	return &providers.HealthResult{Healthy: true}, nil
+}
+
+func (contextCanceledRuntime) Plan(context.Context, providers.PlanRequest) (*providers.PlanResult, error) {
 	return &providers.PlanResult{Action: providers.PlanActionCreate}, nil
 }
 
-func (p contextCanceledProvider) Upsert(ctx context.Context, _ providers.UpsertRequest) (*providers.SyncResult, error) {
-	if p.cancel != nil {
-		p.cancel()
+func (r contextCanceledRuntime) Upsert(ctx context.Context, _ providers.UpsertRequest) (*providers.SyncResult, error) {
+	if r.cancel != nil {
+		r.cancel()
 	}
 	if ctx.Err() != nil {
 		return nil, &providers.Error{
@@ -936,9 +951,9 @@ func (p contextCanceledProvider) Upsert(ctx context.Context, _ providers.UpsertR
 	return &providers.SyncResult{RemoteVersion: "ctxcancel"}, nil
 }
 
-func (p contextCanceledProvider) Delete(ctx context.Context, _ providers.DeleteRequest) (*providers.SyncResult, error) {
-	if p.cancel != nil {
-		p.cancel()
+func (r contextCanceledRuntime) Delete(ctx context.Context, _ providers.DeleteRequest) (*providers.SyncResult, error) {
+	if r.cancel != nil {
+		r.cancel()
 	}
 	if ctx.Err() != nil {
 		return nil, &providers.Error{
@@ -949,12 +964,12 @@ func (p contextCanceledProvider) Delete(ctx context.Context, _ providers.DeleteR
 	return &providers.SyncResult{RemoteVersion: "ctxcancel-deleted"}, nil
 }
 
-func (contextCanceledProvider) ReadState(context.Context, providers.ReadStateRequest) (*providers.RemoteState, error) {
+func (contextCanceledRuntime) ReadState(context.Context, providers.ReadStateRequest) (*providers.RemoteState, error) {
 	return &providers.RemoteState{Exists: true, OwnershipKnown: true, Owned: true}, nil
 }
 
-func (contextCanceledProvider) Health(context.Context, providers.DestinationConfig) (*providers.HealthResult, error) {
-	return &providers.HealthResult{Healthy: true}, nil
+func (contextCanceledRuntime) Close(context.Context) error {
+	return nil
 }
 
 func markAppDBSyncable(t *testing.T, b logical.Backend, storage logical.Storage) {

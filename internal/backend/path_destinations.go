@@ -367,6 +367,7 @@ func (b *secretSyncBackend) pathDestinationWrite(
 	if err := storeDestinationWrite(ctx, req.Storage, record, sensitiveConfig, sensitiveCreatedTime, now); err != nil {
 		return nil, err
 	}
+	b.invalidateDestinationRuntime(ctx, destinationRef(record.Type, record.Name))
 	return nil, nil
 }
 
@@ -433,7 +434,7 @@ func (b *secretSyncBackend) validateDestinationWrite(
 ) *logical.Response {
 	resolvedConfig := destinationConfigFromParts(record, sensitiveConfig)
 	providerStart := time.Now()
-	validationErr := provider.Validate(ctx, resolvedConfig)
+	validationErr := provider.ValidateConfig(ctx, resolvedConfig)
 	b.recordProviderRequest(
 		ctx,
 		provider.Type(),
@@ -494,7 +495,7 @@ func (b *secretSyncBackend) pathDestinationValidate(
 		return nil, err
 	}
 	providerStart := time.Now()
-	providerErr := provider.Validate(ctx, resolvedConfig)
+	providerErr := provider.ValidateConfig(ctx, resolvedConfig)
 	b.recordProviderRequest(ctx, provider.Type(), observability.OperationValidate, providerErr, time.Since(providerStart))
 	if providerErr != nil {
 		return &logical.Response{Data: newResponseData(
@@ -532,7 +533,7 @@ func (b *secretSyncBackend) pathDestinationCheck(
 	validationErrorClass := ""
 	validationMessage := ""
 	providerStart := time.Now()
-	if providerErr := provider.Validate(ctx, resolvedConfig); providerErr != nil {
+	if providerErr := provider.ValidateConfig(ctx, resolvedConfig); providerErr != nil {
 		b.recordProviderRequest(
 			ctx,
 			provider.Type(),
@@ -560,7 +561,11 @@ func (b *secretSyncBackend) pathDestinationCheck(
 	if valid && !record.Disabled {
 		healthChecked = true
 		providerStart = time.Now()
-		result, providerErr := provider.Health(ctx, resolvedConfig)
+		runtime, providerErr := b.destinationRuntime(ctx, provider, *record, resolvedConfig)
+		var result *providers.HealthResult
+		if providerErr == nil {
+			result, providerErr = runtime.Health(ctx)
+		}
 		b.recordProviderHealthRequest(ctx, provider.Type(), result, providerErr, time.Since(providerStart))
 		if providerErr != nil {
 			healthErrorClass = string(providerErrorClass(providerErr))
@@ -609,7 +614,11 @@ func (b *secretSyncBackend) pathDestinationHealth(
 		return nil, err
 	}
 	providerStart := time.Now()
-	result, providerErr := provider.Health(ctx, resolvedConfig)
+	runtime, providerErr := b.destinationRuntime(ctx, provider, *record, resolvedConfig)
+	var result *providers.HealthResult
+	if providerErr == nil {
+		result, providerErr = runtime.Health(ctx)
+	}
 	b.recordProviderHealthRequest(ctx, provider.Type(), result, providerErr, time.Since(providerStart))
 	if providerErr != nil {
 		return &logical.Response{Data: newResponseData(
@@ -719,6 +728,7 @@ func (b *secretSyncBackend) pathDestinationDelete(
 	if err := deleteDestinationSensitiveConfig(ctx, req.Storage, destinationType, name); err != nil {
 		return nil, err
 	}
+	b.invalidateDestinationRuntime(ctx, destinationRef(destinationType, name))
 	return nil, nil
 }
 

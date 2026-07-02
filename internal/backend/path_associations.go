@@ -524,13 +524,16 @@ func (b *secretSyncBackend) pathAssociationSecretPathPlan(
 	}
 	planRequest := providerPlanRequest(
 		record,
-		resolvedDestinationConfig,
 		runtimeIdentity,
 		metadata.CurrentVersion,
 		preparedPayload,
 	)
 	providerStart := time.Now()
-	plan, providerErr := provider.Plan(ctx, planRequest)
+	runtime, providerErr := b.destinationRuntime(ctx, provider, destination, resolvedDestinationConfig)
+	var plan *providers.PlanResult
+	if providerErr == nil {
+		plan, providerErr = runtime.Plan(ctx, planRequest)
+	}
 	b.recordProviderRequest(ctx, provider.Type(), observability.OperationPlan, providerErr, time.Since(providerStart))
 	if providerErr != nil {
 		return &logical.Response{Data: associationPlanResponse(
@@ -585,7 +588,6 @@ func currentSourceVersionFromPlanRequest(
 
 func providerPlanRequest(
 	record associationRecord,
-	destination providers.DestinationConfig,
 	runtimeIdentity providers.RuntimeIdentity,
 	version int,
 	preparedPayload payloadpkg.CanonicalPayload,
@@ -595,7 +597,6 @@ func providerPlanRequest(
 		resolvedName = record.ResolvedName
 	}
 	return providers.PlanRequest{
-		Destination:   destination,
 		Runtime:       runtimeIdentity,
 		ResolvedName:  resolvedName,
 		Format:        preparedPayload.Format,
@@ -709,18 +710,21 @@ func (b *secretSyncBackend) planSecretKeyObject(
 		return object, nil
 	}
 	providerStart := time.Now()
-	plan, providerErr := provider.Plan(ctx, providers.PlanRequest{
-		Destination:   destination,
-		Runtime:       runtimeIdentity,
-		ResolvedName:  resolvedName,
-		Format:        payload.Format,
-		PayloadSHA256: payload.SHA256,
-		PayloadBytes:  len(payload.Bytes),
-		SourcePath:    record.Path,
-		SourceVersion: version,
-		AssociationID: record.ID,
-		ObjectID:      objectID,
-	})
+	runtime, providerErr := b.destinationRuntime(ctx, provider, destinationRecord, destination)
+	var plan *providers.PlanResult
+	if providerErr == nil {
+		plan, providerErr = runtime.Plan(ctx, providers.PlanRequest{
+			Runtime:       runtimeIdentity,
+			ResolvedName:  resolvedName,
+			Format:        payload.Format,
+			PayloadSHA256: payload.SHA256,
+			PayloadBytes:  len(payload.Bytes),
+			SourcePath:    record.Path,
+			SourceVersion: version,
+			AssociationID: record.ID,
+			ObjectID:      objectID,
+		})
+	}
 	b.recordProviderRequest(ctx, provider.Type(), observability.OperationPlan, providerErr, time.Since(providerStart))
 	if providerErr != nil {
 		object.Action = providers.PlanActionBlocked

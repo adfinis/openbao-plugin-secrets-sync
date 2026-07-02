@@ -132,6 +132,11 @@ type Provider struct {
 	clientFactory clientFactory
 }
 
+type destinationRuntime struct {
+	client  secretsManagerClient
+	options awsDestinationOptions
+}
+
 // New returns a provider using the AWS SDK default configuration chain.
 func New() Provider {
 	return Provider{clientFactory: defaultClientFactory}
@@ -154,7 +159,7 @@ func (Provider) Capabilities() providers.Capabilities {
 	}
 }
 
-func (Provider) Validate(_ context.Context, cfg providers.DestinationConfig) error {
+func (Provider) ValidateConfig(_ context.Context, cfg providers.DestinationConfig) error {
 	if strings.TrimSpace(cfg.Name) == "" {
 		return &providers.Error{Class: providers.ErrorClassValidation, Message: "aws-sm destination name must not be empty"}
 	}
@@ -164,12 +169,34 @@ func (Provider) Validate(_ context.Context, cfg providers.DestinationConfig) err
 	return nil
 }
 
-func (p Provider) Plan(ctx context.Context, req providers.PlanRequest) (*providers.PlanResult, error) {
-	client, err := p.clientFor(ctx, req.Destination)
+func (p Provider) OpenDestination(
+	ctx context.Context,
+	cfg providers.DestinationConfig,
+) (providers.DestinationRuntime, error) {
+	options, err := awsDestinationOptionsFromConfig(cfg)
 	if err != nil {
-		return blockedPlan(setupErrorClass(err)), nil
+		return nil, err
 	}
-	describe, err := client.DescribeSecret(ctx, &secretsmanager.DescribeSecretInput{
+	client, err := p.clientFor(ctx, cfg)
+	if err != nil {
+		return nil, providerError(setupErrorClass(err))
+	}
+	return destinationRuntime{client: client, options: options}, nil
+}
+
+func (r destinationRuntime) Health(ctx context.Context) (*providers.HealthResult, error) {
+	if _, err := r.client.ListSecrets(ctx, &secretsmanager.ListSecretsInput{MaxResults: aws.Int32(1)}); err != nil {
+		return &providers.HealthResult{
+			Healthy:    false,
+			Message:    "aws-sm health check failed",
+			ErrorClass: classifyAWSError(err),
+		}, nil
+	}
+	return &providers.HealthResult{Healthy: true}, nil
+}
+
+func (r destinationRuntime) Plan(ctx context.Context, req providers.PlanRequest) (*providers.PlanResult, error) {
+	describe, err := r.client.DescribeSecret(ctx, &secretsmanager.DescribeSecretInput{
 		SecretId: aws.String(req.ResolvedName),
 	})
 	if isResourceNotFound(err) {
@@ -223,19 +250,15 @@ func (p Provider) Plan(ctx context.Context, req providers.PlanRequest) (*provide
 	}, nil
 }
 
-func (p Provider) Upsert(ctx context.Context, req providers.UpsertRequest) (*providers.SyncResult, error) {
-	client, err := p.clientFor(ctx, req.Destination)
-	if err != nil {
-		return nil, providerError(setupErrorClass(err))
-	}
+func (r destinationRuntime) Upsert(ctx context.Context, req providers.UpsertRequest) (*providers.SyncResult, error) {
 	if len(req.Payload) > secretValueMaxBytes {
 		return nil, providerError(providers.ErrorClassCapacity)
 	}
-	describe, err := client.DescribeSecret(ctx, &secretsmanager.DescribeSecretInput{
+	describe, err := r.client.DescribeSecret(ctx, &secretsmanager.DescribeSecretInput{
 		SecretId: aws.String(req.ResolvedName),
 	})
 	if isResourceNotFound(err) {
-		return createSecret(ctx, client, req)
+		return createSecret(ctx, r.client, req)
 	}
 	if err != nil {
 		return nil, providerError(classifyAWSError(err))
@@ -247,7 +270,7 @@ func (p Provider) Upsert(ctx context.Context, req providers.UpsertRequest) (*pro
 		return nil, providerError(providers.ErrorClassDrift)
 	}
 	if describe.DeletedDate != nil {
-		if _, err := client.RestoreSecret(ctx, &secretsmanager.RestoreSecretInput{
+		if _, err := r.client.RestoreSecret(ctx, &secretsmanager.RestoreSecretInput{
 			SecretId: aws.String(req.ResolvedName),
 		}); err != nil {
 			return nil, providerError(classifyAWSError(err))
@@ -255,7 +278,7 @@ func (p Provider) Upsert(ctx context.Context, req providers.UpsertRequest) (*pro
 	}
 	if tagValue(describe.Tags, tagPayloadSHA256) == req.PayloadSHA256 {
 		if !remoteSourceVersionMatches(describe.Tags, req.SourceVersion) {
-			if _, err := client.TagResource(ctx, &secretsmanager.TagResourceInput{
+			if _, err := r.client.TagResource(ctx, &secretsmanager.TagResourceInput{
 				SecretId: aws.String(req.ResolvedName),
 				Tags:     ownershipTagsFromUpsert(req),
 			}); err != nil {
@@ -265,7 +288,7 @@ func (p Provider) Upsert(ctx context.Context, req providers.UpsertRequest) (*pro
 		return &providers.SyncResult{RemoteVersion: currentVersionID(describe)}, nil
 	}
 	payload := string(req.Payload)
-	result, err := client.PutSecretValue(ctx, &secretsmanager.PutSecretValueInput{
+	result, err := r.client.PutSecretValue(ctx, &secretsmanager.PutSecretValueInput{
 		SecretId:           aws.String(req.ResolvedName),
 		SecretString:       aws.String(payload),
 		ClientRequestToken: aws.String(idempotencyToken("put", req.ResolvedName, req.PayloadSHA256)),
@@ -273,7 +296,7 @@ func (p Provider) Upsert(ctx context.Context, req providers.UpsertRequest) (*pro
 	if err != nil {
 		return nil, providerError(classifyAWSError(err))
 	}
-	if _, err := client.TagResource(ctx, &secretsmanager.TagResourceInput{
+	if _, err := r.client.TagResource(ctx, &secretsmanager.TagResourceInput{
 		SecretId: aws.String(req.ResolvedName),
 		Tags:     ownershipTagsFromUpsert(req),
 	}); err != nil {
@@ -282,16 +305,8 @@ func (p Provider) Upsert(ctx context.Context, req providers.UpsertRequest) (*pro
 	return &providers.SyncResult{RemoteVersion: aws.ToString(result.VersionId)}, nil
 }
 
-func (p Provider) Delete(ctx context.Context, req providers.DeleteRequest) (*providers.SyncResult, error) {
-	options, err := awsDestinationOptionsFromConfig(req.Destination)
-	if err != nil {
-		return nil, providerError(setupErrorClass(err))
-	}
-	client, err := p.clientFor(ctx, req.Destination)
-	if err != nil {
-		return nil, providerError(setupErrorClass(err))
-	}
-	describe, err := client.DescribeSecret(ctx, &secretsmanager.DescribeSecretInput{
+func (r destinationRuntime) Delete(ctx context.Context, req providers.DeleteRequest) (*providers.SyncResult, error) {
+	describe, err := r.client.DescribeSecret(ctx, &secretsmanager.DescribeSecretInput{
 		SecretId: aws.String(req.ResolvedName),
 	})
 	if isResourceNotFound(err) {
@@ -309,9 +324,9 @@ func (p Provider) Delete(ctx context.Context, req providers.DeleteRequest) (*pro
 	if remoteSourceVersionNewer(describe.Tags, req.SourceVersion) {
 		return nil, providerError(providers.ErrorClassDrift)
 	}
-	result, err := client.DeleteSecret(ctx, &secretsmanager.DeleteSecretInput{
+	result, err := r.client.DeleteSecret(ctx, &secretsmanager.DeleteSecretInput{
 		SecretId:             aws.String(req.ResolvedName),
-		RecoveryWindowInDays: aws.Int64(int64(options.deleteRecoveryWindowDays)),
+		RecoveryWindowInDays: aws.Int64(int64(r.options.deleteRecoveryWindowDays)),
 	})
 	if err != nil {
 		return nil, providerError(classifyAWSError(err))
@@ -319,12 +334,11 @@ func (p Provider) Delete(ctx context.Context, req providers.DeleteRequest) (*pro
 	return &providers.SyncResult{RemoteVersion: aws.ToString(result.ARN)}, nil
 }
 
-func (p Provider) ReadState(ctx context.Context, req providers.ReadStateRequest) (*providers.RemoteState, error) {
-	client, err := p.clientFor(ctx, req.Destination)
-	if err != nil {
-		return nil, providerError(setupErrorClass(err))
-	}
-	describe, err := client.DescribeSecret(ctx, &secretsmanager.DescribeSecretInput{
+func (r destinationRuntime) ReadState(
+	ctx context.Context,
+	req providers.ReadStateRequest,
+) (*providers.RemoteState, error) {
+	describe, err := r.client.DescribeSecret(ctx, &secretsmanager.DescribeSecretInput{
 		SecretId: aws.String(req.ResolvedName),
 	})
 	if isResourceNotFound(err) {
@@ -347,23 +361,8 @@ func (p Provider) ReadState(ctx context.Context, req providers.ReadStateRequest)
 	}, nil
 }
 
-func (p Provider) Health(ctx context.Context, cfg providers.DestinationConfig) (*providers.HealthResult, error) {
-	client, err := p.clientFor(ctx, cfg)
-	if err != nil {
-		return &providers.HealthResult{
-			Healthy:    false,
-			Message:    "aws-sm client initialization failed",
-			ErrorClass: setupErrorClass(err),
-		}, nil
-	}
-	if _, err := client.ListSecrets(ctx, &secretsmanager.ListSecretsInput{MaxResults: aws.Int32(1)}); err != nil {
-		return &providers.HealthResult{
-			Healthy:    false,
-			Message:    "aws-sm health check failed",
-			ErrorClass: classifyAWSError(err),
-		}, nil
-	}
-	return &providers.HealthResult{Healthy: true}, nil
+func (destinationRuntime) Close(context.Context) error {
+	return nil
 }
 
 func (p Provider) clientFor(ctx context.Context, cfg providers.DestinationConfig) (secretsManagerClient, error) {

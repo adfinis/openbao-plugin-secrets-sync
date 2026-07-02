@@ -82,6 +82,11 @@ type Provider struct {
 	clientFactory clientFactory
 }
 
+type destinationRuntime struct {
+	client  projectVariableClient
+	options gitlabDestinationOptions
+}
+
 // New returns a provider using the GitLab HTTP API.
 func New() Provider {
 	return Provider{clientFactory: defaultClientFactory}
@@ -104,7 +109,7 @@ func (Provider) Capabilities() providers.Capabilities {
 	}
 }
 
-func (Provider) Validate(_ context.Context, cfg providers.DestinationConfig) error {
+func (Provider) ValidateConfig(_ context.Context, cfg providers.DestinationConfig) error {
 	if strings.TrimSpace(cfg.Name) == "" {
 		return validationError("gitlab destination name must not be empty")
 	}
@@ -112,17 +117,39 @@ func (Provider) Validate(_ context.Context, cfg providers.DestinationConfig) err
 	return err
 }
 
-func (p Provider) Plan(ctx context.Context, req providers.PlanRequest) (*providers.PlanResult, error) {
-	client, options, err := p.clientAndOptions(ctx, req.Destination)
+func (p Provider) OpenDestination(
+	ctx context.Context,
+	cfg providers.DestinationConfig,
+) (providers.DestinationRuntime, error) {
+	options, err := gitlabDestinationOptionsFromConfig(cfg)
 	if err != nil {
-		return blockedPlan(setupErrorClass(err)), nil
+		return nil, err
 	}
+	client, err := p.clientFor(ctx, cfg)
+	if err != nil {
+		return nil, providerError(setupErrorClass(err))
+	}
+	return destinationRuntime{client: client, options: options}, nil
+}
+
+func (r destinationRuntime) Health(ctx context.Context) (*providers.HealthResult, error) {
+	if err := r.client.GetProject(ctx, r.options); err != nil {
+		return &providers.HealthResult{
+			Healthy:    false,
+			Message:    "gitlab health check failed",
+			ErrorClass: classifyGitLabError(err),
+		}, nil
+	}
+	return &providers.HealthResult{Healthy: true}, nil
+}
+
+func (r destinationRuntime) Plan(ctx context.Context, req providers.PlanRequest) (*providers.PlanResult, error) {
 	if err := validateVariableKey(req.ResolvedName); err != nil {
 		return blockedPlan(providers.ErrorClassValidation), nil
 	}
-	variable, err := client.GetVariable(ctx, options, req.ResolvedName)
+	variable, err := r.client.GetVariable(ctx, r.options, req.ResolvedName)
 	if isGitLabNotFound(err) {
-		if err := validateMaskedPayloadForPlan(options, req); err != nil {
+		if err := validateMaskedPayloadForPlan(r.options, req); err != nil {
 			return blockedValidationPlan(err.Error()), nil
 		}
 		return &providers.PlanResult{Action: providers.PlanActionCreate}, nil
@@ -145,36 +172,32 @@ func (p Provider) Plan(ctx context.Context, req providers.PlanRequest) (*provide
 			Message:    "gitlab variable has newer managed source version",
 		}, nil
 	}
-	if err := validateHiddenUpdate(options, variable); err != nil {
+	if err := validateHiddenUpdate(r.options, variable); err != nil {
 		return blockedValidationPlan(err.Error()), nil
 	}
-	if err := validateMaskedPayloadForPlan(options, req); err != nil {
+	if err := validateMaskedPayloadForPlan(r.options, req); err != nil {
 		return blockedValidationPlan(err.Error()), nil
 	}
-	if metadata.PayloadSHA256 == req.PayloadSHA256 && variableMatchesDestinationOptions(variable, options) {
+	if metadata.PayloadSHA256 == req.PayloadSHA256 && variableMatchesDestinationOptions(variable, r.options) {
 		return &providers.PlanResult{Action: providers.PlanActionNoop}, nil
 	}
 	return &providers.PlanResult{Action: providers.PlanActionUpdate}, nil
 }
 
-func (p Provider) Upsert(ctx context.Context, req providers.UpsertRequest) (*providers.SyncResult, error) {
-	client, options, err := p.clientAndOptions(ctx, req.Destination)
-	if err != nil {
-		return nil, providerError(setupErrorClass(err))
-	}
+func (r destinationRuntime) Upsert(ctx context.Context, req providers.UpsertRequest) (*providers.SyncResult, error) {
 	if err := validateVariableKey(req.ResolvedName); err != nil {
 		return nil, err
 	}
 	if len(req.Payload) > variableValueMaxBytes {
 		return nil, providerError(providers.ErrorClassCapacity)
 	}
-	input := variableInputFromUpsert(options, req)
-	variable, err := client.GetVariable(ctx, options, req.ResolvedName)
+	input := variableInputFromUpsert(r.options, req)
+	variable, err := r.client.GetVariable(ctx, r.options, req.ResolvedName)
 	if isGitLabNotFound(err) {
-		if err := validateMaskedPayloadForUpsert(options, req); err != nil {
+		if err := validateMaskedPayloadForUpsert(r.options, req); err != nil {
 			return nil, err
 		}
-		created, createErr := client.CreateVariable(ctx, options, input)
+		created, createErr := r.client.CreateVariable(ctx, r.options, input)
 		if createErr != nil {
 			return nil, providerError(classifyGitLabError(createErr))
 		}
@@ -190,31 +213,27 @@ func (p Provider) Upsert(ctx context.Context, req providers.UpsertRequest) (*pro
 	if remoteSourceVersionNewer(metadata, req.SourceVersion) {
 		return nil, providerError(providers.ErrorClassDrift)
 	}
-	if err := validateHiddenUpdate(options, variable); err != nil {
+	if err := validateHiddenUpdate(r.options, variable); err != nil {
 		return nil, err
 	}
-	if err := validateMaskedPayloadForUpsert(options, req); err != nil {
+	if err := validateMaskedPayloadForUpsert(r.options, req); err != nil {
 		return nil, err
 	}
 	if metadata.PayloadSHA256 == req.PayloadSHA256 && variableMatchesInput(variable, input) {
 		return &providers.SyncResult{RemoteVersion: remoteVersion(variable)}, nil
 	}
-	updated, err := client.UpdateVariable(ctx, options, req.ResolvedName, input)
+	updated, err := r.client.UpdateVariable(ctx, r.options, req.ResolvedName, input)
 	if err != nil {
 		return nil, providerError(classifyGitLabError(err))
 	}
 	return &providers.SyncResult{RemoteVersion: remoteVersion(updated)}, nil
 }
 
-func (p Provider) Delete(ctx context.Context, req providers.DeleteRequest) (*providers.SyncResult, error) {
-	client, options, err := p.clientAndOptions(ctx, req.Destination)
-	if err != nil {
-		return nil, providerError(setupErrorClass(err))
-	}
+func (r destinationRuntime) Delete(ctx context.Context, req providers.DeleteRequest) (*providers.SyncResult, error) {
 	if err := validateVariableKey(req.ResolvedName); err != nil {
 		return nil, err
 	}
-	variable, err := client.GetVariable(ctx, options, req.ResolvedName)
+	variable, err := r.client.GetVariable(ctx, r.options, req.ResolvedName)
 	if isGitLabNotFound(err) {
 		return &providers.SyncResult{RemoteVersion: "missing"}, nil
 	}
@@ -228,21 +247,20 @@ func (p Provider) Delete(ctx context.Context, req providers.DeleteRequest) (*pro
 	if remoteSourceVersionNewer(metadata, req.SourceVersion) {
 		return nil, providerError(providers.ErrorClassDrift)
 	}
-	if err := client.DeleteVariable(ctx, options, req.ResolvedName); err != nil {
+	if err := r.client.DeleteVariable(ctx, r.options, req.ResolvedName); err != nil {
 		return nil, providerError(classifyGitLabError(err))
 	}
 	return &providers.SyncResult{RemoteVersion: remoteVersion(variable)}, nil
 }
 
-func (p Provider) ReadState(ctx context.Context, req providers.ReadStateRequest) (*providers.RemoteState, error) {
-	client, options, err := p.clientAndOptions(ctx, req.Destination)
-	if err != nil {
-		return nil, providerError(setupErrorClass(err))
-	}
+func (r destinationRuntime) ReadState(
+	ctx context.Context,
+	req providers.ReadStateRequest,
+) (*providers.RemoteState, error) {
 	if err := validateVariableKey(req.ResolvedName); err != nil {
 		return nil, err
 	}
-	variable, err := client.GetVariable(ctx, options, req.ResolvedName)
+	variable, err := r.client.GetVariable(ctx, r.options, req.ResolvedName)
 	if isGitLabNotFound(err) {
 		return &providers.RemoteState{Exists: false}, nil
 	}
@@ -260,35 +278,16 @@ func (p Provider) ReadState(ctx context.Context, req providers.ReadStateRequest)
 	}, nil
 }
 
-func (p Provider) Health(ctx context.Context, cfg providers.DestinationConfig) (*providers.HealthResult, error) {
-	client, options, err := p.clientAndOptions(ctx, cfg)
-	if err != nil {
-		return &providers.HealthResult{
-			Healthy:    false,
-			Message:    "gitlab client initialization failed",
-			ErrorClass: setupErrorClass(err),
-		}, nil
-	}
-	if err := client.GetProject(ctx, options); err != nil {
-		return &providers.HealthResult{
-			Healthy:    false,
-			Message:    "gitlab health check failed",
-			ErrorClass: classifyGitLabError(err),
-		}, nil
-	}
-	return &providers.HealthResult{Healthy: true}, nil
+func (destinationRuntime) Close(context.Context) error {
+	return nil
 }
 
-func (p Provider) clientAndOptions(
+func (p Provider) clientFor(
 	ctx context.Context,
 	cfg providers.DestinationConfig,
-) (projectVariableClient, gitlabDestinationOptions, error) {
-	options, err := gitlabDestinationOptionsFromConfig(cfg)
-	if err != nil {
-		return nil, gitlabDestinationOptions{}, err
-	}
+) (projectVariableClient, error) {
 	if p.client != nil {
-		return p.client, options, nil
+		return p.client, nil
 	}
 	factory := p.clientFactory
 	if factory == nil {
@@ -296,9 +295,9 @@ func (p Provider) clientAndOptions(
 	}
 	client, err := factory(ctx, cfg)
 	if err != nil {
-		return nil, gitlabDestinationOptions{}, err
+		return nil, err
 	}
-	return client, options, nil
+	return client, nil
 }
 
 func defaultClientFactory(_ context.Context, _ providers.DestinationConfig) (projectVariableClient, error) {

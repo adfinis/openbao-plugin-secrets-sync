@@ -225,7 +225,7 @@ func TestValidateDestinationConfig(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			err := (Provider{}).Validate(context.Background(), providers.DestinationConfig{
+			err := (Provider{}).ValidateConfig(context.Background(), providers.DestinationConfig{
 				Name:   testDestinationName,
 				Config: tt.config,
 			})
@@ -393,7 +393,7 @@ func TestPlanActions(t *testing.T) {
 				describeOutput: tt.describeOutput,
 				describeError:  tt.describeError,
 			}
-			result, err := (Provider{client: client}).Plan(context.Background(), defaultPlanRequest(tt.payloadSHA256))
+			result, err := runtimeWithClient(t, client).Plan(context.Background(), defaultPlanRequest(tt.payloadSHA256))
 			if err != nil {
 				t.Fatalf("plan: %v", err)
 			}
@@ -464,7 +464,7 @@ func TestReadStateReportsRemoteMetadata(t *testing.T) {
 				describeOutput: tt.describeOutput,
 				describeError:  tt.describeError,
 			}
-			state, err := (Provider{client: client}).ReadState(context.Background(), defaultReadStateRequest())
+			state, err := runtimeWithClient(t, client).ReadState(context.Background(), defaultReadStateRequest())
 			if tt.errorClass != "" {
 				assertProviderErrorClass(t, err, tt.errorClass)
 				return
@@ -499,7 +499,7 @@ func TestUpsertCreatesMissingSecretWithOwnershipTags(t *testing.T) {
 		describeError:      apiError("ResourceNotFoundException"),
 		createSecretOutput: &secretsmanager.CreateSecretOutput{VersionId: aws.String("created-version")},
 	}
-	result, err := (Provider{client: client}).Upsert(context.Background(), defaultUpsertRequest())
+	result, err := runtimeWithClient(t, client).Upsert(context.Background(), defaultUpsertRequest())
 	if err != nil {
 		t.Fatalf("upsert: %v", err)
 	}
@@ -529,7 +529,7 @@ func TestUpsertUpdatesOwnedSecretAndTagsHash(t *testing.T) {
 		putSecretValueOutput: &secretsmanager.PutSecretValueOutput{VersionId: aws.String("updated-version")},
 		tagResourceOutput:    &secretsmanager.TagResourceOutput{},
 	}
-	result, err := (Provider{client: client}).Upsert(context.Background(), defaultUpsertRequest())
+	result, err := runtimeWithClient(t, client).Upsert(context.Background(), defaultUpsertRequest())
 	if err != nil {
 		t.Fatalf("upsert: %v", err)
 	}
@@ -557,7 +557,7 @@ func TestUpsertRestoresOwnedScheduledDeleteBeforeUpdate(t *testing.T) {
 		putSecretValueOutput: &secretsmanager.PutSecretValueOutput{VersionId: aws.String("restored-version")},
 		tagResourceOutput:    &secretsmanager.TagResourceOutput{},
 	}
-	result, err := (Provider{client: client}).Upsert(context.Background(), defaultUpsertRequest())
+	result, err := runtimeWithClient(t, client).Upsert(context.Background(), defaultUpsertRequest())
 	if err != nil {
 		t.Fatalf("upsert: %v", err)
 	}
@@ -586,7 +586,7 @@ func TestUpsertRestoresOwnedScheduledDeleteWithMatchingPayload(t *testing.T) {
 		restoreSecretOutput: &secretsmanager.RestoreSecretOutput{ARN: aws.String("arn:aws:secretsmanager:test")},
 		tagResourceOutput:   &secretsmanager.TagResourceOutput{},
 	}
-	result, err := (Provider{client: client}).Upsert(context.Background(), defaultUpsertRequest())
+	result, err := runtimeWithClient(t, client).Upsert(context.Background(), defaultUpsertRequest())
 	if err != nil {
 		t.Fatalf("upsert: %v", err)
 	}
@@ -609,7 +609,7 @@ func TestUpsertRejectsUnownedSecret(t *testing.T) {
 	client := &mockSecretsManagerClient{
 		describeOutput: &secretsmanager.DescribeSecretOutput{Name: aws.String(testResolvedName)},
 	}
-	_, err := (Provider{client: client}).Upsert(context.Background(), defaultUpsertRequest())
+	_, err := runtimeWithClient(t, client).Upsert(context.Background(), defaultUpsertRequest())
 	assertProviderErrorClass(t, err, providers.ErrorClassOwnership)
 	if client.putSecretValueInput != nil {
 		t.Fatal("PutSecretValue must not be called for unowned secret")
@@ -623,7 +623,7 @@ func TestUpsertRejectsUnownedScheduledDelete(t *testing.T) {
 			DeletedDate: aws.Time(time.Unix(1700000000, 0)),
 		},
 	}
-	_, err := (Provider{client: client}).Upsert(context.Background(), defaultUpsertRequest())
+	_, err := runtimeWithClient(t, client).Upsert(context.Background(), defaultUpsertRequest())
 	assertProviderErrorClass(t, err, providers.ErrorClassOwnership)
 	if client.restoreSecretInput != nil {
 		t.Fatal("RestoreSecret must not be called for unowned scheduled-delete secret")
@@ -654,7 +654,7 @@ func TestUpsertRejectsNewerRemoteSourceVersion(t *testing.T) {
 	client := &mockSecretsManagerClient{
 		describeOutput: ownedDescribeOutputAtVersion(testPayloadSHAOld, 2),
 	}
-	_, err := (Provider{client: client}).Upsert(context.Background(), defaultUpsertRequest())
+	_, err := runtimeWithClient(t, client).Upsert(context.Background(), defaultUpsertRequest())
 	assertProviderErrorClass(t, err, providers.ErrorClassDrift)
 	if client.putSecretValueInput != nil {
 		t.Fatal("PutSecretValue must not be called for newer remote source version")
@@ -709,7 +709,7 @@ func TestUpsertClassifiesAWSMutationFailures(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			_, err := (Provider{client: tt.client}).Upsert(context.Background(), defaultUpsertRequest())
+			_, err := runtimeWithClient(t, tt.client).Upsert(context.Background(), defaultUpsertRequest())
 			assertProviderErrorClass(t, err, tt.expectedClass)
 			if got := tt.client.createSecretInput != nil; got != tt.expectCreate {
 				t.Fatalf("CreateSecret called = %v, want %v", got, tt.expectCreate)
@@ -730,8 +730,9 @@ func TestDeleteUsesOwnedRecoveryWindow(t *testing.T) {
 		deleteSecretOutput: &secretsmanager.DeleteSecretOutput{ARN: aws.String("arn:aws:secretsmanager:test")},
 	}
 	request := defaultDeleteRequest()
-	request.Destination.Config[ConfigKeyDeleteRecoveryWindowDays] = "14"
-	result, err := (Provider{client: client}).Delete(context.Background(), request)
+	cfg := defaultDestinationConfig()
+	cfg.Config[ConfigKeyDeleteRecoveryWindowDays] = "14"
+	result, err := runtimeWithDestination(t, Provider{client: client}, cfg).Delete(context.Background(), request)
 	if err != nil {
 		t.Fatalf("delete: %v", err)
 	}
@@ -753,7 +754,7 @@ func TestDeleteRejectsUnownedSecret(t *testing.T) {
 	client := &mockSecretsManagerClient{
 		describeOutput: &secretsmanager.DescribeSecretOutput{Name: aws.String(testResolvedName)},
 	}
-	_, err := (Provider{client: client}).Delete(context.Background(), defaultDeleteRequest())
+	_, err := runtimeWithClient(t, client).Delete(context.Background(), defaultDeleteRequest())
 	assertProviderErrorClass(t, err, providers.ErrorClassOwnership)
 	if client.deleteSecretInput != nil {
 		t.Fatal("DeleteSecret must not be called for unowned secret")
@@ -767,7 +768,7 @@ func TestDeleteRejectsUnownedScheduledDelete(t *testing.T) {
 			DeletedDate: aws.Time(time.Unix(1700000000, 0)),
 		},
 	}
-	_, err := (Provider{client: client}).Delete(context.Background(), defaultDeleteRequest())
+	_, err := runtimeWithClient(t, client).Delete(context.Background(), defaultDeleteRequest())
 	assertProviderErrorClass(t, err, providers.ErrorClassOwnership)
 	if client.deleteSecretInput != nil {
 		t.Fatal("DeleteSecret must not be called for unowned scheduled-delete secret")
@@ -778,7 +779,7 @@ func TestDeleteRejectsNewerRemoteSourceVersion(t *testing.T) {
 	client := &mockSecretsManagerClient{
 		describeOutput: ownedDescribeOutputAtVersion(testPayloadSHAOld, 2),
 	}
-	_, err := (Provider{client: client}).Delete(context.Background(), defaultDeleteRequest())
+	_, err := runtimeWithClient(t, client).Delete(context.Background(), defaultDeleteRequest())
 	assertProviderErrorClass(t, err, providers.ErrorClassDrift)
 	if client.deleteSecretInput != nil {
 		t.Fatal("DeleteSecret must not be called for newer remote source version")
@@ -811,7 +812,7 @@ func TestDeleteClassifiesAWSMutationFailures(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			_, err := (Provider{client: tt.client}).Delete(context.Background(), defaultDeleteRequest())
+			_, err := runtimeWithClient(t, tt.client).Delete(context.Background(), defaultDeleteRequest())
 			assertProviderErrorClass(t, err, tt.expectedClass)
 			if got := tt.client.deleteSecretInput != nil; got != tt.expectDelete {
 				t.Fatalf("DeleteSecret called = %v, want %v", got, tt.expectDelete)
@@ -822,10 +823,7 @@ func TestDeleteClassifiesAWSMutationFailures(t *testing.T) {
 
 func TestHealthClassifiesAWSFailure(t *testing.T) {
 	client := &mockSecretsManagerClient{listSecretsError: apiError("AccessDeniedException")}
-	result, err := (Provider{client: client}).Health(
-		context.Background(),
-		providers.DestinationConfig{Name: testDestinationName},
-	)
+	result, err := runtimeWithClient(t, client).Health(context.Background())
 	if err != nil {
 		t.Fatalf("health: %v", err)
 	}
@@ -843,16 +841,8 @@ func TestHealthClassifiesDestinationValidationFailure(t *testing.T) {
 			return nil, validationError("invalid destination config")
 		},
 	}
-	result, err := provider.Health(context.Background(), providers.DestinationConfig{Name: testDestinationName})
-	if err != nil {
-		t.Fatalf("health: %v", err)
-	}
-	if result.Healthy {
-		t.Fatal("health must be unhealthy on validation failure")
-	}
-	if result.ErrorClass != providers.ErrorClassValidation {
-		t.Fatalf("health error class = %s, want %s", result.ErrorClass, providers.ErrorClassValidation)
-	}
+	_, err := provider.OpenDestination(context.Background(), providers.DestinationConfig{Name: testDestinationName})
+	assertProviderErrorClass(t, err, providers.ErrorClassValidation)
 }
 
 func TestHealthPassesDestinationConfigToFactory(t *testing.T) {
@@ -864,12 +854,13 @@ func TestHealthPassesDestinationConfigToFactory(t *testing.T) {
 			return client, nil
 		},
 	}
-	result, err := provider.Health(context.Background(), providers.DestinationConfig{
+	runtime := runtimeWithDestination(t, provider, providers.DestinationConfig{
 		Name: testDestinationName,
 		Config: map[string]string{
 			ConfigKeyRegion: testRegion,
 		},
 	})
+	result, err := runtime.Health(context.Background())
 	if err != nil {
 		t.Fatalf("health: %v", err)
 	}
@@ -1033,7 +1024,6 @@ func awsMaturityMatrix() *providertest.MaturityMatrix {
 
 func defaultPlanRequest(payloadSHA256 string) providers.PlanRequest {
 	return providers.PlanRequest{
-		Destination:   defaultDestinationConfig(),
 		Runtime:       defaultRuntimeIdentity(),
 		ResolvedName:  testResolvedName,
 		PayloadSHA256: payloadSHA256,
@@ -1047,7 +1037,6 @@ func defaultPlanRequest(payloadSHA256 string) providers.PlanRequest {
 
 func defaultUpsertRequest() providers.UpsertRequest {
 	return providers.UpsertRequest{
-		Destination:   defaultDestinationConfig(),
 		Runtime:       defaultRuntimeIdentity(),
 		ResolvedName:  testResolvedName,
 		Format:        "json",
@@ -1068,7 +1057,6 @@ func oversizedAWSUpsertRequest() providers.UpsertRequest {
 
 func defaultDeleteRequest() providers.DeleteRequest {
 	return providers.DeleteRequest{
-		Destination:   defaultDestinationConfig(),
 		Runtime:       defaultRuntimeIdentity(),
 		ResolvedName:  testResolvedName,
 		SourcePath:    testSourcePath,
@@ -1080,7 +1068,6 @@ func defaultDeleteRequest() providers.DeleteRequest {
 
 func defaultReadStateRequest() providers.ReadStateRequest {
 	return providers.ReadStateRequest{
-		Destination:   defaultDestinationConfig(),
 		Runtime:       defaultRuntimeIdentity(),
 		ResolvedName:  testResolvedName,
 		PayloadSHA256: testPayloadSHANew,
@@ -1089,6 +1076,27 @@ func defaultReadStateRequest() providers.ReadStateRequest {
 		AssociationID: testAssociationID,
 		ObjectID:      testObjectID,
 	}
+}
+
+func runtimeWithClient(t *testing.T, client secretsManagerClient) providers.DestinationRuntime {
+	t.Helper()
+	return runtimeWithDestination(t, Provider{client: client}, defaultDestinationConfig())
+}
+
+func runtimeWithDestination(
+	t *testing.T,
+	provider Provider,
+	destination providers.DestinationConfig,
+) providers.DestinationRuntime {
+	t.Helper()
+	runtime, err := provider.OpenDestination(context.Background(), destination)
+	if err != nil {
+		t.Fatalf("open destination runtime: %v", err)
+	}
+	if runtime == nil {
+		t.Fatal("destination runtime must not be nil")
+	}
+	return runtime
 }
 
 func defaultRuntimeIdentity() providers.RuntimeIdentity {

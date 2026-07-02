@@ -62,6 +62,11 @@ type Provider struct {
 	clientFactory clientFactory
 }
 
+type destinationRuntime struct {
+	client  kubernetes.Interface
+	options kubernetesDestinationOptions
+}
+
 // New returns a provider using in-cluster or kubeconfig client construction.
 func New() Provider {
 	return Provider{clientFactory: defaultClientFactory}
@@ -84,16 +89,39 @@ func (Provider) Capabilities() providers.Capabilities {
 	}
 }
 
-func (Provider) Validate(_ context.Context, cfg providers.DestinationConfig) error {
+func (Provider) ValidateConfig(_ context.Context, cfg providers.DestinationConfig) error {
 	_, err := kubernetesDestinationOptionsFromConfig(cfg)
 	return err
 }
 
-func (p Provider) Plan(ctx context.Context, req providers.PlanRequest) (*providers.PlanResult, error) {
-	_, secretClient, err := p.secretClientFor(ctx, req.Destination)
+func (p Provider) OpenDestination(
+	ctx context.Context,
+	cfg providers.DestinationConfig,
+) (providers.DestinationRuntime, error) {
+	options, err := kubernetesDestinationOptionsFromConfig(cfg)
 	if err != nil {
-		return blockedPlan(setupErrorClass(err)), nil
+		return nil, err
 	}
+	client, err := p.clientFor(ctx, cfg)
+	if err != nil {
+		return nil, providerError(setupErrorClass(err))
+	}
+	return destinationRuntime{client: client, options: options}, nil
+}
+
+func (r destinationRuntime) Health(ctx context.Context) (*providers.HealthResult, error) {
+	if _, err := r.secretClient().List(ctx, metav1.ListOptions{Limit: 1}); err != nil {
+		return &providers.HealthResult{
+			Healthy:    false,
+			Message:    "k8s health check failed",
+			ErrorClass: classifyKubernetesError(err),
+		}, nil
+	}
+	return &providers.HealthResult{Healthy: true}, nil
+}
+
+func (r destinationRuntime) Plan(ctx context.Context, req providers.PlanRequest) (*providers.PlanResult, error) {
+	secretClient := r.secretClient()
 	if err := validateSecretName(req.ResolvedName); err != nil {
 		return blockedPlan(providers.ErrorClassValidation), nil
 	}
@@ -131,11 +159,8 @@ func (p Provider) Plan(ctx context.Context, req providers.PlanRequest) (*provide
 	return &providers.PlanResult{Action: providers.PlanActionUpdate}, nil
 }
 
-func (p Provider) Upsert(ctx context.Context, req providers.UpsertRequest) (*providers.SyncResult, error) {
-	options, secretClient, err := p.secretClientFor(ctx, req.Destination)
-	if err != nil {
-		return nil, providerError(setupErrorClass(err))
-	}
+func (r destinationRuntime) Upsert(ctx context.Context, req providers.UpsertRequest) (*providers.SyncResult, error) {
+	secretClient := r.secretClient()
 	if err := validateSecretName(req.ResolvedName); err != nil {
 		return nil, err
 	}
@@ -144,7 +169,7 @@ func (p Provider) Upsert(ctx context.Context, req providers.UpsertRequest) (*pro
 	}
 	secret, err := secretClient.Get(ctx, req.ResolvedName, metav1.GetOptions{})
 	if apierrors.IsNotFound(err) {
-		return createSecret(ctx, secretClient, options.namespace, req)
+		return createSecret(ctx, secretClient, r.options.namespace, req)
 	}
 	if err != nil {
 		return nil, providerError(classifyKubernetesError(err))
@@ -172,11 +197,8 @@ func (p Provider) Upsert(ctx context.Context, req providers.UpsertRequest) (*pro
 	return &providers.SyncResult{RemoteVersion: result.ResourceVersion}, nil
 }
 
-func (p Provider) Delete(ctx context.Context, req providers.DeleteRequest) (*providers.SyncResult, error) {
-	_, secretClient, err := p.secretClientFor(ctx, req.Destination)
-	if err != nil {
-		return nil, providerError(setupErrorClass(err))
-	}
+func (r destinationRuntime) Delete(ctx context.Context, req providers.DeleteRequest) (*providers.SyncResult, error) {
+	secretClient := r.secretClient()
 	if err := validateSecretName(req.ResolvedName); err != nil {
 		return nil, err
 	}
@@ -199,11 +221,11 @@ func (p Provider) Delete(ctx context.Context, req providers.DeleteRequest) (*pro
 	return &providers.SyncResult{RemoteVersion: secret.ResourceVersion}, nil
 }
 
-func (p Provider) ReadState(ctx context.Context, req providers.ReadStateRequest) (*providers.RemoteState, error) {
-	_, secretClient, err := p.secretClientFor(ctx, req.Destination)
-	if err != nil {
-		return nil, providerError(setupErrorClass(err))
-	}
+func (r destinationRuntime) ReadState(
+	ctx context.Context,
+	req providers.ReadStateRequest,
+) (*providers.RemoteState, error) {
+	secretClient := r.secretClient()
 	if err := validateSecretName(req.ResolvedName); err != nil {
 		return nil, err
 	}
@@ -225,38 +247,12 @@ func (p Provider) ReadState(ctx context.Context, req providers.ReadStateRequest)
 	}, nil
 }
 
-func (p Provider) Health(ctx context.Context, cfg providers.DestinationConfig) (*providers.HealthResult, error) {
-	_, secretClient, err := p.secretClientFor(ctx, cfg)
-	if err != nil {
-		return &providers.HealthResult{
-			Healthy:    false,
-			Message:    "k8s client initialization failed",
-			ErrorClass: setupErrorClass(err),
-		}, nil
-	}
-	if _, err := secretClient.List(ctx, metav1.ListOptions{Limit: 1}); err != nil {
-		return &providers.HealthResult{
-			Healthy:    false,
-			Message:    "k8s health check failed",
-			ErrorClass: classifyKubernetesError(err),
-		}, nil
-	}
-	return &providers.HealthResult{Healthy: true}, nil
+func (r destinationRuntime) secretClient() typedcorev1.SecretInterface {
+	return r.client.CoreV1().Secrets(r.options.namespace)
 }
 
-func (p Provider) secretClientFor(
-	ctx context.Context,
-	cfg providers.DestinationConfig,
-) (kubernetesDestinationOptions, typedcorev1.SecretInterface, error) {
-	options, err := kubernetesDestinationOptionsFromConfig(cfg)
-	if err != nil {
-		return kubernetesDestinationOptions{}, nil, err
-	}
-	client, err := p.clientFor(ctx, cfg)
-	if err != nil {
-		return kubernetesDestinationOptions{}, nil, err
-	}
-	return options, client.CoreV1().Secrets(options.namespace), nil
+func (destinationRuntime) Close(context.Context) error {
+	return nil
 }
 
 func (p Provider) clientFor(ctx context.Context, cfg providers.DestinationConfig) (kubernetes.Interface, error) {

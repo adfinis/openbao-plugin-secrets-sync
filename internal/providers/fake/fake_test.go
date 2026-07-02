@@ -61,7 +61,6 @@ func TestProviderConformance(t *testing.T) {
 		},
 		UpsertSuccess: &providertest.UpsertCase{
 			Request: providers.UpsertRequest{
-				Destination:   providers.DestinationConfig{Name: "default"},
 				ResolvedName:  "prod/app/db",
 				Format:        "json",
 				Payload:       []byte(`{"password":"secret"}`),
@@ -71,7 +70,6 @@ func TestProviderConformance(t *testing.T) {
 		},
 		DeleteSuccess: &providertest.DeleteCase{
 			Request: providers.DeleteRequest{
-				Destination:   providers.DestinationConfig{Name: "default"},
 				ResolvedName:  "prod/app/db",
 				SourcePath:    "app/db",
 				SourceVersion: 1,
@@ -203,7 +201,6 @@ func fakeMaturityMatrix() *providertest.MaturityMatrix {
 
 func defaultFakeUpsertRequest(resolvedName string, data []byte) providers.UpsertRequest {
 	return providers.UpsertRequest{
-		Destination:   providers.DestinationConfig{Name: "default"},
 		Runtime:       defaultFakeRuntimeIdentity(),
 		ResolvedName:  resolvedName,
 		Format:        "json",
@@ -218,7 +215,6 @@ func defaultFakeUpsertRequest(resolvedName string, data []byte) providers.Upsert
 
 func defaultFakeDeleteRequest(resolvedName string) providers.DeleteRequest {
 	return providers.DeleteRequest{
-		Destination:   providers.DestinationConfig{Name: "default"},
 		Runtime:       defaultFakeRuntimeIdentity(),
 		ResolvedName:  resolvedName,
 		SourcePath:    "app/db",
@@ -230,7 +226,6 @@ func defaultFakeDeleteRequest(resolvedName string) providers.DeleteRequest {
 
 func defaultFakeReadStateRequest(resolvedName string) providers.ReadStateRequest {
 	return providers.ReadStateRequest{
-		Destination:   providers.DestinationConfig{Name: "default"},
 		Runtime:       defaultFakeRuntimeIdentity(),
 		ResolvedName:  resolvedName,
 		PayloadSHA256: "sha256:test",

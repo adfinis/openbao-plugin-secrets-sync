@@ -212,7 +212,7 @@ func TestValidateDestinationConfig(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			err := (Provider{}).Validate(context.Background(), providers.DestinationConfig{
+			err := (Provider{}).ValidateConfig(context.Background(), providers.DestinationConfig{
 				Name:   testDestinationName,
 				Config: tt.config,
 			})
@@ -273,7 +273,7 @@ func TestPlanDetectsConflictAndDrift(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			client := newMemoryProjectVariableClient()
 			client.variables[variableStorageKey(testResolvedName, testEnvScope)] = tt.variable
-			plan, err := (Provider{client: client}).Plan(context.Background(), defaultPlanRequest(tt.sourceSHA, tt.sourceVer))
+			plan, err := runtimeWithClient(t, client).Plan(context.Background(), defaultPlanRequest(tt.sourceSHA, tt.sourceVer))
 			if err != nil {
 				t.Fatalf("plan: %v", err)
 			}
@@ -315,11 +315,15 @@ func TestPlanRejectsKnownIncompatibleMaskedPayloads(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			req := defaultPlanRequest(testPayloadSHANew, 1)
-			req.Destination = destinationConfigWith(tt.overrides)
+			destination := destinationConfigWith(tt.overrides)
 			req.Format = tt.format
 			req.PayloadBytes = tt.payloadLen
 
-			plan, err := (Provider{client: newMemoryProjectVariableClient()}).Plan(context.Background(), req)
+			plan, err := runtimeWithDestination(
+				t,
+				Provider{client: newMemoryProjectVariableClient()},
+				destination,
+			).Plan(context.Background(), req)
 			if err != nil {
 				t.Fatalf("plan: %v", err)
 			}
@@ -382,10 +386,10 @@ func TestUpsertRejectsIncompatibleMaskedPayloads(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			client := newMemoryProjectVariableClient()
 			req := defaultUpsertRequest(testPayloadSHANew, tt.value, 1)
-			req.Destination = destinationConfigWith(tt.overrides)
+			destination := destinationConfigWith(tt.overrides)
 			req.Format = tt.format
 
-			_, err := (Provider{client: client}).Upsert(context.Background(), req)
+			_, err := runtimeWithDestination(t, Provider{client: client}, destination).Upsert(context.Background(), req)
 			assertProviderErrorClass(t, err, providers.ErrorClassValidation)
 			if len(client.variables) != 0 {
 				t.Fatalf("variables = %#v, want no GitLab write", client.variables)
@@ -400,9 +404,8 @@ func TestUpsertCreatesCompatibleHiddenVariable(t *testing.T) {
 	})
 	client := newMemoryProjectVariableClient()
 	req := defaultUpsertRequest(testPayloadSHANew, []byte("token_123"), 1)
-	req.Destination = cfg
 
-	result, err := (Provider{client: client}).Upsert(context.Background(), req)
+	result, err := runtimeWithDestination(t, Provider{client: client}, cfg).Upsert(context.Background(), req)
 	if err != nil {
 		t.Fatalf("upsert: %v", err)
 	}
@@ -467,10 +470,14 @@ func TestPlanUpdatesWhenAttributesDriftWithMatchingPayload(t *testing.T) {
 				PayloadFormat: payload.FormatRaw,
 			})
 			req := defaultPlanRequest(testPayloadSHAOld, 1)
-			req.Destination = destinationConfigWith(tt.overrides)
+			destination := destinationConfigWith(tt.overrides)
 			req.PayloadBytes = len("token_123")
 
-			plan, err := (Provider{client: gitlabClientWithVariable(variable)}).Plan(context.Background(), req)
+			plan, err := runtimeWithDestination(
+				t,
+				Provider{client: gitlabClientWithVariable(variable)},
+				destination,
+			).Plan(context.Background(), req)
 			if err != nil {
 				t.Fatalf("plan: %v", err)
 			}
@@ -549,9 +556,8 @@ func TestUpsertRepairsAttributeDriftWithMatchingPayload(t *testing.T) {
 				PayloadFormat: payload.FormatRaw,
 			}))
 			req := defaultUpsertRequest(testPayloadSHAOld, []byte("token_123"), 1)
-			req.Destination = cfg
 
-			result, err := (Provider{client: client}).Upsert(context.Background(), req)
+			result, err := runtimeWithDestination(t, Provider{client: client}, cfg).Upsert(context.Background(), req)
 			if err != nil {
 				t.Fatalf("upsert: %v", err)
 			}
@@ -587,9 +593,8 @@ func TestHiddenUpdateIsBlockedForExistingVisibleVariable(t *testing.T) {
 	client := gitlabClientWithVariable(variable)
 
 	planRequest := defaultPlanRequest(testPayloadSHAOld, 1)
-	planRequest.Destination = cfg
 	planRequest.PayloadBytes = len("token_123")
-	plan, err := (Provider{client: client}).Plan(context.Background(), planRequest)
+	plan, err := runtimeWithDestination(t, Provider{client: client}, cfg).Plan(context.Background(), planRequest)
 	if err != nil {
 		t.Fatalf("plan: %v", err)
 	}
@@ -601,16 +606,14 @@ func TestHiddenUpdateIsBlockedForExistingVisibleVariable(t *testing.T) {
 	}
 
 	upsertRequest := defaultUpsertRequest(testPayloadSHAOld, []byte("token_123"), 1)
-	upsertRequest.Destination = cfg
-	_, err = (Provider{client: client}).Upsert(context.Background(), upsertRequest)
+	_, err = runtimeWithDestination(t, Provider{client: client}, cfg).Upsert(context.Background(), upsertRequest)
 	assertProviderErrorClass(t, err, providers.ErrorClassValidation)
 }
 
 func TestProviderRejectsInvalidVariableKey(t *testing.T) {
-	_, err := (Provider{client: newMemoryProjectVariableClient()}).Upsert(
+	_, err := runtimeWithClient(t, newMemoryProjectVariableClient()).Upsert(
 		context.Background(),
 		providers.UpsertRequest{
-			Destination:   defaultDestinationConfig(),
 			ResolvedName:  "app/password",
 			Format:        payload.FormatRaw,
 			Payload:       []byte("secret"),
@@ -878,7 +881,6 @@ func defaultOptions() gitlabDestinationOptions {
 
 func defaultPlanRequest(payloadSHA256 string, version int) providers.PlanRequest {
 	return providers.PlanRequest{
-		Destination:   defaultDestinationConfig(),
 		Runtime:       defaultRuntimeIdentity(),
 		ResolvedName:  testResolvedName,
 		Format:        payload.FormatRaw,
@@ -893,7 +895,6 @@ func defaultPlanRequest(payloadSHA256 string, version int) providers.PlanRequest
 
 func defaultUpsertRequest(payloadSHA256 string, value []byte, version int) providers.UpsertRequest {
 	return providers.UpsertRequest{
-		Destination:   defaultDestinationConfig(),
 		Runtime:       defaultRuntimeIdentity(),
 		ResolvedName:  testResolvedName,
 		Format:        payload.FormatRaw,
@@ -908,7 +909,6 @@ func defaultUpsertRequest(payloadSHA256 string, value []byte, version int) provi
 
 func defaultDeleteRequest(version int) providers.DeleteRequest {
 	return providers.DeleteRequest{
-		Destination:   defaultDestinationConfig(),
 		Runtime:       defaultRuntimeIdentity(),
 		ResolvedName:  testResolvedName,
 		SourcePath:    testSourcePath,
@@ -920,7 +920,6 @@ func defaultDeleteRequest(version int) providers.DeleteRequest {
 
 func defaultReadStateRequest(payloadSHA256 string, version int) providers.ReadStateRequest {
 	return providers.ReadStateRequest{
-		Destination:   defaultDestinationConfig(),
 		Runtime:       defaultRuntimeIdentity(),
 		ResolvedName:  testResolvedName,
 		PayloadSHA256: payloadSHA256,
@@ -935,6 +934,27 @@ func oversizedGitLabUpsertRequest() providers.UpsertRequest {
 	request := defaultUpsertRequest(testPayloadSHANew, []byte("new"), 2)
 	request.Payload = make([]byte, variableValueMaxBytes+1)
 	return request
+}
+
+func runtimeWithClient(t *testing.T, client projectVariableClient) providers.DestinationRuntime {
+	t.Helper()
+	return runtimeWithDestination(t, Provider{client: client}, defaultDestinationConfig())
+}
+
+func runtimeWithDestination(
+	t *testing.T,
+	provider Provider,
+	destination providers.DestinationConfig,
+) providers.DestinationRuntime {
+	t.Helper()
+	runtime, err := provider.OpenDestination(context.Background(), destination)
+	if err != nil {
+		t.Fatalf("open destination runtime: %v", err)
+	}
+	if runtime == nil {
+		t.Fatal("destination runtime must not be nil")
+	}
+	return runtime
 }
 
 func defaultRuntimeIdentity() providers.RuntimeIdentity {

@@ -216,18 +216,15 @@ func (b *secretSyncBackend) processUpsert(
 		return err
 	}
 	providerStart := time.Now()
-	result, err := upsertContext.provider.Upsert(ctx, providers.UpsertRequest{
-		Destination:   resolvedDestinationConfig,
-		Runtime:       runtimeIdentity,
-		ResolvedName:  resolvedName,
-		Format:        preparedPayload.Format,
-		Payload:       preparedPayload.Bytes,
-		PayloadSHA256: preparedPayload.SHA256,
-		SourcePath:    record.Path,
-		SourceVersion: record.Version,
-		AssociationID: record.AssociationID,
-		ObjectID:      record.ObjectID,
-	})
+	result, err := b.providerUpsert(
+		ctx,
+		upsertContext,
+		resolvedDestinationConfig,
+		runtimeIdentity,
+		record,
+		resolvedName,
+		preparedPayload,
+	)
 	if isDispatchContextCanceled(ctx, err) {
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			return ctxErr
@@ -320,15 +317,14 @@ func (b *secretSyncBackend) processDelete(
 		return err
 	}
 	providerStart := time.Now()
-	result, err := deleteContext.provider.Delete(ctx, providers.DeleteRequest{
-		Destination:   resolvedDestinationConfig,
-		Runtime:       runtimeIdentity,
-		ResolvedName:  resolvedName,
-		SourcePath:    record.Path,
-		SourceVersion: record.Version,
-		AssociationID: record.AssociationID,
-		ObjectID:      record.ObjectID,
-	})
+	result, err := b.providerDelete(
+		ctx,
+		deleteContext,
+		resolvedDestinationConfig,
+		runtimeIdentity,
+		record,
+		resolvedName,
+	)
 	if isDispatchContextCanceled(ctx, err) {
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			return ctxErr
@@ -375,6 +371,54 @@ func (b *secretSyncBackend) processDelete(
 		return err
 	}
 	return deleteOutbox(ctx, storage, record)
+}
+
+func (b *secretSyncBackend) providerUpsert(
+	ctx context.Context,
+	ctxData *upsertContext,
+	destinationConfig providers.DestinationConfig,
+	runtimeIdentity providers.RuntimeIdentity,
+	record outboxRecord,
+	resolvedName string,
+	preparedPayload payloadpkg.CanonicalPayload,
+) (*providers.SyncResult, error) {
+	runtime, err := b.destinationRuntime(ctx, ctxData.provider, *ctxData.destination, destinationConfig)
+	if err != nil {
+		return nil, err
+	}
+	return runtime.Upsert(ctx, providers.UpsertRequest{
+		Runtime:       runtimeIdentity,
+		ResolvedName:  resolvedName,
+		Format:        preparedPayload.Format,
+		Payload:       preparedPayload.Bytes,
+		PayloadSHA256: preparedPayload.SHA256,
+		SourcePath:    record.Path,
+		SourceVersion: record.Version,
+		AssociationID: record.AssociationID,
+		ObjectID:      record.ObjectID,
+	})
+}
+
+func (b *secretSyncBackend) providerDelete(
+	ctx context.Context,
+	ctxData *deleteContext,
+	destinationConfig providers.DestinationConfig,
+	runtimeIdentity providers.RuntimeIdentity,
+	record outboxRecord,
+	resolvedName string,
+) (*providers.SyncResult, error) {
+	runtime, err := b.destinationRuntime(ctx, ctxData.provider, *ctxData.destination, destinationConfig)
+	if err != nil {
+		return nil, err
+	}
+	return runtime.Delete(ctx, providers.DeleteRequest{
+		Runtime:       runtimeIdentity,
+		ResolvedName:  resolvedName,
+		SourcePath:    record.Path,
+		SourceVersion: record.Version,
+		AssociationID: record.AssociationID,
+		ObjectID:      record.ObjectID,
+	})
 }
 
 type upsertContext struct {

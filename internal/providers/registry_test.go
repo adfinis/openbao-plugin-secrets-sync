@@ -41,26 +41,36 @@ func (testProvider) Capabilities() Capabilities {
 	return Capabilities{}
 }
 
-func (testProvider) Validate(context.Context, DestinationConfig) error {
+func (testProvider) ValidateConfig(context.Context, DestinationConfig) error {
 	return nil
 }
 
-func (testProvider) Plan(context.Context, PlanRequest) (*PlanResult, error) {
-	return nil, nil
+func (testProvider) OpenDestination(context.Context, DestinationConfig) (DestinationRuntime, error) {
+	return testDestinationRuntime{}, nil
 }
 
-func (testProvider) Upsert(context.Context, UpsertRequest) (*SyncResult, error) {
-	return nil, nil
+type testDestinationRuntime struct{}
+
+func (testDestinationRuntime) Health(context.Context) (*HealthResult, error) {
+	return &HealthResult{Healthy: true}, nil
 }
 
-func (testProvider) Delete(context.Context, DeleteRequest) (*SyncResult, error) {
-	return nil, nil
+func (testDestinationRuntime) Plan(context.Context, PlanRequest) (*PlanResult, error) {
+	return &PlanResult{Action: PlanActionCreate}, nil
 }
 
-func (testProvider) ReadState(context.Context, ReadStateRequest) (*RemoteState, error) {
-	return nil, nil
+func (testDestinationRuntime) Upsert(context.Context, UpsertRequest) (*SyncResult, error) {
+	return &SyncResult{}, nil
 }
 
-func (testProvider) Health(context.Context, DestinationConfig) (*HealthResult, error) {
-	return nil, nil
+func (testDestinationRuntime) Delete(context.Context, DeleteRequest) (*SyncResult, error) {
+	return &SyncResult{}, nil
+}
+
+func (testDestinationRuntime) ReadState(context.Context, ReadStateRequest) (*RemoteState, error) {
+	return &RemoteState{}, nil
+}
+
+func (testDestinationRuntime) Close(context.Context) error {
+	return nil
 }
