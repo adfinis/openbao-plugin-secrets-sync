@@ -186,6 +186,8 @@ Useful alert inputs:
   `disabled`, `restore_guard`, or `replication_state`;
 - `openbao.secret_sync.provider.requests` failures increase by provider,
   operation, or error class;
+- `openbao.secret_sync.drift.repairs` failures or retries increase by
+  destination type or granularity;
 - `openbao.secret_sync.readiness.checks` failures identify onboarding blockers
   without exposing source paths or destination names.
 

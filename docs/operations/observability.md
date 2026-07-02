@@ -20,6 +20,7 @@ openbao.secret_sync.provider.request.duration
 openbao.secret_sync.readiness.checks
 openbao.secret_sync.remote_mutation.blocked
 openbao.secret_sync.reconcile.runs
+openbao.secret_sync.drift.repairs
 openbao.secret_sync.restore_guard.active
 ```
 
@@ -34,14 +35,16 @@ Instrumentation points:
 - queue summary reads and drains record queue depth by durable outbox state,
   configured capacity, and capacity utilization;
 - queue drain records a logical drain operation result;
-- blocked periodic runs and manual drains record the safety gate that blocked
-  remote mutation;
+- blocked periodic runs, background drift repair enqueue attempts, and manual
+  drains record the safety gate that blocked remote mutation;
 - dispatch records logical upsert/delete operation outcomes;
 - destination readiness checks record a low-cardinality source or destination
   check result and primary blocker;
 - provider validate, health, plan, upsert, delete, and read-state calls record
   request counts and durations;
-- reconcile plan/apply records one result per reconciled object;
+- reconcile plan/apply and background drift detection record one result per
+  reconciled object;
+- background drift repair records one result per repair operation;
 - config read/write and restore-guard acknowledgement record restore guard
   active state.
 

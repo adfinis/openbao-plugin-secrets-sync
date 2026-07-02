@@ -129,6 +129,7 @@ func (destinationRuntime) ReadState(_ context.Context, req providers.ReadStateRe
 			PayloadSHA256:  "sha256:remote",
 			SourceVersion:  req.SourceVersion + 1,
 			RemoteVersion:  "fake",
+			Verification:   providers.RemoteStateVerificationValue,
 		}, nil
 	case strings.Contains(req.ResolvedName, "drift"):
 		return &providers.RemoteState{
@@ -138,6 +139,7 @@ func (destinationRuntime) ReadState(_ context.Context, req providers.ReadStateRe
 			PayloadSHA256:  "sha256:remote",
 			SourceVersion:  req.SourceVersion,
 			RemoteVersion:  "fake",
+			Verification:   providers.RemoteStateVerificationValue,
 		}, nil
 	}
 	if err := fakeMutationError(req.ResolvedName); err != nil {
@@ -150,6 +152,7 @@ func (destinationRuntime) ReadState(_ context.Context, req providers.ReadStateRe
 		PayloadSHA256:  req.PayloadSHA256,
 		SourceVersion:  req.SourceVersion,
 		RemoteVersion:  "fake",
+		Verification:   providers.RemoteStateVerificationValue,
 	}, nil
 }
 

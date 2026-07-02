@@ -28,11 +28,11 @@ const (
 	mountPath        = "secret-sync"
 	rootToken        = "root"
 	testPollInterval = 500 * time.Millisecond
-	testTimeout      = 45 * time.Second
+	testTimeout      = 90 * time.Second
 )
 
 func TestOpenBaoPluginSyncsToGitLabProjectVariables(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
 	defer cancel()
 
 	baoClient := newOpenBaoClient(t)
@@ -71,12 +71,20 @@ func TestOpenBaoPluginSyncsToGitLabProjectVariables(t *testing.T) {
 	assertStatusObject(t, baoClient, variableKey, "SYNCED", "")
 	assertGitLabVariable(t, ctx, gitLabClient, variableKey, "initial", "1")
 	assertReconcilePlan(t, baoClient, variableKey, "SYNCED")
-	assertReconcileApply(t, baoClient, variableKey, "SYNCED")
 
 	noOpPlan := write(t, baoClient, mountPath+"/associations/app/db/plan", associationRequest())
 	if got := noOpPlan.Data["action"]; got != "noop" {
 		t.Fatalf("noop plan action = %v, want noop", got)
 	}
+
+	if err := gitLabClient.updateVariableValue(ctx, variableKey, "drifted"); err != nil {
+		t.Fatalf("manually drift GitLab variable: %v", err)
+	}
+	enableBackgroundRepair(t, baoClient)
+	assertGitLabVariable(t, ctx, gitLabClient, variableKey, "initial", "1")
+	assertBackgroundRepairStatus(t, baoClient, variableKey, "value")
+	disableBackgroundDrift(t, baoClient)
+	assertReconcileApply(t, baoClient, variableKey, "SYNCED")
 
 	writeSource(t, baoClient, variableKey, "updated")
 	drainQueue(t, baoClient, 1)
@@ -321,6 +329,57 @@ func assertStatusObject(
 	}
 }
 
+func enableBackgroundRepair(t *testing.T, client *api.Client) {
+	t.Helper()
+	write(t, client, mountPath+"/config", map[string]interface{}{
+		"drift_repair":             "repair",
+		"drift_reconcile_interval": "1m",
+		"drift_reconcile_batch":    4,
+	})
+}
+
+func disableBackgroundDrift(t *testing.T, client *api.Client) {
+	t.Helper()
+	write(t, client, mountPath+"/config", map[string]interface{}{
+		"drift_repair": "off",
+	})
+}
+
+func assertBackgroundRepairStatus(
+	t *testing.T,
+	client *api.Client,
+	objectID string,
+	expectedVerification string,
+) {
+	t.Helper()
+	secret, err := client.Logical().Read(mountPath + "/status/app/db")
+	if err != nil {
+		t.Fatalf("read status: %v", err)
+	}
+	if secret == nil {
+		t.Fatal("status response is nil")
+	}
+	if got := secret.Data["state"]; got != "SYNCED" {
+		t.Fatalf("status state = %v, want SYNCED: %#v", got, secret.Data)
+	}
+	object := objectByID(t, objectsFromSecret(t, secret.Data["objects"]), objectID)
+	if got := object["state"]; got != "SYNCED" {
+		t.Fatalf("status object state = %v, want SYNCED", got)
+	}
+	if got := object["verification"]; got != expectedVerification {
+		t.Fatalf("status verification = %v, want %s", got, expectedVerification)
+	}
+	if got := object["last_drift_detected_time"]; got == "" {
+		t.Fatal("last_drift_detected_time must be set after background repair")
+	}
+	if got := object["last_repair_time"]; got == "" {
+		t.Fatal("last_repair_time must be set after background repair")
+	}
+	if got := intFromSecret(t, object["repair_count"]); got < 1 {
+		t.Fatalf("repair_count = %d, want at least 1", got)
+	}
+}
+
 type gitLabClient struct {
 	baseURL          string
 	token            string
@@ -410,6 +469,36 @@ func (c gitLabClient) deleteVariable(ctx context.Context, key string) error {
 		return nil
 	}
 	return fmt.Errorf("gitlab delete variable status %d", resp.StatusCode)
+}
+
+func (c gitLabClient) updateVariableValue(ctx context.Context, key string, value string) error {
+	form := url.Values{}
+	form.Set("key", key)
+	form.Set("value", value)
+	form.Set("environment_scope", c.environmentScope)
+	form.Set("protected", "false")
+	form.Set("masked", "false")
+	form.Set("raw", "true")
+	form.Set("variable_type", gitlab.VariableTypeEnvVar)
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPut, c.variableURL(key), strings.NewReader(form.Encode()))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("PRIVATE-TOKEN", c.token)
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	resp, err := c.httpClient.Do(req) //nolint:gosec // Opt-in e2e endpoint is local Docker/loopback GitLab.
+	if err != nil {
+		return err
+	}
+	defer func() {
+		_ = resp.Body.Close()
+	}()
+	_, _ = io.Copy(io.Discard, resp.Body)
+	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
+		return fmt.Errorf("gitlab update variable status %d", resp.StatusCode)
+	}
+	return nil
 }
 
 func (c gitLabClient) variableURL(key string) string {

@@ -31,14 +31,14 @@ const (
 	awsRegion        = "us-east-1"
 	localstackInBao  = "http://localstack:4566"
 	testPollInterval = 500 * time.Millisecond
-	testTimeout      = 30 * time.Second
+	testTimeout      = 90 * time.Second
 	raftNode0ID      = "openbao-node0"
 	raftNode1ID      = "openbao-node1"
 	raftNode2ID      = "openbao-node2"
 )
 
 func TestOpenBaoLifecyclePreservesSecretSyncState(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	ctx, cancel := context.WithTimeout(context.Background(), 7*time.Minute)
 	defer cancel()
 
 	baoClient := newOpenBaoClient(t, "")
@@ -67,10 +67,11 @@ func TestOpenBaoLifecyclePreservesSecretSyncState(t *testing.T) {
 	assertConfig(t, baoClient, true, false, false)
 
 	write(t, baoClient, mountPath+"/destinations/aws-sm/prod", map[string]interface{}{
-		awssecretsmanager.ConfigKeyRegion:         awsRegion,
-		awssecretsmanager.ConfigKeyEndpointURL:    localstackInBao,
-		awssecretsmanager.ConfigKeyEndpointPolicy: awssecretsmanager.EndpointPolicyLocal,
-		awssecretsmanager.ConfigKeyAuthMode:       awssecretsmanager.AuthModeDefault,
+		awssecretsmanager.ConfigKeyRegion:              awsRegion,
+		awssecretsmanager.ConfigKeyEndpointURL:         localstackInBao,
+		awssecretsmanager.ConfigKeyEndpointPolicy:      awssecretsmanager.EndpointPolicyLocal,
+		awssecretsmanager.ConfigKeyAuthMode:            awssecretsmanager.AuthModeDefault,
+		awssecretsmanager.ConfigKeyValueDriftDetection: "true",
 	})
 	writeSource(t, baoClient, "initial")
 
@@ -156,6 +157,17 @@ func TestOpenBaoLifecyclePreservesSecretSyncState(t *testing.T) {
 	assertRemotePayload(t, ctx, awsClient, remoteName, "after-seal")
 	assertStatus(t, baoClient, "SYNCED")
 	assertStatus(t, standbyClient, "SYNCED")
+
+	write(t, baoClient, mountPath+"/config", map[string]interface{}{
+		"restore_guard":            true,
+		"drift_repair":             "repair",
+		"drift_reconcile_interval": "1m",
+		"drift_reconcile_batch":    4,
+	})
+	putRemotePayload(t, ctx, awsClient, remoteName, "guard-drift")
+	assertStatusEventually(t, ctx, baoClient, "DRIFTED")
+	assertQueue(t, baoClient, 0, 0)
+	assertRemotePayload(t, ctx, awsClient, remoteName, "guard-drift")
 }
 
 func initializeOpenBao(t *testing.T, ctx context.Context, client *api.Client) string {
@@ -503,6 +515,23 @@ func assertStatus(t *testing.T, client *api.Client, expectedState string) {
 	}
 }
 
+func assertStatusEventually(t *testing.T, ctx context.Context, client *api.Client, expectedState string) {
+	t.Helper()
+	waitFor(t, ctx, func() error {
+		secret, err := client.Logical().Read(mountPath + "/status/app/db")
+		if err != nil {
+			return err
+		}
+		if secret == nil {
+			return errors.New("status response is nil")
+		}
+		if got := secret.Data["state"]; got != expectedState {
+			return fmt.Errorf("status state = %v, want %s", got, expectedState)
+		}
+		return nil
+	})
+}
+
 func assertRemotePayload(
 	t *testing.T,
 	ctx context.Context,
@@ -527,6 +556,27 @@ func assertRemotePayload(
 		}
 		return nil
 	})
+}
+
+func putRemotePayload(
+	t *testing.T,
+	ctx context.Context,
+	client *secretsmanager.Client,
+	secretName string,
+	password string,
+) {
+	t.Helper()
+	payload, err := json.Marshal(map[string]string{"password": password})
+	if err != nil {
+		t.Fatalf("marshal remote payload: %v", err)
+	}
+	_, err = client.PutSecretValue(ctx, &secretsmanager.PutSecretValueInput{
+		SecretId:     aws.String(secretName),
+		SecretString: aws.String(string(payload)),
+	})
+	if err != nil {
+		t.Fatalf("put remote payload: %v", err)
+	}
 }
 
 func assertRemoteMissing(t *testing.T, ctx context.Context, client *secretsmanager.Client, secretName string) {

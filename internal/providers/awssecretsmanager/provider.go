@@ -308,7 +308,7 @@ func (r destinationRuntime) Upsert(ctx context.Context, req providers.UpsertRequ
 	result, err := r.client.PutSecretValue(ctx, &secretsmanager.PutSecretValueInput{
 		SecretId:           aws.String(req.ResolvedName),
 		SecretString:       aws.String(payload),
-		ClientRequestToken: aws.String(idempotencyToken("put", req.ResolvedName, req.PayloadSHA256)),
+		ClientRequestToken: aws.String(mutationIdempotencyToken("put", req)),
 	})
 	if err != nil {
 		return nil, providerError(classifyAWSError(err))
@@ -369,12 +369,14 @@ func (r destinationRuntime) ReadState(
 	}
 	owned := ownedByRequest(describe.Tags, ownershipIdentityFromReadState(req))
 	payloadSHA256 := tagValue(describe.Tags, tagPayloadSHA256)
+	verification := providers.RemoteStateVerificationMetadata
 	if owned && r.options.valueDriftDetection {
 		var readErr error
 		payloadSHA256, readErr = remotePayloadSHA256(ctx, r.client, req.ResolvedName)
 		if readErr != nil {
 			return nil, providerError(classifyAWSError(readErr))
 		}
+		verification = providers.RemoteStateVerificationValue
 	}
 	sourceVersion, _ := strconv.Atoi(tagValue(describe.Tags, tagSourceVersion))
 	return &providers.RemoteState{
@@ -384,6 +386,7 @@ func (r destinationRuntime) ReadState(
 		PayloadSHA256:  payloadSHA256,
 		SourceVersion:  sourceVersion,
 		RemoteVersion:  currentVersionID(describe),
+		Verification:   verification,
 	}, nil
 }
 
@@ -768,7 +771,7 @@ func createSecret(
 	result, err := client.CreateSecret(ctx, &secretsmanager.CreateSecretInput{
 		Name:               aws.String(req.ResolvedName),
 		SecretString:       aws.String(payload),
-		ClientRequestToken: aws.String(idempotencyToken("create", req.ResolvedName, req.PayloadSHA256)),
+		ClientRequestToken: aws.String(mutationIdempotencyToken("create", req)),
 		Tags:               ownershipTagsFromUpsert(req),
 	})
 	if err != nil {
@@ -952,6 +955,13 @@ func currentVersionID(describe *secretsmanager.DescribeSecretOutput) string {
 func idempotencyToken(parts ...string) string {
 	sum := sha256.Sum256([]byte(strings.Join(parts, ":")))
 	return hex.EncodeToString(sum[:16])
+}
+
+func mutationIdempotencyToken(operation string, req providers.UpsertRequest) string {
+	if req.IdempotencyKey != "" {
+		return idempotencyToken(operation, req.ResolvedName, req.IdempotencyKey)
+	}
+	return idempotencyToken(operation, req.ResolvedName, req.PayloadSHA256)
 }
 
 func isResourceNotFound(err error) bool {

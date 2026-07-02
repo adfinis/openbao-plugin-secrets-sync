@@ -7,7 +7,10 @@ destinations.
 Secret Sync uses a restore guard to prevent restored queue work from blindly
 mutating remote secrets. While the guard is active, background processing and
 manual `queue/drain` remote mutations are blocked. Reconcile planning remains
-available so operators can inspect remote state before resuming sync.
+available so operators can inspect remote state before resuming sync. If
+background drift detection is enabled, it may continue to refresh local status
+from provider read-state checks while the guard is active; it does not mutate
+remote destinations or enqueue repair until the guard is acknowledged.
 
 Mounts default `restore_guard=false`. Operators can set `restore_guard=true`
 before or during restore and clone review.
@@ -116,6 +119,10 @@ Acknowledge the restore guard only after the review is complete:
 ```sh
 bao write -force secret-sync/config/restore-guard/acknowledge
 ```
+
+If `drift_repair=repair` is configured, acknowledgement also allows the next
+background sweep to enqueue owned drift repair. Review reconcile output before
+acknowledging when restored local source versions may be stale.
 
 After acknowledgement, drain due work in bounded batches:
 

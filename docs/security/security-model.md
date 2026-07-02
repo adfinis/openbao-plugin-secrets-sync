@@ -216,6 +216,9 @@ The plugin uses a restore guard:
 - operators can set `restore_guard=true` after restore or clone review starts;
 - background and manual-drain remote mutations disabled while the guard is
   active;
+- background drift detection may continue to update local status from provider
+  read-state checks while the guard is active, but repair enqueue and dispatch
+  remain blocked;
 - `reconcile/<path>/plan` and `reconcile/<path>` before pushing restored data
   to destinations;
 - explicit operator acknowledgement to resume sync;
@@ -238,6 +241,10 @@ openbao.secret_sync.operations{operation,result,error_class,destination_type,gra
 openbao.secret_sync.provider.requests{provider,operation,result,error_class}
 openbao.secret_sync.provider.request.duration{provider,operation,result,error_class}
 openbao.secret_sync.reconcile.runs{result,error_class,destination_type,granularity}
+openbao.secret_sync.drift.repairs{result,error_class,destination_type,granularity}
+openbao.secret_sync.remote_mutation.blocked{operation,reason}
+openbao.secret_sync.queue.capacity
+openbao.secret_sync.queue.utilization
 openbao.secret_sync.restore_guard.active
 ```
 

@@ -31,11 +31,11 @@ const (
 	awsRegion        = "us-east-1"
 	localstackInBao  = "http://localstack:4566"
 	testPollInterval = 500 * time.Millisecond
-	testTimeout      = 30 * time.Second
+	testTimeout      = 90 * time.Second
 )
 
 func TestOpenBaoPluginSyncsToLocalStackSecretsManager(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
 	defer cancel()
 
 	baoClient := newOpenBaoClient(t)
@@ -75,7 +75,6 @@ func TestOpenBaoPluginSyncsToLocalStackSecretsManager(t *testing.T) {
 	if ids := stringSlice(t, association.Data["sync_operation_ids"]); len(ids) != 1 {
 		t.Fatalf("sync_operation_ids = %v, want one operation", ids)
 	}
-	associationID := associationIDFromSecret(t, association)
 	drainQueue(t, baoClient, 1)
 	assertRemotePayload(t, ctx, awsClient, remoteName, "initial")
 	assertRemoteTags(t, ctx, awsClient, remoteName, map[string]string{
@@ -85,7 +84,6 @@ func TestOpenBaoPluginSyncsToLocalStackSecretsManager(t *testing.T) {
 	})
 	assertStatus(t, baoClient, "SYNCED")
 	assertReconcilePlan(t, baoClient, "SYNCED")
-	assertReconcileApply(t, baoClient, "SYNCED")
 
 	noOpPlan := write(t, baoClient, mountPath+"/associations/app/db/plan", associationRequest(remoteName))
 	if got := noOpPlan.Data["action"]; got != "noop" {
@@ -97,17 +95,11 @@ func TestOpenBaoPluginSyncsToLocalStackSecretsManager(t *testing.T) {
 	if got := driftPlan.Data["action"]; got != "update" {
 		t.Fatalf("drift plan action = %v, want update", got)
 	}
-	manualSync := write(
-		t,
-		baoClient,
-		mountPath+"/associations/app/db/"+associationID+"/sync",
-		map[string]interface{}{},
-	)
-	if ids := stringSlice(t, manualSync.Data["sync_operation_ids"]); len(ids) != 1 {
-		t.Fatalf("manual sync_operation_ids = %v, want one operation", ids)
-	}
-	drainQueue(t, baoClient, 1)
+	enableBackgroundRepair(t, baoClient)
 	assertRemotePayload(t, ctx, awsClient, remoteName, "initial")
+	assertBackgroundRepairStatus(t, baoClient, "value")
+	disableBackgroundDrift(t, baoClient)
+	assertReconcileApply(t, baoClient, "SYNCED")
 
 	writeSource(t, baoClient, "updated")
 	drainQueue(t, baoClient, 1)
@@ -275,6 +267,22 @@ func drainQueue(t *testing.T, client *api.Client, expectedProcessed int) {
 	}
 }
 
+func enableBackgroundRepair(t *testing.T, client *api.Client) {
+	t.Helper()
+	write(t, client, mountPath+"/config", map[string]interface{}{
+		"drift_repair":             "repair",
+		"drift_reconcile_interval": "1m",
+		"drift_reconcile_batch":    4,
+	})
+}
+
+func disableBackgroundDrift(t *testing.T, client *api.Client) {
+	t.Helper()
+	write(t, client, mountPath+"/config", map[string]interface{}{
+		"drift_repair": "off",
+	})
+}
+
 func assertRemotePayload(
 	t *testing.T,
 	ctx context.Context,
@@ -423,6 +431,73 @@ func assertStatus(t *testing.T, client *api.Client, expectedState string) {
 	if got := secret.Data["state"]; got != expectedState {
 		t.Fatalf("status state = %v, want %s", got, expectedState)
 	}
+}
+
+func assertBackgroundRepairStatus(t *testing.T, client *api.Client, expectedVerification string) {
+	t.Helper()
+	secret := readStatus(t, client)
+	if got := secret.Data["state"]; got != "SYNCED" {
+		t.Fatalf("status state = %v, want SYNCED", got)
+	}
+	object := objectByID(t, objectsFromSecret(t, secret.Data["objects"]), "secret-path")
+	if got := object["state"]; got != "SYNCED" {
+		t.Fatalf("status object state = %v, want SYNCED", got)
+	}
+	if got := object["verification"]; got != expectedVerification {
+		t.Fatalf("status verification = %v, want %s", got, expectedVerification)
+	}
+	if got := object["last_drift_detected_time"]; got == "" {
+		t.Fatal("last_drift_detected_time must be set after background repair")
+	}
+	if got := object["last_repair_time"]; got == "" {
+		t.Fatal("last_repair_time must be set after background repair")
+	}
+	if got := intFromSecret(t, object["repair_count"]); got < 1 {
+		t.Fatalf("repair_count = %d, want at least 1", got)
+	}
+}
+
+func readStatus(t *testing.T, client *api.Client) *api.Secret {
+	t.Helper()
+	secret, err := client.Logical().Read(mountPath + "/status/app/db")
+	if err != nil {
+		t.Fatalf("read status: %v", err)
+	}
+	if secret == nil {
+		t.Fatal("status response is nil")
+	}
+	return secret
+}
+
+func objectsFromSecret(t *testing.T, raw interface{}) []map[string]interface{} {
+	t.Helper()
+	if values, ok := raw.([]interface{}); ok {
+		objects := make([]map[string]interface{}, 0, len(values))
+		for _, value := range values {
+			object, ok := value.(map[string]interface{})
+			if !ok {
+				t.Fatalf("object = %T, want map[string]interface{}", value)
+			}
+			objects = append(objects, object)
+		}
+		return objects
+	}
+	objects, ok := raw.([]map[string]interface{})
+	if !ok {
+		t.Fatalf("objects = %T, want []map[string]interface{}", raw)
+	}
+	return objects
+}
+
+func objectByID(t *testing.T, objects []map[string]interface{}, objectID string) map[string]interface{} {
+	t.Helper()
+	for _, object := range objects {
+		if object["object_id"] == objectID {
+			return object
+		}
+	}
+	t.Fatalf("object %q missing in %#v", objectID, objects)
+	return nil
 }
 
 func assertReconcilePlan(t *testing.T, client *api.Client, expectedState string) {

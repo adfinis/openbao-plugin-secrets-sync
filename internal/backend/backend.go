@@ -3,6 +3,7 @@ package backend
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"sync"
 	"time"
@@ -144,10 +145,6 @@ func (b *secretSyncBackend) periodic(ctx context.Context, req *logical.Request) 
 		b.recordRemoteMutationBlocked(ctx, observability.OperationPeriodic, observability.ReasonDisabled)
 		return nil
 	}
-	if cfg.RestoreGuard {
-		b.recordRemoteMutationBlocked(ctx, observability.OperationPeriodic, observability.ReasonRestoreGuard)
-		return nil
-	}
 	now := nowUTC()
 	if err := recoverIncompleteEnqueueIntentsLimit(
 		ctx,
@@ -157,8 +154,16 @@ func (b *secretSyncBackend) periodic(ctx context.Context, req *logical.Request) 
 	); err != nil {
 		return err
 	}
+	var periodicErr error
+	if err := b.periodicDriftReconcile(ctx, req.Storage, cfg, now); err != nil {
+		periodicErr = errors.Join(periodicErr, err)
+	}
+	if cfg.RestoreGuard {
+		b.recordRemoteMutationBlocked(ctx, observability.OperationPeriodic, observability.ReasonRestoreGuard)
+		return periodicErr
+	}
 	_, err = b.processDueOutboxLimit(ctx, req.Storage, now, defaultPeriodicMaxOperations)
-	return err
+	return errors.Join(periodicErr, err)
 }
 
 func (b *secretSyncBackend) remoteMutationAllowed() bool {

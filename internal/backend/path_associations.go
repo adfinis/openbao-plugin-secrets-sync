@@ -308,7 +308,7 @@ func (b *secretSyncBackend) pathAssociationSync(
 		return logical.ErrorResponse(err.Error()), nil
 	}
 	now := nowUTC().Format(timeFormatRFC3339)
-	operationIDs, err := b.enqueueAssociationCurrentVersion(ctx, req.Storage, *record, *metadata, now)
+	operationIDs, err := b.enqueueAssociationCurrentVersionAsManualSync(ctx, req.Storage, *record, *metadata, now)
 	if err != nil {
 		return logical.ErrorResponse(err.Error()), nil
 	}
@@ -1138,6 +1138,110 @@ func (b *secretSyncBackend) enqueueAssociationCurrentVersion(
 			operation.CreatedTime = existing.CreatedTime
 			operations[index] = operation
 		}
+	}
+	if err := putOutboxRecords(ctx, storage, operations); err != nil {
+		return nil, err
+	}
+	return operationIDs, nil
+}
+
+func (b *secretSyncBackend) enqueueAssociationCurrentVersionAsManualSync(
+	ctx context.Context,
+	storage logical.Storage,
+	record associationRecord,
+	metadata metadataRecord,
+	now string,
+) ([]string, error) {
+	return b.enqueueAssociationCurrentVersionWithSalt(
+		ctx,
+		storage,
+		record,
+		metadata,
+		now,
+		"manual",
+		false,
+		newAssociationManualSyncOutboxRecords,
+	)
+}
+
+func (b *secretSyncBackend) enqueueAssociationCurrentVersionAsDriftRepair(
+	ctx context.Context,
+	storage logical.Storage,
+	record associationRecord,
+	metadata metadataRecord,
+	now string,
+) ([]string, error) {
+	return b.enqueueAssociationCurrentVersionWithSalt(
+		ctx,
+		storage,
+		record,
+		metadata,
+		now,
+		"repair",
+		true,
+		newAssociationDriftRepairOutboxRecords,
+	)
+}
+
+type saltedAssociationOutboxBuilder func(
+	associationRecord,
+	string,
+	int,
+	secretPayload,
+	string,
+	string,
+) ([]outboxRecord, []string, error)
+
+func (b *secretSyncBackend) enqueueAssociationCurrentVersionWithSalt(
+	ctx context.Context,
+	storage logical.Storage,
+	record associationRecord,
+	metadata metadataRecord,
+	now string,
+	idPrefix string,
+	dedupeQueuedCurrentVersion bool,
+	build saltedAssociationOutboxBuilder,
+) ([]string, error) {
+	version, err := getVersion(ctx, storage, record.Path, metadata.CurrentVersion)
+	if err != nil {
+		return nil, err
+	}
+	if version == nil || version.Destroyed || version.DeletionTime != "" {
+		return nil, fmt.Errorf("current source version is unavailable")
+	}
+	salt := bestEffortRuntimeID(idPrefix)
+	operations, operationIDs, err := build(
+		record,
+		metadata.Generation,
+		metadata.CurrentVersion,
+		version.Data,
+		now,
+		salt,
+	)
+	if err != nil {
+		return nil, err
+	}
+	b.enqueueMu.Lock()
+	defer b.enqueueMu.Unlock()
+
+	if dedupeQueuedCurrentVersion {
+		queued, err := hasQueuedUpsertForAssociationVersion(
+			ctx,
+			storage,
+			record.Path,
+			record.ID,
+			metadata.CurrentVersion,
+		)
+		if err != nil || queued {
+			return nil, err
+		}
+	}
+	additionalOperations, err := additionalQueuedOperationCount(ctx, storage, operations)
+	if err != nil {
+		return nil, err
+	}
+	if err := ensureQueueCapacityFor(ctx, storage, additionalOperations); err != nil {
+		return nil, err
 	}
 	if err := putOutboxRecords(ctx, storage, operations); err != nil {
 		return nil, err

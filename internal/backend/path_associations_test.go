@@ -563,7 +563,8 @@ func TestAssociationDisableEnableAndManualSync(t *testing.T) {
 	assertNoErrorResponse(t, enableResp)
 	assertAssociationEnabled(t, enableResp, true)
 	enableOperationID := requireSingleOperationID(t, operationIDsFromResponse(t, enableResp), "enable")
-	assertOutboxOperation(t, env.storage, enableOperationID, 2, outboxStatePending)
+	enableOperation := assertOutboxOperation(t, env.storage, enableOperationID, 2, outboxStatePending)
+	enableIdempotencyKey := enableOperation.IdempotencyKey
 	env.runPeriodicAllowed("periodic")
 
 	syncResp := env.update(
@@ -572,8 +573,16 @@ func TestAssociationDisableEnableAndManualSync(t *testing.T) {
 	)
 	assertNoErrorResponse(t, syncResp)
 	syncOperationID := requireSingleOperationID(t, operationIDsFromResponse(t, syncResp), "manual sync")
-	assertStringSlice(t, []string{syncOperationID}, []string{enableOperationID})
-	assertOutboxOperation(t, env.storage, syncOperationID, 2, outboxStatePending)
+	if syncOperationID == enableOperationID {
+		t.Fatalf("manual sync operation ID reused previous operation %s", syncOperationID)
+	}
+	manualSyncOperation := assertOutboxOperation(t, env.storage, syncOperationID, 2, outboxStatePending)
+	if manualSyncOperation.IdempotencyKey == "" {
+		t.Fatal("manual sync idempotency key must be set")
+	}
+	if manualSyncOperation.IdempotencyKey == enableIdempotencyKey {
+		t.Fatal("manual sync idempotency key must not reuse the previous operation")
+	}
 }
 
 func TestAssociationEnableRequiresSyncableMetadata(t *testing.T) {

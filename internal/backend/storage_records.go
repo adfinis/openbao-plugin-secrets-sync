@@ -26,6 +26,10 @@ const (
 	outboxByPathStoragePrefix  = "outbox_by_path/"
 	outboxByStateStoragePrefix = "outbox_by_state/"
 	defaultQueueCapacity       = 1000
+	defaultDriftRepair         = driftRepairOff
+	defaultDriftInterval       = "1h"
+	minDriftInterval           = "1m"
+	defaultDriftBatch          = 16
 	defaultMaxVersions         = 10
 	defaultDeleteVersionAfter  = "0s"
 	outboxStatePending         = "pending"
@@ -48,6 +52,11 @@ const (
 	deleteModeRetain           = "retain"
 	deleteModeDelete           = "delete"
 	deleteModeOrphan           = "orphan"
+	driftRepairOff             = "off"
+	driftRepairDetect          = "detect"
+	driftRepairRepair          = "repair"
+	outboxTriggerUser          = "user"
+	outboxTriggerDriftRepair   = "drift-repair"
 	sourceMetadataKeySyncable  = "syncable"
 	sourceMetadataValueTrue    = "true"
 	currentStorageSchema       = 1
@@ -178,26 +187,32 @@ type outboxRecord struct {
 	CreatedTime      string               `json:"created_time"`
 	UpdatedTime      string               `json:"updated_time"`
 	IdempotencyKey   string               `json:"idempotency_key"`
+	Trigger          string               `json:"trigger,omitempty"`
 	ClaimOwner       string               `json:"claim_owner,omitempty"`
 	ClaimExpiresTime string               `json:"claim_expires_time,omitempty"`
 	ClaimAttempt     int                  `json:"claim_attempt,omitempty"`
 }
 
 type statusRecord struct {
-	Path            string `json:"path"`
-	Version         int    `json:"version"`
-	AssociationID   string `json:"association_id"`
-	ObjectID        string `json:"object_id"`
-	DestinationRef  string `json:"destination_ref"`
-	ResolvedName    string `json:"resolved_name"`
-	State           string `json:"state"`
-	PayloadSHA256   string `json:"payload_sha256"`
-	RemoteVersion   string `json:"remote_version"`
-	LastOperationID string `json:"last_operation_id"`
-	LastSuccessTime string `json:"last_success_time"`
-	LastErrorClass  string `json:"last_error_class"`
-	LastError       string `json:"last_error"`
-	UpdatedTime     string `json:"updated_time"`
+	Path                  string `json:"path"`
+	Version               int    `json:"version"`
+	AssociationID         string `json:"association_id"`
+	ObjectID              string `json:"object_id"`
+	DestinationRef        string `json:"destination_ref"`
+	ResolvedName          string `json:"resolved_name"`
+	State                 string `json:"state"`
+	PayloadSHA256         string `json:"payload_sha256"`
+	RemoteVersion         string `json:"remote_version"`
+	Verification          string `json:"verification,omitempty"`
+	LastOperationID       string `json:"last_operation_id"`
+	LastSuccessTime       string `json:"last_success_time"`
+	LastReconcileTime     string `json:"last_reconcile_time,omitempty"`
+	LastDriftDetectedTime string `json:"last_drift_detected_time,omitempty"`
+	LastRepairTime        string `json:"last_repair_time,omitempty"`
+	RepairCount           int    `json:"repair_count,omitempty"`
+	LastErrorClass        string `json:"last_error_class"`
+	LastError             string `json:"last_error"`
+	UpdatedTime           string `json:"updated_time"`
 }
 
 func normalizeSourcePath(input string) (string, error) {
@@ -302,6 +317,20 @@ func newOperationID(
 	operationType outbox.OperationType,
 ) string {
 	raw := fmt.Sprintf("%s:%s:%d:%s:%s:%s", generation, path, version, associationID, objectID, operationType)
+	sum := sha256.Sum256([]byte(raw))
+	return "op-" + hex.EncodeToString(sum[:8]) + "-" + strconv.Itoa(version)
+}
+
+func newOperationIDWithSalt(
+	generation string,
+	path string,
+	version int,
+	associationID string,
+	objectID string,
+	operationType outbox.OperationType,
+	salt string,
+) string {
+	raw := fmt.Sprintf("%s:%s:%d:%s:%s:%s:%s", generation, path, version, associationID, objectID, operationType, salt)
 	sum := sha256.Sum256([]byte(raw))
 	return "op-" + hex.EncodeToString(sum[:8]) + "-" + strconv.Itoa(version)
 }

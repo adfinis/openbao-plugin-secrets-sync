@@ -21,6 +21,7 @@ const (
 	retryBaseDelay                    = 30 * time.Second
 	retryMaxDelay                     = 5 * time.Minute
 	outboxClaimLease                  = 5 * time.Minute
+	driftRepairWarningThreshold       = 3
 	defaultPeriodicMaxOperations      = 100
 	defaultPeriodicRecoveryMaxIntents = 100
 )
@@ -257,7 +258,24 @@ func (b *secretSyncBackend) processUpsert(
 	record.UpdatedTime = now.Format(timeFormatRFC3339)
 	clearOutboxClaim(&record)
 	b.recordOperationSuccess(ctx, record)
-	if err := putStatus(ctx, storage, statusRecord{
+	status, err := markUpsertSuccessStatus(ctx, storage, record, resolvedName, preparedPayload, result, now)
+	if err != nil {
+		return err
+	}
+	b.warnIfDriftRepairThresholdExceeded(record, status)
+	return deleteOutbox(ctx, storage, record)
+}
+
+func markUpsertSuccessStatus(
+	ctx context.Context,
+	storage logical.Storage,
+	record outboxRecord,
+	resolvedName string,
+	preparedPayload payloadpkg.CanonicalPayload,
+	result *providers.SyncResult,
+	now time.Time,
+) (*statusRecord, error) {
+	status := statusRecord{
 		Path:            record.Path,
 		Version:         record.Version,
 		AssociationID:   record.AssociationID,
@@ -270,10 +288,37 @@ func (b *secretSyncBackend) processUpsert(
 		LastOperationID: record.ID,
 		LastSuccessTime: now.Format(timeFormatRFC3339),
 		UpdatedTime:     now.Format(timeFormatRFC3339),
-	}); err != nil {
-		return err
 	}
-	return deleteOutbox(ctx, storage, record)
+	existingStatus, err := getStatus(ctx, storage, record.Path, record.AssociationID, record.ObjectID)
+	if err != nil {
+		return nil, err
+	}
+	if outboxTrigger(record) == outboxTriggerDriftRepair {
+		if existingStatus != nil {
+			status.RepairCount = existingStatus.RepairCount
+		}
+		status.LastRepairTime = now.Format(timeFormatRFC3339)
+		status.RepairCount++
+	}
+	if err := putStatus(ctx, storage, status); err != nil {
+		return nil, err
+	}
+	return &status, nil
+}
+
+func (b *secretSyncBackend) warnIfDriftRepairThresholdExceeded(record outboxRecord, status *statusRecord) {
+	if outboxTrigger(record) != outboxTriggerDriftRepair ||
+		status == nil ||
+		status.RepairCount <= driftRepairWarningThreshold {
+		return
+	}
+	b.Logger().Warn(
+		"background drift repair count exceeded threshold",
+		"destination_type", destinationTypeFromRef(record.DestinationRef),
+		"granularity", operationGranularity(record),
+		"repair_count", status.RepairCount,
+		"threshold", driftRepairWarningThreshold,
+	)
 }
 
 func (b *secretSyncBackend) processDelete(
@@ -388,16 +433,17 @@ func (b *secretSyncBackend) providerUpsert(
 		return nil, err
 	}
 	return runtime.Upsert(ctx, providers.UpsertRequest{
-		Runtime:       runtimeIdentity,
-		ResolvedName:  resolvedName,
-		Format:        preparedPayload.Format,
-		Payload:       preparedPayload.Bytes,
-		PayloadSHA256: preparedPayload.SHA256,
-		DataMap:       preparedPayload.Data,
-		SourcePath:    record.Path,
-		SourceVersion: record.Version,
-		AssociationID: record.AssociationID,
-		ObjectID:      record.ObjectID,
+		Runtime:        runtimeIdentity,
+		ResolvedName:   resolvedName,
+		Format:         preparedPayload.Format,
+		Payload:        preparedPayload.Bytes,
+		PayloadSHA256:  preparedPayload.SHA256,
+		IdempotencyKey: record.IdempotencyKey,
+		DataMap:        preparedPayload.Data,
+		SourcePath:     record.Path,
+		SourceVersion:  record.Version,
+		AssociationID:  record.AssociationID,
+		ObjectID:       record.ObjectID,
 	})
 }
 
@@ -414,13 +460,14 @@ func (b *secretSyncBackend) providerDelete(
 		return nil, err
 	}
 	return runtime.Delete(ctx, providers.DeleteRequest{
-		Runtime:       runtimeIdentity,
-		ResolvedName:  resolvedName,
-		DataMap:       normalizedDataMapping(ctxData.association.DataMapping) == dataMappingSourceKeys,
-		SourcePath:    record.Path,
-		SourceVersion: record.Version,
-		AssociationID: record.AssociationID,
-		ObjectID:      record.ObjectID,
+		Runtime:        runtimeIdentity,
+		ResolvedName:   resolvedName,
+		IdempotencyKey: record.IdempotencyKey,
+		DataMap:        normalizedDataMapping(ctxData.association.DataMapping) == dataMappingSourceKeys,
+		SourcePath:     record.Path,
+		SourceVersion:  record.Version,
+		AssociationID:  record.AssociationID,
+		ObjectID:       record.ObjectID,
 	})
 }
 
@@ -826,6 +873,9 @@ func (b *secretSyncBackend) recordOperationSuccess(ctx context.Context, record o
 		DestinationType: destinationTypeFromRef(record.DestinationRef),
 		Granularity:     operationGranularity(record),
 	})
+	if outboxTrigger(record) == outboxTriggerDriftRepair {
+		b.recordDriftRepair(ctx, record, observability.ResultSuccess, "")
+	}
 }
 
 func (b *secretSyncBackend) recordOperationFailure(
@@ -841,6 +891,23 @@ func (b *secretSyncBackend) recordOperationFailure(
 		Operation:       observabilityOperation(record.Type),
 		Result:          result,
 		ErrorClass:      string(errorClass),
+		DestinationType: destinationTypeFromRef(record.DestinationRef),
+		Granularity:     operationGranularity(record),
+	})
+	if outboxTrigger(record) == outboxTriggerDriftRepair {
+		b.recordDriftRepair(ctx, record, result, string(errorClass))
+	}
+}
+
+func (b *secretSyncBackend) recordDriftRepair(
+	ctx context.Context,
+	record outboxRecord,
+	result string,
+	errorClass string,
+) {
+	b.observer.DriftRepair(ctx, observability.DriftRepairEvent{
+		Result:          result,
+		ErrorClass:      errorClass,
 		DestinationType: destinationTypeFromRef(record.DestinationRef),
 		Granularity:     operationGranularity(record),
 	})

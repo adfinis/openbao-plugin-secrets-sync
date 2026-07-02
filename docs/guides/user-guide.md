@@ -14,7 +14,8 @@ The plugin supports:
   project variables;
 - asynchronous queue processing with manual `queue/drain`;
 - association planning, create, manual sync, disable, enable, and delete;
-- status inspection and explicit remote delete semantics.
+- status inspection, background drift detection or repair, and explicit remote
+  delete semantics.
 
 ## Install and mount
 
@@ -59,6 +60,23 @@ association is the source authorization step. To require per-source
 ```sh
 bao write secret-sync/config require_source_opt_in=true
 ```
+
+Background drift work is opt-in. The default `drift_repair=off` performs no
+periodic provider reads for drift. Use `detect` to refresh status from
+provider read-state checks, or `repair` to also enqueue owned `DRIFTED` objects
+for normal queued repair:
+
+```sh
+bao write secret-sync/config \
+  drift_repair=detect \
+  drift_reconcile_interval=1h \
+  drift_reconcile_batch=16
+```
+
+`disabled=true` pauses background provider traffic and remote mutation. Manual
+reconcile remains available. Restore guard keeps remote mutation blocked but
+still allows read-only drift detection so operators can inspect state before
+acknowledgement.
 
 ## Choose a provider
 
@@ -216,6 +234,9 @@ sync work fail before committing a new source version.
 `oldest_age_seconds` reports the age of the oldest pending or retry-wait
 operation. Successful and canceled operations are removed from the queue;
 inspect `status/<path>` for success evidence.
+Individual queue operations include `trigger=user` or
+`trigger=drift-repair` so background repair work can be distinguished from
+operator actions.
 
 Newer writes supersede older inactive queued upserts for the same association
 object. Current-version deletes and destroys cancel queued upserts and queue
@@ -252,6 +273,16 @@ mutate destination secrets. It reports remote existence, ownership metadata,
 payload hash metadata, source version metadata, and stable failure states where
 the provider supports those fields.
 
+Status and reconcile objects may include `verification=value` when the provider
+compared the live remote value, or `verification=metadata` when it compared
+provider ownership metadata. AWS Secrets Manager reports value-level drift only
+when the destination has `value_drift_detection=true`; otherwise manual
+value-only edits that leave ownership tags unchanged can still report `SYNCED`.
+
+When `drift_repair=repair`, the background sweep repairs only owned
+`DRIFTED` objects with comparable remote state. It does not recreate
+`REMOTE_MISSING` objects or take over `REMOTE_OWNERSHIP_LOST` objects.
+
 ## Check sync status
 
 Read per-source status:
@@ -275,10 +306,11 @@ Common states include:
 
 For the common single-object case, status includes top-level summary fields
 such as `association_id`, `destination_ref`, `resolved_name`,
-`remote_version`, and `last_operation_id`. The full per-object list is still
-available under `objects`. Status records include versions, destination
-references, remote names, operation ids, and error classes. They must not
-include secret payload values or payload hashes.
+`remote_version`, `last_operation_id`, and drift timestamps. The full
+per-object list is still available under `objects`. Status records include
+versions, destination references, remote names, operation ids, verification
+mode, repair counters, and error classes. They must not include secret payload
+values or payload hashes.
 
 Use JSON output when copying identifiers into follow-up commands:
 
