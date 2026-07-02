@@ -166,6 +166,8 @@ Current backend security-boundary coverage asserts that:
 
 - AWS and GitLab sensitive destination fields are stored separately from public
   destination metadata and redacted on read;
+- destination writes validate provider config before storage and reject
+  non-empty config fields for other provider types;
 - source payload canaries do not appear in association plan/create responses,
   queue summaries, queue operation reads, drain responses, status responses,
   or reconcile plan/apply responses.
@@ -183,6 +185,8 @@ Current queue hardening coverage asserts that:
 
 - concurrent source writes preserve monotonically increasing versions;
 - concurrent association writes reserve a remote name only once;
+- association writes lock destination identity and enqueue when an existing
+  association transitions from disabled to enabled;
 - unexpired outbox claims are skipped by manual drain and block operator cancel;
 - dispatcher context cancellation leaves the claimed operation for lease-based
   recovery instead of marking terminal failure;
@@ -205,6 +209,8 @@ Current queue hardening coverage asserts that:
 - unsupported queued operation records are removed instead of consuming
   capacity indefinitely;
 - operation metrics label sync granularity without using source key names;
+- disabling a secret-key association with an unavailable current version does
+  not create a synthetic secret-path status object;
 - expired outbox claims are reclaimable and successful dispatch prunes the
   reclaimed operation;
 - retryable provider failures clear claim metadata before moving to

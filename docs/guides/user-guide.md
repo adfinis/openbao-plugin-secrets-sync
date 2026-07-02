@@ -79,6 +79,9 @@ bao write secret-sync/destinations/PROVIDER_TYPE/NAME \
   allowed_resolved_name_prefixes=openbao-plugin-secrets-sync/team-a/
 ```
 
+Destination writes validate the merged provider config before storing it.
+Non-empty fields from another provider type are rejected.
+
 `allowed_source_path_prefixes` uses OpenBao source path segment boundaries:
 `apps/team-a` allows `apps/team-a/db` but not `apps/team-alpha/db`.
 `allowed_resolved_name_prefixes` uses exact or `/`-boundary matches:
@@ -147,6 +150,9 @@ When updating an existing association, omitted optional fields keep the stored
 values if the source path and destination match exactly one association. A
 partial update such as changing only `delete_mode` will not change granularity,
 name template, format, or enabled state.
+Changing an existing association from `enabled=false` to `enabled=true`
+through the same write path queues the current source version, matching the
+explicit lifecycle enable endpoint.
 
 For provider-specific association examples, supported granularities, and remote
 name constraints, see the [provider guides](../providers/README.md).

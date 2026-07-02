@@ -96,6 +96,10 @@ reconcile_cursors/<scope>
 locks/<lock-name>
 ```
 
+Destination writes accept only the public and sensitive config keys for the
+selected provider type. The backend validates the merged destination config
+with the provider before storing either public or seal-wrapped sensitive data.
+
 ### Schema And Identity
 
 `schema/version` records the storage schema understood by the plugin binary. The
@@ -164,7 +168,7 @@ numbers restart at 1.
     "type": "aws-sm",
     "name": "prod"
   },
-  "name_template": "{{ mount }}/{{ path }}",
+  "name_template": "{{ path }}",
   "resolved_name": "sync-kv/app/db",
   "granularity": "secret-path",
   "format": "json",
@@ -260,9 +264,11 @@ history.
 
 Source metadata writes, source version mutations, and association lifecycle
 mutations use the same source-path lock. Association writes also lock the
-destination-name reservation identity so concurrent association creation cannot
-reserve the same remote object twice. Queue capacity checks and outbox
-replacement writes are serialized across enqueue paths.
+destination-name reservation identity and destination identity so concurrent
+association creation cannot reserve the same remote object or race destination
+deletion. Destination writes and deletes take the destination identity lock.
+Queue capacity checks and outbox replacement writes are serialized across
+enqueue paths.
 
 ## Operation State Machine
 

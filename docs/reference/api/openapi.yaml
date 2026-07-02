@@ -107,6 +107,7 @@ paths:
       tags: [destinations]
       operationId: writeDestination
       summary: Create or update one destination configuration.
+      description: Validates merged provider config before storage. Non-empty fields outside the selected provider type are rejected.
       x-openbao-operation: update
       parameters:
         - $ref: "#/components/parameters/DestinationType"
@@ -119,7 +120,7 @@ paths:
               $ref: "#/components/schemas/DestinationWriteRequest"
       responses:
         "200":
-          description: Destination stored. Empty response body on success.
+          description: Destination validated and stored. Empty response body on success.
           content:
             application/json:
               schema:
@@ -447,7 +448,7 @@ paths:
       tags: [associations]
       operationId: writeAssociation
       summary: Create or update a source-to-destination association.
-      description: On update, omitted optional fields inherit stored values when the source path and destination identify exactly one existing association.
+      description: On update, omitted optional fields inherit stored values when the source path and destination identify exactly one existing association. Enabling an existing disabled association queues the current source version.
       x-openbao-operation: update
       parameters:
         - $ref: "#/components/parameters/SourcePath"
@@ -1272,7 +1273,7 @@ components:
 
     AssociationWriteRequest:
       type: object
-      description: Create defaults apply to new associations. Updates inherit omitted optional fields from the matching stored association when path and destination are unambiguous.
+      description: Create defaults apply to new associations. Updates inherit omitted optional fields from the matching stored association when path and destination are unambiguous. Setting enabled=true on an existing disabled association queues the current source version.
       properties:
         destination_type:
           type: string

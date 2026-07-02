@@ -314,7 +314,7 @@ func (b *secretSyncBackend) pathAssociationWrite(
 	if err != nil {
 		return logical.ErrorResponse(err.Error()), nil
 	}
-	unlock := b.lockSourcePathAndAssociationName(path, record.DestinationRef, record.reservationName())
+	unlock := b.lockSourcePathAssociationNameAndDestination(path, record.DestinationRef, record.reservationName())
 	defer unlock()
 
 	plan, response, err := b.associationWritePlan(ctx, req.Storage, path, record)
@@ -347,7 +347,7 @@ func (b *secretSyncBackend) associationWritePlan(
 	if existing != nil {
 		record.CreatedTime = existing.CreatedTime
 	}
-	shouldEnqueue := record.Enabled && existing == nil
+	shouldEnqueue := record.Enabled && (existing == nil || !existing.Enabled)
 	if err := putAssociation(ctx, storage, record); err != nil {
 		return associationWritePlan{}, nil, err
 	}
@@ -1109,33 +1109,36 @@ func markAssociationStatusDisabled(
 	if err != nil {
 		return err
 	}
-	status, err := getStatus(ctx, storage, record.Path, record.ID, syncObjectIDSecretPath)
-	if err != nil {
-		return err
-	}
-	if status == nil {
-		status = &statusRecord{
-			Path:           record.Path,
-			AssociationID:  record.ID,
-			ObjectID:       syncObjectIDSecretPath,
-			DestinationRef: record.DestinationRef,
-			ResolvedName:   record.ResolvedName,
+	if record.Granularity == syncGranularitySecretPath {
+		status, err := getStatus(ctx, storage, record.Path, record.ID, syncObjectIDSecretPath)
+		if err != nil {
+			return err
 		}
-	}
-	if metadata != nil {
-		status.Version = metadata.CurrentVersion
-	}
-	status.State = string(domain.SyncStateDisabled)
-	status.UpdatedTime = now
-	if record.Granularity == syncGranularitySecretPath || metadata == nil || metadata.CurrentVersion == 0 {
+		if status == nil {
+			status = &statusRecord{
+				Path:           record.Path,
+				AssociationID:  record.ID,
+				ObjectID:       syncObjectIDSecretPath,
+				DestinationRef: record.DestinationRef,
+				ResolvedName:   record.ResolvedName,
+			}
+		}
+		if metadata != nil {
+			status.Version = metadata.CurrentVersion
+		}
+		status.State = string(domain.SyncStateDisabled)
+		status.UpdatedTime = now
 		return putStatus(ctx, storage, *status)
+	}
+	if metadata == nil || metadata.CurrentVersion == 0 {
+		return nil
 	}
 	version, err := getVersion(ctx, storage, record.Path, metadata.CurrentVersion)
 	if err != nil {
 		return err
 	}
 	if version == nil {
-		return putStatus(ctx, storage, *status)
+		return nil
 	}
 	objectIDs, err := associationObjectIDs(record, version.Data)
 	if err != nil {

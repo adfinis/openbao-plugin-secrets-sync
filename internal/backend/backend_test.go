@@ -297,7 +297,15 @@ func TestDestinationCheckReportsValidationFailure(t *testing.T) {
 	b := Backend(&logical.BackendConfig{})
 	storage := &logical.InmemStorage{}
 
-	createFakeDestination(t, b, storage, "invalid")
+	now := nowUTC().Format(timeFormatRFC3339)
+	if err := putDestination(context.Background(), storage, destinationRecord{
+		Type:        providerTypeFake,
+		Name:        "invalid",
+		CreatedTime: now,
+		UpdatedTime: now,
+	}); err != nil {
+		t.Fatalf("write invalid destination fixture: %v", err)
+	}
 	invalidResp := handleRequest(t, b, storage, logical.ReadOperation, "destinations/fake/invalid/check", nil)
 	assertNoErrorResponse(t, invalidResp)
 	assertResponseBool(t, invalidResp, "ready", false)
@@ -351,6 +359,43 @@ func TestDestinationCheckReportsDisabled(t *testing.T) {
 		t.Fatalf("disabled health_checked = %v, want false", got)
 	}
 	assertStringSlice(t, disabledCheckResp.Data["blockers"].([]string), []string{"destination_disabled"})
+}
+
+func TestDestinationWriteValidatesProviderConfig(t *testing.T) {
+	b := Backend(&logical.BackendConfig{})
+	storage := &logical.InmemStorage{}
+
+	resp := handleRequest(t, b, storage, logical.UpdateOperation, "destinations/fake/invalid", nil)
+	if resp == nil || !resp.IsError() {
+		t.Fatalf("invalid destination write response = %#v, want error", resp)
+	}
+	record, err := getDestination(context.Background(), storage, providerTypeFake, "invalid")
+	if err != nil {
+		t.Fatalf("read invalid destination: %v", err)
+	}
+	if record != nil {
+		t.Fatalf("invalid destination was stored: %#v", record)
+	}
+}
+
+func TestDestinationWriteRejectsCrossProviderConfig(t *testing.T) {
+	b := Backend(&logical.BackendConfig{})
+	storage := &logical.InmemStorage{}
+
+	resp := handleRequest(t, b, storage, logical.UpdateOperation, "destinations/k8s/prod", map[string]interface{}{
+		kubernetessecrets.ConfigKeyNamespace: "apps",
+		gitlab.ConfigKeyToken:                "glpat-secret",
+	})
+	if resp == nil || !resp.IsError() {
+		t.Fatalf("cross-provider destination response = %#v, want error", resp)
+	}
+	record, err := getDestination(context.Background(), storage, kubernetessecrets.ProviderType, "prod")
+	if err != nil {
+		t.Fatalf("read rejected k8s destination: %v", err)
+	}
+	if record != nil {
+		t.Fatalf("cross-provider destination was stored: %#v", record)
+	}
 }
 
 func TestAssociationCreateUsesSafeDefaults(t *testing.T) {
@@ -866,7 +911,15 @@ func TestDestinationValidateAndHealth(t *testing.T) {
 	storage := &logical.InmemStorage{}
 
 	createFakeDestination(t, b, storage, "primary")
-	createFakeDestination(t, b, storage, "invalid")
+	now := nowUTC().Format(timeFormatRFC3339)
+	if err := putDestination(context.Background(), storage, destinationRecord{
+		Type:        providerTypeFake,
+		Name:        "invalid",
+		CreatedTime: now,
+		UpdatedTime: now,
+	}); err != nil {
+		t.Fatalf("write invalid destination fixture: %v", err)
+	}
 	createFakeDestination(t, b, storage, "unhealthy")
 
 	validateResp := handleRequest(t, b, storage, logical.UpdateOperation, "destinations/fake/primary/validate", nil)
@@ -1580,6 +1633,36 @@ func TestAssociationUpdateMergesOmittedFieldsFromExistingRecord(t *testing.T) {
 	}
 }
 
+func TestAssociationUpdateEnqueuesWhenEnablingExistingRecord(t *testing.T) {
+	b := Backend(&logical.BackendConfig{})
+	storage := &logical.InmemStorage{}
+
+	writeAppDBSecret(t, b, storage, "initial")
+	createFakeDestination(t, b, storage, "default")
+	markAppDBSyncable(t, b, storage)
+	initialResp := handleRequest(t, b, storage, logical.UpdateOperation, "associations/app/db", map[string]interface{}{
+		"destination_type": providerTypeFake,
+		"destination_name": "default",
+		"resolved_name":    "prod/app/db",
+		"granularity":      syncGranularitySecretPath,
+		"format":           defaultAssociationFormat,
+		"enabled":          false,
+	})
+	assertNoErrorResponse(t, initialResp)
+	if operationIDs := operationIDsFromResponse(t, initialResp); len(operationIDs) != 0 {
+		t.Fatalf("initial operation IDs = %v, want none", operationIDs)
+	}
+
+	enableResp := handleRequest(t, b, storage, logical.UpdateOperation, "associations/app/db", map[string]interface{}{
+		"destination_type": providerTypeFake,
+		"destination_name": "default",
+		"enabled":          true,
+	})
+	assertNoErrorResponse(t, enableResp)
+	operationID := requireSingleOperationID(t, operationIDsFromResponse(t, enableResp), "enable through write")
+	assertOutboxOperation(t, storage, operationID, 1, outboxStatePending)
+}
+
 func TestAssociationPlanMergesOmittedFieldsFromExistingRecord(t *testing.T) {
 	b := Backend(&logical.BackendConfig{})
 	storage := &logical.InmemStorage{}
@@ -1967,6 +2050,42 @@ func TestAssociationSecretKeyDisableMarksPerSourceKeyStatus(t *testing.T) {
 	}
 	if _, ok := statusObjects[syncObjectIDSecretPath]; ok {
 		t.Fatalf("secret-key status must not include %s object: %#v", syncObjectIDSecretPath, statusObjects)
+	}
+}
+
+func TestAssociationSecretKeyDisableSkipsStatusWhenCurrentVersionMissing(t *testing.T) {
+	b := Backend(&logical.BackendConfig{})
+	storage := &logical.InmemStorage{}
+
+	writeAppDBSecretData(t, b, storage, map[string]interface{}{
+		"password": "initial",
+	})
+	createFakeDestination(t, b, storage, "default")
+	associationResp := createFakeSecretKeyAssociation(t, b, storage, deleteModeRetain)
+	associationID := associationIDFromResponse(t, associationResp)
+	metadata, err := getMetadata(context.Background(), storage, "app/db")
+	if err != nil {
+		t.Fatalf("read metadata: %v", err)
+	}
+	if err := deleteVersion(context.Background(), storage, "app/db", metadata.CurrentVersion); err != nil {
+		t.Fatalf("delete current version fixture: %v", err)
+	}
+
+	disableResp := handleRequest(
+		t,
+		b,
+		storage,
+		logical.UpdateOperation,
+		"associations/app/db/"+associationID+"/disable",
+		nil,
+	)
+	assertNoErrorResponse(t, disableResp)
+	status, err := getStatus(context.Background(), storage, "app/db", associationID, syncObjectIDSecretPath)
+	if err != nil {
+		t.Fatalf("read secret-path status: %v", err)
+	}
+	if status != nil {
+		t.Fatalf("secret-key disable wrote phantom status: %#v", status)
 	}
 }
 
