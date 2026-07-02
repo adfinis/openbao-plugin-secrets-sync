@@ -143,6 +143,11 @@ payload hash, plugin instance, and restore epoch. Owned update and delete
 operations require matching ownership metadata. If ownership cannot be proven,
 the provider returns an ownership error instead of mutating the variable.
 
+Plan, upsert no-op detection, and reconcile compare the GitLab API value
+readback with the desired payload hash. Manual value edits are detected even
+when the variable description still contains the previous payload hash, and the
+next explicit sync repairs owned drift.
+
 Changing a GitLab destination updates stored config and validates the merged
 provider settings, but it does not enqueue sync work for existing associations.
 If a change to `protected`, `masked`, `variable_raw`, or `variable_type` needs

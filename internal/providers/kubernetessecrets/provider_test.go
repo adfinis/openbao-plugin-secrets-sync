@@ -28,8 +28,8 @@ const (
 	testAssociationID   = "assoc-1"
 	testSourcePath      = "app/db"
 	testObjectID        = "secret-path"
-	testPayloadSHAOld   = "sha256:old"
-	testPayloadSHANew   = "sha256:new"
+	testPayloadSHAOld   = "sha256:6a81041dee1ed86a0d590b7d8c555c789cd4de82fbfa5b4e6881f4ebba1b6f41"
+	testPayloadSHANew   = "sha256:4cc28eb0fcebad7dbacc0970586ee420fd24ef182cf76c955e833f3da4a5ad3d"
 	testPluginInstance  = "inst-test"
 	testRestoreEpoch    = "epoch-test"
 )
@@ -395,6 +395,19 @@ func TestPlanActions(t *testing.T) {
 	}
 }
 
+func TestPlanUpdatesWhenSecretDataDriftsWithMatchingMetadata(t *testing.T) {
+	secret := ownedSecret(testPayloadSHANew, 1, []byte(`{"password":"old"}`))
+	client := fake.NewSimpleClientset(secret)
+
+	result, err := runtimeWithClient(t, client).Plan(context.Background(), defaultPlanRequest(testPayloadSHANew, 1))
+	if err != nil {
+		t.Fatalf("plan: %v", err)
+	}
+	if result.Action != providers.PlanActionUpdate {
+		t.Fatalf("action = %s, want %s", result.Action, providers.PlanActionUpdate)
+	}
+}
+
 func TestUpsertCreatesSecretWithOwnershipMetadata(t *testing.T) {
 	client := fake.NewSimpleClientset()
 	result, err := runtimeWithClient(t, client).Upsert(context.Background(), defaultUpsertRequest(
@@ -456,6 +469,31 @@ func TestUpsertUpdatesOwnedSecretAndPreservesForeignMetadata(t *testing.T) {
 	assertLabel(t, updated, "app", "demo")
 	assertAnnotation(t, updated, "example.com/owner", "team-a")
 	assertAnnotation(t, updated, annotationPayloadSHA256, testPayloadSHANew)
+}
+
+func TestUpsertRepairsSecretDataDriftWithMatchingMetadata(t *testing.T) {
+	secret := ownedSecret(testPayloadSHANew, 1, []byte(`{"password":"old"}`))
+	client := fake.NewSimpleClientset(secret)
+
+	_, err := runtimeWithClient(t, client).Upsert(context.Background(), defaultUpsertRequest(
+		testPayloadSHANew,
+		[]byte(`{"password":"new"}`),
+		1,
+	))
+	if err != nil {
+		t.Fatalf("upsert: %v", err)
+	}
+	updated, err := client.CoreV1().Secrets(testNamespace).Get(
+		context.Background(),
+		testResolvedName,
+		metav1.GetOptions{},
+	)
+	if err != nil {
+		t.Fatalf("get secret: %v", err)
+	}
+	if got := string(updated.Data[dataKeyPayload]); got != `{"password":"new"}` {
+		t.Fatalf("secret payload = %s, want updated payload", got)
+	}
 }
 
 func TestUpsertCreatesSecretDataMapWithOwnershipMetadata(t *testing.T) {
@@ -706,6 +744,22 @@ func TestReadStateReportsRemoteMetadataAndPayloadHash(t *testing.T) {
 	}
 }
 
+func TestReadStateReportsSecretDataDriftDespiteMatchingMetadata(t *testing.T) {
+	secret := ownedSecret(testPayloadSHANew, 1, []byte(`{"password":"old"}`))
+	client := fake.NewSimpleClientset(secret)
+
+	state, err := runtimeWithClient(t, client).ReadState(
+		context.Background(),
+		defaultReadStateRequest(testPayloadSHANew, 1),
+	)
+	if err != nil {
+		t.Fatalf("read state: %v", err)
+	}
+	if state.PayloadSHA256 != testPayloadSHAOld {
+		t.Fatalf("payload sha = %q, want %q", state.PayloadSHA256, testPayloadSHAOld)
+	}
+}
+
 func TestReadStateReportsDataMapPayloadHashFromManagedKeys(t *testing.T) {
 	payload := mustDataMapPayload(t, map[string][]byte{
 		"username": []byte("app"),
@@ -727,6 +781,32 @@ func TestReadStateReportsDataMapPayloadHashFromManagedKeys(t *testing.T) {
 	}
 	if state.PayloadSHA256 != payload.SHA256 {
 		t.Fatalf("payload sha = %q, want %q", state.PayloadSHA256, payload.SHA256)
+	}
+}
+
+func TestReadStateReportsDataMapDriftDespiteMatchingMetadata(t *testing.T) {
+	desired := mustDataMapPayload(t, map[string][]byte{
+		"username": []byte("app"),
+		"password": []byte("secret"),
+	})
+	drifted := mustDataMapPayload(t, map[string][]byte{
+		"username": []byte("app"),
+		"password": []byte("drifted"),
+	})
+	secret := ownedDataMapSecret(desired.SHA256, map[string][]byte{
+		"username": []byte("app"),
+		"password": []byte("drifted"),
+	}, []string{"password", "username"})
+	client := fake.NewSimpleClientset(secret)
+	request := defaultReadStateRequest(desired.SHA256, 1)
+	request.DataMap = true
+
+	state, err := runtimeWithClient(t, client).ReadState(context.Background(), request)
+	if err != nil {
+		t.Fatalf("read state: %v", err)
+	}
+	if state.PayloadSHA256 != drifted.SHA256 {
+		t.Fatalf("payload sha = %q, want %q", state.PayloadSHA256, drifted.SHA256)
 	}
 }
 

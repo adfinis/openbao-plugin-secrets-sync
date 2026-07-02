@@ -139,11 +139,12 @@ func requireManualAWS(t *testing.T) {
 func writeAWSDestination(t *testing.T, client *api.Client) {
 	t.Helper()
 	write(t, client, mountPath+"/destinations/aws-sm/prod", map[string]interface{}{
-		awssecretsmanager.ConfigKeyRegion:      awsRegion(t),
-		awssecretsmanager.ConfigKeyAuthMode:    awssecretsmanager.AuthModeAssumeRole,
-		awssecretsmanager.ConfigKeyRoleARN:     requiredEnv(t, "E2E_AWS_ROLE_ARN"),
-		awssecretsmanager.ConfigKeyExternalID:  requiredEnv(t, "E2E_AWS_EXTERNAL_ID"),
-		awssecretsmanager.ConfigKeySessionName: "openbao-plugin-secrets-sync-e2e",
+		awssecretsmanager.ConfigKeyRegion:              awsRegion(t),
+		awssecretsmanager.ConfigKeyAuthMode:            awssecretsmanager.AuthModeAssumeRole,
+		awssecretsmanager.ConfigKeyRoleARN:             requiredEnv(t, "E2E_AWS_ROLE_ARN"),
+		awssecretsmanager.ConfigKeyExternalID:          requiredEnv(t, "E2E_AWS_EXTERNAL_ID"),
+		awssecretsmanager.ConfigKeySessionName:         "openbao-plugin-secrets-sync-e2e",
+		awssecretsmanager.ConfigKeyValueDriftDetection: "true",
 	})
 }
 

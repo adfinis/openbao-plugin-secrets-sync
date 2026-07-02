@@ -52,6 +52,8 @@ const (
 	ConfigKeySessionToken = "session_token"
 	// ConfigKeyDeleteRecoveryWindowDays configures AWS Secrets Manager scheduled-delete recovery days.
 	ConfigKeyDeleteRecoveryWindowDays = "delete_recovery_window_days"
+	// ConfigKeyValueDriftDetection opts in to GetSecretValue-based drift checks.
+	ConfigKeyValueDriftDetection = "value_drift_detection"
 
 	// AuthModeDefault uses the AWS SDK default credential chain.
 	AuthModeDefault = "default"
@@ -92,6 +94,11 @@ type secretsManagerClient interface {
 		*secretsmanager.DescribeSecretInput,
 		...func(*secretsmanager.Options),
 	) (*secretsmanager.DescribeSecretOutput, error)
+	GetSecretValue(
+		context.Context,
+		*secretsmanager.GetSecretValueInput,
+		...func(*secretsmanager.Options),
+	) (*secretsmanager.GetSecretValueOutput, error)
 	CreateSecret(
 		context.Context,
 		*secretsmanager.CreateSecretInput,
@@ -148,7 +155,7 @@ func (Provider) Type() string {
 
 func (Provider) Capabilities() providers.Capabilities {
 	return providers.Capabilities{
-		SupportsValueReadback:       false,
+		SupportsValueReadback:       true,
 		SupportsMetadataReadback:    true,
 		SupportsPayloadHashMetadata: true,
 		SupportsUpdateIfOwned:       true,
@@ -232,8 +239,13 @@ func (r destinationRuntime) Plan(ctx context.Context, req providers.PlanRequest)
 			Message: "aws-sm secret is scheduled for deletion and will be restored before upsert",
 		}, nil
 	}
-	if tagValue(describe.Tags, tagPayloadSHA256) == req.PayloadSHA256 {
-		if remoteSourceVersionMatches(describe.Tags, req.SourceVersion) {
+	payloadMatches, err := r.payloadMatchesRequest(ctx, describe.Tags, req.ResolvedName, req.PayloadSHA256)
+	if err != nil {
+		return blockedPlan(classifyAWSError(err)), nil
+	}
+	if payloadMatches {
+		if tagValue(describe.Tags, tagPayloadSHA256) == req.PayloadSHA256 &&
+			remoteSourceVersionMatches(describe.Tags, req.SourceVersion) {
 			return &providers.PlanResult{
 				Action:  providers.PlanActionNoop,
 				Message: "aws-sm secret already matches desired payload and metadata",
@@ -276,8 +288,13 @@ func (r destinationRuntime) Upsert(ctx context.Context, req providers.UpsertRequ
 			return nil, providerError(classifyAWSError(err))
 		}
 	}
-	if tagValue(describe.Tags, tagPayloadSHA256) == req.PayloadSHA256 {
-		if !remoteSourceVersionMatches(describe.Tags, req.SourceVersion) {
+	valueMatches, err := r.payloadMatchesRequest(ctx, describe.Tags, req.ResolvedName, req.PayloadSHA256)
+	if err != nil {
+		return nil, providerError(classifyAWSError(err))
+	}
+	if valueMatches {
+		if tagValue(describe.Tags, tagPayloadSHA256) != req.PayloadSHA256 ||
+			!remoteSourceVersionMatches(describe.Tags, req.SourceVersion) {
 			if _, err := r.client.TagResource(ctx, &secretsmanager.TagResourceInput{
 				SecretId: aws.String(req.ResolvedName),
 				Tags:     ownershipTagsFromUpsert(req),
@@ -350,12 +367,21 @@ func (r destinationRuntime) ReadState(
 	if describe.DeletedDate != nil {
 		return &providers.RemoteState{Exists: false}, nil
 	}
+	owned := ownedByRequest(describe.Tags, ownershipIdentityFromReadState(req))
+	payloadSHA256 := tagValue(describe.Tags, tagPayloadSHA256)
+	if owned && r.options.valueDriftDetection {
+		var readErr error
+		payloadSHA256, readErr = remotePayloadSHA256(ctx, r.client, req.ResolvedName)
+		if readErr != nil {
+			return nil, providerError(classifyAWSError(readErr))
+		}
+	}
 	sourceVersion, _ := strconv.Atoi(tagValue(describe.Tags, tagSourceVersion))
 	return &providers.RemoteState{
 		Exists:         true,
 		OwnershipKnown: hasOwnershipIdentityFromReadState(req),
-		Owned:          ownedByRequest(describe.Tags, ownershipIdentityFromReadState(req)),
-		PayloadSHA256:  tagValue(describe.Tags, tagPayloadSHA256),
+		Owned:          owned,
+		PayloadSHA256:  payloadSHA256,
 		SourceVersion:  sourceVersion,
 		RemoteVersion:  currentVersionID(describe),
 	}, nil
@@ -363,6 +389,22 @@ func (r destinationRuntime) ReadState(
 
 func (destinationRuntime) Close(context.Context) error {
 	return nil
+}
+
+func (r destinationRuntime) payloadMatchesRequest(
+	ctx context.Context,
+	tags []smtypes.Tag,
+	resolvedName string,
+	payloadSHA256 string,
+) (bool, error) {
+	if !r.options.valueDriftDetection {
+		return tagValue(tags, tagPayloadSHA256) == payloadSHA256, nil
+	}
+	livePayloadSHA256, err := remotePayloadSHA256(ctx, r.client, resolvedName)
+	if err != nil {
+		return false, err
+	}
+	return livePayloadSHA256 == payloadSHA256, nil
 }
 
 func (p Provider) clientFor(ctx context.Context, cfg providers.DestinationConfig) (secretsManagerClient, error) {
@@ -445,6 +487,7 @@ type awsDestinationOptions struct {
 	secretAccessKey          string
 	sessionToken             string
 	deleteRecoveryWindowDays int
+	valueDriftDetection      bool
 }
 
 func awsDestinationOptionsFromConfig(cfg providers.DestinationConfig) (awsDestinationOptions, error) {
@@ -463,6 +506,9 @@ func awsDestinationOptionsFromConfig(cfg providers.DestinationConfig) (awsDestin
 	}
 	var err error
 	if options.deleteRecoveryWindowDays, err = deleteRecoveryWindowDaysFromConfig(cfg); err != nil {
+		return awsDestinationOptions{}, err
+	}
+	if options.valueDriftDetection, err = boolConfigValue(cfg, ConfigKeyValueDriftDetection, false); err != nil {
 		return awsDestinationOptions{}, err
 	}
 	if err := validateEndpointOptions(options); err != nil {
@@ -530,6 +576,18 @@ func deleteRecoveryWindowDaysFromConfig(cfg providers.DestinationConfig) (int, e
 		return 0, validationError("aws-sm delete_recovery_window_days must be between 7 and 30")
 	}
 	return days, nil
+}
+
+func boolConfigValue(cfg providers.DestinationConfig, key string, fallback bool) (bool, error) {
+	value := configValue(cfg, key)
+	if value == "" {
+		return fallback, nil
+	}
+	parsed, err := strconv.ParseBool(value)
+	if err != nil {
+		return false, validationError("aws-sm " + key + " must be true or false")
+	}
+	return parsed, nil
 }
 
 func (options awsDestinationOptions) hasStaticCredentials() bool {
@@ -717,6 +775,35 @@ func createSecret(
 		return nil, providerError(classifyAWSError(err))
 	}
 	return &providers.SyncResult{RemoteVersion: aws.ToString(result.VersionId)}, nil
+}
+
+func remotePayloadSHA256(
+	ctx context.Context,
+	client secretsManagerClient,
+	resolvedName string,
+) (string, error) {
+	value, err := client.GetSecretValue(ctx, &secretsmanager.GetSecretValueInput{
+		SecretId: aws.String(resolvedName),
+	})
+	if err != nil {
+		return "", err
+	}
+	return secretValuePayloadSHA256(value), nil
+}
+
+func secretValuePayloadSHA256(value *secretsmanager.GetSecretValueOutput) string {
+	if value == nil {
+		return payloadSHA256(nil)
+	}
+	if value.SecretString != nil {
+		return payloadSHA256([]byte(aws.ToString(value.SecretString)))
+	}
+	return payloadSHA256(value.SecretBinary)
+}
+
+func payloadSHA256(payload []byte) string {
+	sum := sha256.Sum256(payload)
+	return "sha256:" + hex.EncodeToString(sum[:])
 }
 
 type ownershipIdentity struct {

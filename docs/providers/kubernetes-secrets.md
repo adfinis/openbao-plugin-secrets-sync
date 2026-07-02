@@ -129,6 +129,11 @@ format, data keys, plugin instance, and restore epoch. Owned update and delete
 operations require matching ownership metadata. If ownership cannot be proven,
 the provider returns an ownership error instead of mutating the Secret.
 
+Plan, upsert no-op detection, and reconcile compute the payload hash from live
+Kubernetes Secret data. Manual data edits are detected even when the ownership
+annotations still contain the previous payload hash, and the next explicit sync
+repairs owned drift.
+
 With `data_mapping=source-keys`, the provider manages only the rendered data
 keys recorded in ownership metadata and preserves unrelated data keys where
 possible. A desired managed key does not overwrite an unmanaged existing key.

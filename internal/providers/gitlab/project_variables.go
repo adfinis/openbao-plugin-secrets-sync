@@ -98,7 +98,7 @@ func (Provider) Type() string {
 
 func (Provider) Capabilities() providers.Capabilities {
 	return providers.Capabilities{
-		SupportsValueReadback:       false,
+		SupportsValueReadback:       true,
 		SupportsMetadataReadback:    true,
 		SupportsPayloadHashMetadata: true,
 		SupportsUpdateIfOwned:       true,
@@ -178,7 +178,9 @@ func (r destinationRuntime) Plan(ctx context.Context, req providers.PlanRequest)
 	if err := validateMaskedPayloadForPlan(r.options, req); err != nil {
 		return blockedValidationPlan(err.Error()), nil
 	}
-	if metadata.PayloadSHA256 == req.PayloadSHA256 && variableMatchesDestinationOptions(variable, r.options) {
+	if metadata.PayloadSHA256 == req.PayloadSHA256 &&
+		variablePayloadSHA256(variable) == req.PayloadSHA256 &&
+		variableMatchesDestinationOptions(variable, r.options) {
 		return &providers.PlanResult{Action: providers.PlanActionNoop}, nil
 	}
 	return &providers.PlanResult{Action: providers.PlanActionUpdate}, nil
@@ -272,7 +274,7 @@ func (r destinationRuntime) ReadState(
 		Exists:         true,
 		OwnershipKnown: true,
 		Owned:          ownedByRequest(metadata, owned, ownershipIdentityFromReadState(req)),
-		PayloadSHA256:  metadata.PayloadSHA256,
+		PayloadSHA256:  variablePayloadSHA256(variable),
 		SourceVersion:  metadata.SourceVersion,
 		RemoteVersion:  remoteVersion(variable),
 	}, nil
@@ -520,7 +522,8 @@ func variableMatchesDestinationOptions(variable *gitlabVariable, options gitlabD
 }
 
 func variableMatchesInput(variable *gitlabVariable, input gitlabVariableInput) bool {
-	return variable.Protected == input.Protected &&
+	return variable.Value == input.Value &&
+		variable.Protected == input.Protected &&
 		variable.Masked == input.Masked &&
 		variable.VariableRaw == input.VariableRaw &&
 		variable.VariableType == input.VariableType
@@ -779,6 +782,18 @@ func remoteVersion(variable *gitlabVariable) string {
 		return metadata.PayloadSHA256
 	}
 	sum := sha256.Sum256([]byte(variable.Key + ":" + variable.EnvironmentScope + ":" + variable.Description))
+	return "sha256:" + hex.EncodeToString(sum[:])
+}
+
+func variablePayloadSHA256(variable *gitlabVariable) string {
+	if variable == nil {
+		return ""
+	}
+	return payloadSHA256([]byte(variable.Value))
+}
+
+func payloadSHA256(payload []byte) string {
+	sum := sha256.Sum256(payload)
 	return "sha256:" + hex.EncodeToString(sum[:])
 }
 

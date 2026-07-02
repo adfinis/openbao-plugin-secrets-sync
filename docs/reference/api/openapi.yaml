@@ -881,6 +881,10 @@ components:
           maximum: 30
           default: 7
           description: AWS Secrets Manager scheduled-delete recovery window in days.
+        value_drift_detection:
+          type: boolean
+          default: false
+          description: Opt in to AWS GetSecretValue checks for explicit plan, upsert, and read-state value drift detection.
         access_key_id:
           type: string
           writeOnly: true

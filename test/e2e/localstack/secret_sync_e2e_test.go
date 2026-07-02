@@ -56,10 +56,11 @@ func TestOpenBaoPluginSyncsToLocalStackSecretsManager(t *testing.T) {
 	})
 
 	write(t, baoClient, mountPath+"/destinations/aws-sm/prod", map[string]interface{}{
-		awssecretsmanager.ConfigKeyRegion:         awsRegion,
-		awssecretsmanager.ConfigKeyEndpointURL:    localstackInBao,
-		awssecretsmanager.ConfigKeyEndpointPolicy: awssecretsmanager.EndpointPolicyLocal,
-		awssecretsmanager.ConfigKeyAuthMode:       awssecretsmanager.AuthModeDefault,
+		awssecretsmanager.ConfigKeyRegion:              awsRegion,
+		awssecretsmanager.ConfigKeyEndpointURL:         localstackInBao,
+		awssecretsmanager.ConfigKeyEndpointPolicy:      awssecretsmanager.EndpointPolicyLocal,
+		awssecretsmanager.ConfigKeyAuthMode:            awssecretsmanager.AuthModeDefault,
+		awssecretsmanager.ConfigKeyValueDriftDetection: "true",
 	})
 	assertFreshConfigDefaults(t, baoClient)
 	writeSource(t, baoClient, "initial")
@@ -74,6 +75,7 @@ func TestOpenBaoPluginSyncsToLocalStackSecretsManager(t *testing.T) {
 	if ids := stringSlice(t, association.Data["sync_operation_ids"]); len(ids) != 1 {
 		t.Fatalf("sync_operation_ids = %v, want one operation", ids)
 	}
+	associationID := associationIDFromSecret(t, association)
 	drainQueue(t, baoClient, 1)
 	assertRemotePayload(t, ctx, awsClient, remoteName, "initial")
 	assertRemoteTags(t, ctx, awsClient, remoteName, map[string]string{
@@ -89,6 +91,23 @@ func TestOpenBaoPluginSyncsToLocalStackSecretsManager(t *testing.T) {
 	if got := noOpPlan.Data["action"]; got != "noop" {
 		t.Fatalf("noop plan action = %v, want noop", got)
 	}
+
+	putRemotePayload(t, ctx, awsClient, remoteName, "drifted")
+	driftPlan := write(t, baoClient, mountPath+"/associations/app/db/plan", associationRequest(remoteName))
+	if got := driftPlan.Data["action"]; got != "update" {
+		t.Fatalf("drift plan action = %v, want update", got)
+	}
+	manualSync := write(
+		t,
+		baoClient,
+		mountPath+"/associations/app/db/"+associationID+"/sync",
+		map[string]interface{}{},
+	)
+	if ids := stringSlice(t, manualSync.Data["sync_operation_ids"]); len(ids) != 1 {
+		t.Fatalf("manual sync_operation_ids = %v, want one operation", ids)
+	}
+	drainQueue(t, baoClient, 1)
+	assertRemotePayload(t, ctx, awsClient, remoteName, "initial")
 
 	writeSource(t, baoClient, "updated")
 	drainQueue(t, baoClient, 1)
@@ -282,6 +301,27 @@ func assertRemotePayload(
 	})
 }
 
+func putRemotePayload(
+	t *testing.T,
+	ctx context.Context,
+	client *secretsmanager.Client,
+	secretName string,
+	password string,
+) {
+	t.Helper()
+	payload, err := json.Marshal(map[string]string{"password": password})
+	if err != nil {
+		t.Fatalf("marshal remote payload: %v", err)
+	}
+	_, err = client.PutSecretValue(ctx, &secretsmanager.PutSecretValueInput{
+		SecretId:     aws.String(secretName),
+		SecretString: aws.String(string(payload)),
+	})
+	if err != nil {
+		t.Fatalf("put remote payload: %v", err)
+	}
+}
+
 func assertRemoteTags(
 	t *testing.T,
 	ctx context.Context,
@@ -432,6 +472,19 @@ func metadataOperationIDs(t *testing.T, secret *api.Secret) []string {
 		t.Fatalf("metadata = %T, want map", secret.Data["metadata"])
 	}
 	return stringSlice(t, metadata["sync_operation_ids"])
+}
+
+func associationIDFromSecret(t *testing.T, secret *api.Secret) string {
+	t.Helper()
+	association, ok := secret.Data["association"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("association = %T, want map", secret.Data["association"])
+	}
+	id, ok := association["id"].(string)
+	if !ok || id == "" {
+		t.Fatalf("association id = %v, want non-empty string", association["id"])
+	}
+	return id
 }
 
 func stringSlice(t *testing.T, raw interface{}) []string {
