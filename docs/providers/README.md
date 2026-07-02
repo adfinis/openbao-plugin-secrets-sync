@@ -13,6 +13,14 @@ constraints.
 | Kubernetes Secrets | `k8s` | Kubernetes `Opaque` Secret | `secret-path` with `json`; optional `source-keys` data mapping |
 | GitLab project variables | `gitlab` | Project CI/CD variable | `secret-key` with `raw` recommended; `secret-path` also supported |
 
+## Capability matrix
+
+| Provider | Auth modes | `secret-path` | `secret-key` | `raw` | `json` | Data map | Read-state | Owned delete | Metadata ownership | Local e2e | Real-provider e2e |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| AWS Secrets Manager | AWS SDK default chain; STS assume role | Yes | No | No | Yes | No | Yes | Yes | AWS tags | LocalStack | Manual AWS |
+| Kubernetes Secrets | In-cluster; kubeconfig; bearer token | Yes | No | No | Yes | Yes | Yes | Yes | Labels and annotations | kind | No |
+| GitLab project variables | GitLab API token | Yes | Yes | Yes | Yes | No | Yes | Yes | Variable description | Dockerized GitLab CE | No |
+
 ## Provider guides
 
 - [AWS Secrets Manager](aws-secrets-manager.md)
