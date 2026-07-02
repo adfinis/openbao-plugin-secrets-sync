@@ -29,6 +29,9 @@ func TestConfigDefaults(t *testing.T) {
 		t.Fatal("restore_guard_acknowledged_time must be set for fresh mounts")
 	}
 	assertResponseValue(t, resp, "require_source_opt_in", false)
+	assertResponseValue(t, resp, "drift_repair", driftRepairOff)
+	assertResponseValue(t, resp, "drift_reconcile_interval", defaultDriftInterval)
+	assertResponseValue(t, resp, "drift_reconcile_batch", defaultDriftBatch)
 	assertResponseValue(t, resp, "storage_schema_version", currentStorageSchema)
 	assertResponseValue(t, resp, "storage_schema_min_compatible_version", minSupportedStorageSchema)
 	if got, ok := resp.Data["plugin_instance_id"].(string); !ok || !strings.HasPrefix(got, "inst-") {
@@ -54,6 +57,9 @@ func TestConfigInitializesDefaultsForExistingStorageWithoutConfig(t *testing.T) 
 	}
 	assertResponseValue(t, resp, "require_source_opt_in", false)
 	assertResponseValue(t, resp, "queue_capacity", defaultQueueCapacity)
+	assertResponseValue(t, resp, "drift_repair", driftRepairOff)
+	assertResponseValue(t, resp, "drift_reconcile_interval", defaultDriftInterval)
+	assertResponseValue(t, resp, "drift_reconcile_batch", defaultDriftBatch)
 }
 
 func TestConfigDecodesMissingSourceOptInAsDefault(t *testing.T) {
@@ -74,6 +80,9 @@ func TestConfigDecodesMissingSourceOptInAsDefault(t *testing.T) {
 	assertResponseValue(t, resp, "restore_guard", false)
 	assertResponseValue(t, resp, "require_source_opt_in", false)
 	assertResponseValue(t, resp, "queue_capacity", 0)
+	assertResponseValue(t, resp, "drift_repair", driftRepairOff)
+	assertResponseValue(t, resp, "drift_reconcile_interval", defaultDriftInterval)
+	assertResponseValue(t, resp, "drift_reconcile_batch", defaultDriftBatch)
 
 	cfg, err := readGlobalConfig(context.Background(), env.storage)
 	if err != nil {
@@ -102,6 +111,9 @@ func TestConfigWriteMergesDefaultsAndValidatesQueueCapacity(t *testing.T) {
 	assertResponseValue(t, readResp, "queue_capacity", 12)
 	assertResponseValue(t, readResp, "restore_guard", false)
 	assertResponseValue(t, readResp, "require_source_opt_in", false)
+	assertResponseValue(t, readResp, "drift_repair", driftRepairOff)
+	assertResponseValue(t, readResp, "drift_reconcile_interval", defaultDriftInterval)
+	assertResponseValue(t, readResp, "drift_reconcile_batch", defaultDriftBatch)
 
 	zeroResp := env.update(configPath, map[string]interface{}{
 		"queue_capacity":        0,
@@ -120,6 +132,43 @@ func TestConfigWriteMergesDefaultsAndValidatesQueueCapacity(t *testing.T) {
 	})
 	if negativeResp == nil || !negativeResp.IsError() {
 		t.Fatalf("negative queue_capacity response = %#v, want error", negativeResp)
+	}
+}
+
+func TestConfigWriteValidatesDriftRepair(t *testing.T) {
+	env := newBackendTestEnv(t)
+
+	writeResp := env.update(configPath, map[string]interface{}{
+		"drift_repair":             driftRepairRepair,
+		"drift_reconcile_interval": "2h",
+		"drift_reconcile_batch":    3,
+	})
+	if writeResp != nil && writeResp.IsError() {
+		t.Fatalf("unexpected drift config write error: %v", writeResp.Error())
+	}
+	readResp := env.read(configPath)
+	assertNoErrorResponse(t, readResp)
+	assertResponseValue(t, readResp, "drift_repair", driftRepairRepair)
+	assertResponseValue(t, readResp, "drift_reconcile_interval", "2h")
+	assertResponseValue(t, readResp, "drift_reconcile_batch", 3)
+
+	invalidModeResp := env.update(configPath, map[string]interface{}{
+		"drift_repair": "overwrite",
+	})
+	if invalidModeResp == nil || !invalidModeResp.IsError() {
+		t.Fatalf("invalid drift_repair response = %#v, want error", invalidModeResp)
+	}
+	shortIntervalResp := env.update(configPath, map[string]interface{}{
+		"drift_reconcile_interval": "30s",
+	})
+	if shortIntervalResp == nil || !shortIntervalResp.IsError() {
+		t.Fatalf("short drift_reconcile_interval response = %#v, want error", shortIntervalResp)
+	}
+	zeroBatchResp := env.update(configPath, map[string]interface{}{
+		"drift_reconcile_batch": 0,
+	})
+	if zeroBatchResp == nil || !zeroBatchResp.IsError() {
+		t.Fatalf("zero drift_reconcile_batch response = %#v, want error", zeroBatchResp)
 	}
 }
 

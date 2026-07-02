@@ -132,7 +132,7 @@ the provider returns an ownership error instead of mutating the Secret.
 Plan, upsert no-op detection, and reconcile compute the payload hash from live
 Kubernetes Secret data. Manual data edits are detected even when the ownership
 annotations still contain the previous payload hash, and the next explicit sync
-repairs owned drift.
+or background `drift_repair=repair` pass repairs owned drift.
 
 With `data_mapping=source-keys`, the provider manages only the rendered data
 keys recorded in ownership metadata and preserves unrelated data keys where

@@ -16,6 +16,7 @@ func TestMetricNamesUseOpenTelemetryInstrumentShape(t *testing.T) {
 		MetricReadinessChecks,
 		MetricRemoteMutationBlocked,
 		MetricReconcileRuns,
+		MetricDriftRepairs,
 		MetricQueueCapacity,
 		MetricQueueUtilization,
 		MetricRestoreGuardActive,
@@ -78,6 +79,15 @@ func TestMetricAttributesStayLowCardinality(t *testing.T) {
 				Granularity:     "secret-path",
 			}),
 		},
+		{
+			name: "drift repair",
+			attributes: driftRepairAttributes(DriftRepairEvent{
+				Result:          ResultRetry,
+				ErrorClass:      "unavailable",
+				DestinationType: "gitlab",
+				Granularity:     "secret-key",
+			}),
+		},
 	}
 
 	allowedKeys := map[attribute.Key]struct{}{
@@ -137,6 +147,10 @@ func TestBlankAttributeValuesAreNormalized(t *testing.T) {
 	blockedAttrs := remoteMutationBlockedAttributes(RemoteMutationBlockedEvent{})
 	assertAttributeValue(t, blockedAttrs, AttributeOperation, ValueUnknown)
 	assertAttributeValue(t, blockedAttrs, AttributeReason, ValueUnknown)
+
+	driftRepairAttrs := driftRepairAttributes(DriftRepairEvent{})
+	assertAttributeValue(t, driftRepairAttrs, AttributeResult, ValueUnknown)
+	assertAttributeValue(t, driftRepairAttrs, AttributeErrorClass, ValueNone)
 }
 
 func assertAttributeValue(

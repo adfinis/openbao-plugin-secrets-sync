@@ -70,6 +70,11 @@ const (
 	ErrorClassInternal    ErrorClass = "internal"
 )
 
+const (
+	RemoteStateVerificationValue    = "value"
+	RemoteStateVerificationMetadata = "metadata"
+)
+
 // Error carries a stable class without forcing providers to expose raw API errors.
 type Error struct {
 	Class   ErrorClass
@@ -110,27 +115,29 @@ type PlanResult struct {
 
 // UpsertRequest describes a remote create or update operation.
 type UpsertRequest struct {
-	Runtime       RuntimeIdentity
-	ResolvedName  string
-	Format        string
-	Payload       []byte
-	PayloadSHA256 string
-	DataMap       map[string][]byte
-	SourcePath    string
-	SourceVersion int
-	AssociationID string
-	ObjectID      string
+	Runtime        RuntimeIdentity
+	ResolvedName   string
+	Format         string
+	Payload        []byte
+	PayloadSHA256  string
+	IdempotencyKey string
+	DataMap        map[string][]byte
+	SourcePath     string
+	SourceVersion  int
+	AssociationID  string
+	ObjectID       string
 }
 
 // DeleteRequest describes a remote delete operation.
 type DeleteRequest struct {
-	Runtime       RuntimeIdentity
-	ResolvedName  string
-	DataMap       bool
-	SourcePath    string
-	SourceVersion int
-	AssociationID string
-	ObjectID      string
+	Runtime        RuntimeIdentity
+	ResolvedName   string
+	IdempotencyKey string
+	DataMap        bool
+	SourcePath     string
+	SourceVersion  int
+	AssociationID  string
+	ObjectID       string
 }
 
 // ReadStateRequest describes a remote state lookup.
@@ -153,6 +160,7 @@ type RemoteState struct {
 	PayloadSHA256  string
 	SourceVersion  int
 	RemoteVersion  string
+	Verification   string
 }
 
 // SyncResult describes the result of one remote mutation.

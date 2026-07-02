@@ -385,19 +385,21 @@ func putReconcileStatus(
 	now string,
 ) error {
 	status := statusRecord{
-		Path:           result.association.Path,
-		Version:        result.version,
-		AssociationID:  result.association.ID,
-		ObjectID:       result.objectID,
-		DestinationRef: result.association.DestinationRef,
-		ResolvedName:   result.resolvedName,
-		State:          string(result.state),
-		PayloadSHA256:  result.payload.SHA256,
-		LastErrorClass: string(result.errorClass),
-		UpdatedTime:    now,
+		Path:              result.association.Path,
+		Version:           result.version,
+		AssociationID:     result.association.ID,
+		ObjectID:          result.objectID,
+		DestinationRef:    result.association.DestinationRef,
+		ResolvedName:      result.resolvedName,
+		State:             string(result.state),
+		PayloadSHA256:     result.payload.SHA256,
+		LastErrorClass:    string(result.errorClass),
+		LastReconcileTime: now,
+		UpdatedTime:       now,
 	}
 	if result.remoteState != nil {
 		status.RemoteVersion = result.remoteState.RemoteVersion
+		status.Verification = result.remoteState.Verification
 	}
 	if result.errorClass != "" {
 		status.LastError = "reconcile failed: " + result.message
@@ -409,6 +411,9 @@ func putReconcileStatus(
 	if existing != nil {
 		status.LastOperationID = existing.LastOperationID
 		status.LastSuccessTime = existing.LastSuccessTime
+	}
+	if result.state == domain.SyncStateDrifted {
+		status.LastDriftDetectedTime = now
 	}
 	return putStatus(ctx, storage, status)
 }
@@ -514,12 +519,14 @@ func reconcileObjectResponse(result reconcileObjectResult) map[string]interface{
 	remoteOwned := false
 	remoteSourceVersion := 0
 	remoteVersion := ""
+	verification := ""
 	if result.remoteState != nil {
 		remoteExists = result.remoteState.Exists
 		remoteOwnershipKnown = result.remoteState.OwnershipKnown
 		remoteOwned = result.remoteState.Owned
 		remoteSourceVersion = result.remoteState.SourceVersion
 		remoteVersion = result.remoteState.RemoteVersion
+		verification = result.remoteState.Verification
 	}
 	return newResponseData(
 		responseField("association_id", result.association.ID),
@@ -533,6 +540,7 @@ func reconcileObjectResponse(result reconcileObjectResult) map[string]interface{
 		responseField("remote_owned", remoteOwned),
 		responseField("remote_source_version", remoteSourceVersion),
 		responseField("remote_version", remoteVersion),
+		responseField("verification", verification),
 		responseField("error_class", string(result.errorClass)),
 		responseField("message", result.message),
 	)

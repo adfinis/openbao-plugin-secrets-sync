@@ -549,7 +549,7 @@ func ensureQueueCapacityAfterReplacement(
 	}
 	projectedDepth := len(ids) - replacedOperations + additionalOperations
 	if projectedDepth > cfg.QueueCapacity {
-		return fmt.Errorf("sync queue is full: capacity %d", cfg.QueueCapacity)
+		return fmt.Errorf("%w: capacity %d", errQueueCapacity, cfg.QueueCapacity)
 	}
 	return nil
 }
@@ -573,6 +573,50 @@ func newAssociationOutboxRecords(
 			operations = append(operations, operation)
 			operationIDs = append(operationIDs, operation.ID)
 		}
+	}
+	return operations, operationIDs, nil
+}
+
+func newAssociationDriftRepairOutboxRecords(
+	association associationRecord,
+	generation string,
+	version int,
+	payload secretPayload,
+	now string,
+	repairID string,
+) ([]outboxRecord, []string, error) {
+	objectIDs, err := associationObjectIDs(association, payload)
+	if err != nil {
+		return nil, nil, err
+	}
+	operations := make([]outboxRecord, 0, len(objectIDs))
+	operationIDs := make([]string, 0, len(objectIDs))
+	for _, objectID := range objectIDs {
+		operation := newAssociationDriftRepairOutboxRecord(association, generation, version, objectID, now, repairID)
+		operations = append(operations, operation)
+		operationIDs = append(operationIDs, operation.ID)
+	}
+	return operations, operationIDs, nil
+}
+
+func newAssociationManualSyncOutboxRecords(
+	association associationRecord,
+	generation string,
+	version int,
+	payload secretPayload,
+	now string,
+	syncID string,
+) ([]outboxRecord, []string, error) {
+	objectIDs, err := associationObjectIDs(association, payload)
+	if err != nil {
+		return nil, nil, err
+	}
+	operations := make([]outboxRecord, 0, len(objectIDs))
+	operationIDs := make([]string, 0, len(objectIDs))
+	for _, objectID := range objectIDs {
+		operation := newAssociationManualSyncOutboxRecord(association, generation, version, objectID, now, syncID)
+		operations = append(operations, operation)
+		operationIDs = append(operationIDs, operation.ID)
 	}
 	return operations, operationIDs, nil
 }
@@ -822,6 +866,89 @@ func newAssociationOutboxRecord(
 			objectID,
 			outbox.OperationTypeUpsert,
 		),
+		Trigger: outboxTriggerUser,
+	}
+}
+
+func newAssociationManualSyncOutboxRecord(
+	association associationRecord,
+	generation string,
+	version int,
+	objectID string,
+	now string,
+	syncID string,
+) outboxRecord {
+	id := newOperationIDWithSalt(
+		generation,
+		association.Path,
+		version,
+		association.ID,
+		objectID,
+		outbox.OperationTypeUpsert,
+		syncID,
+	)
+	return outboxRecord{
+		ID:             id,
+		Type:           outbox.OperationTypeUpsert,
+		Path:           association.Path,
+		Version:        version,
+		AssociationID:  association.ID,
+		ObjectID:       objectID,
+		DestinationRef: association.DestinationRef,
+		State:          outboxStatePending,
+		NotBefore:      now,
+		CreatedTime:    now,
+		UpdatedTime:    now,
+		IdempotencyKey: operationIdempotencyKey(
+			generation,
+			association.Path,
+			version,
+			association.ID,
+			objectID,
+			outbox.OperationTypeUpsert,
+		) + ":" + syncID,
+		Trigger: outboxTriggerUser,
+	}
+}
+
+func newAssociationDriftRepairOutboxRecord(
+	association associationRecord,
+	generation string,
+	version int,
+	objectID string,
+	now string,
+	repairID string,
+) outboxRecord {
+	id := newOperationIDWithSalt(
+		generation,
+		association.Path,
+		version,
+		association.ID,
+		objectID,
+		outbox.OperationTypeUpsert,
+		repairID,
+	)
+	return outboxRecord{
+		ID:             id,
+		Type:           outbox.OperationTypeUpsert,
+		Path:           association.Path,
+		Version:        version,
+		AssociationID:  association.ID,
+		ObjectID:       objectID,
+		DestinationRef: association.DestinationRef,
+		State:          outboxStatePending,
+		NotBefore:      now,
+		CreatedTime:    now,
+		UpdatedTime:    now,
+		IdempotencyKey: operationIdempotencyKey(
+			generation,
+			association.Path,
+			version,
+			association.ID,
+			objectID,
+			outbox.OperationTypeUpsert,
+		) + ":" + repairID,
+		Trigger: outboxTriggerDriftRepair,
 	}
 }
 
@@ -860,6 +987,7 @@ func newAssociationDeleteOutboxRecord(
 			objectID,
 			outbox.OperationTypeDelete,
 		),
+		Trigger: outboxTriggerUser,
 	}
 }
 

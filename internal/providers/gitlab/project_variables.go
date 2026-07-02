@@ -277,6 +277,7 @@ func (r destinationRuntime) ReadState(
 		PayloadSHA256:  variablePayloadSHA256(variable),
 		SourceVersion:  metadata.SourceVersion,
 		RemoteVersion:  remoteVersion(variable),
+		Verification:   providers.RemoteStateVerificationValue,
 	}, nil
 }
 

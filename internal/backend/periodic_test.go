@@ -6,8 +6,10 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/adfinis/openbao-plugin-secrets-sync/internal/domain"
+	"github.com/adfinis/openbao-plugin-secrets-sync/internal/observability"
 	"github.com/adfinis/openbao-plugin-secrets-sync/internal/outbox"
 	"github.com/adfinis/openbao-plugin-secrets-sync/internal/providers"
 	"github.com/adfinis/openbao-plugin-secrets-sync/internal/providers/awssecretsmanager"
@@ -493,4 +495,289 @@ func TestPeriodicHonorsDisabledConfig(t *testing.T) {
 	queueResp := env.read("queue")
 	assertNoErrorResponse(t, queueResp)
 	assertResponseValue(t, queueResp, "pending", 1)
+}
+
+func TestPeriodicDispatchesQueueAfterDriftReconcileStorageError(t *testing.T) {
+	env := newBackendTestEnv(t)
+
+	env.writeAppDBSecret("initial")
+	env.createFakeDestination("default")
+	associationResp := env.createDefaultFakeAssociation()
+	operationID := operationIDsFromResponse(t, associationResp)[0]
+	configResp := env.update(configPath, map[string]interface{}{
+		"drift_repair": driftRepairDetect,
+	})
+	if configResp != nil && configResp.IsError() {
+		t.Fatalf("unexpected config error: %v", configResp.Error())
+	}
+
+	storage := &failOnceStatusReadStorage{
+		Storage: env.storage,
+		err:     errors.New("status read failed"),
+	}
+	err := env.b.periodic(context.Background(), &logical.Request{Storage: storage})
+	if err == nil {
+		t.Fatal("periodic error = nil, want drift reconcile error")
+	}
+	if !strings.Contains(err.Error(), "status read failed") {
+		t.Fatalf("periodic error = %v, want status read failed", err)
+	}
+	assertOutboxMissing(t, env.storage, operationID)
+	assertStatusObjectState(t, env.b, env.storage, domain.SyncStateSynced)
+}
+
+func TestPeriodicDriftRepairDetectsUnderRestoreGuardWithoutEnqueue(t *testing.T) {
+	env := newBackendTestEnv(t)
+
+	env.writeAppDBSecret("initial")
+	env.createFakeDestination("default")
+	associationResp := env.createFakeAssociationWithResolvedName("prod/drift/app/db")
+	initialOperationID := operationIDsFromResponse(t, associationResp)[0]
+	initialOperation := assertOutboxOperation(t, env.storage, initialOperationID, 1, outboxStatePending)
+	if err := deleteOutbox(context.Background(), env.storage, *initialOperation); err != nil {
+		t.Fatalf("delete initial outbox operation: %v", err)
+	}
+	configResp := env.update(configPath, map[string]interface{}{
+		"restore_guard": true,
+		"drift_repair":  driftRepairRepair,
+	})
+	if configResp != nil && configResp.IsError() {
+		t.Fatalf("unexpected config error: %v", configResp.Error())
+	}
+
+	if err := env.b.periodic(context.Background(), &logical.Request{Storage: env.storage}); err != nil {
+		t.Fatalf("periodic repair under guard: %v", err)
+	}
+
+	status, err := getStatus(
+		context.Background(),
+		env.storage,
+		"app/db",
+		associationIDFromResponse(t, associationResp),
+		syncObjectIDSecretPath,
+	)
+	if err != nil {
+		t.Fatalf("read status: %v", err)
+	}
+	if status == nil {
+		t.Fatal("status must be written by guarded drift detection")
+	}
+	if got := status.State; got != string(domain.SyncStateDrifted) {
+		t.Fatalf("status state = %s, want %s", got, domain.SyncStateDrifted)
+	}
+	if status.LastReconcileTime == "" {
+		t.Fatal("last_reconcile_time must be recorded")
+	}
+	if status.LastDriftDetectedTime == "" {
+		t.Fatal("last_drift_detected_time must be recorded")
+	}
+	if got := status.Verification; got != providers.RemoteStateVerificationValue {
+		t.Fatalf("verification = %s, want %s", got, providers.RemoteStateVerificationValue)
+	}
+	assertQueueCount(t, env.b, env.storage, "pending", 0)
+}
+
+func TestPeriodicDriftDetectSkippedWhenDisabled(t *testing.T) {
+	env := newBackendTestEnv(t)
+
+	env.writeAppDBSecret("initial")
+	env.createFakeDestination("default")
+	associationResp := env.createFakeAssociationWithResolvedName("prod/drift/app/db")
+	initialOperationID := operationIDsFromResponse(t, associationResp)[0]
+	initialOperation := assertOutboxOperation(t, env.storage, initialOperationID, 1, outboxStatePending)
+	if err := deleteOutbox(context.Background(), env.storage, *initialOperation); err != nil {
+		t.Fatalf("delete initial outbox operation: %v", err)
+	}
+	configResp := env.update(configPath, map[string]interface{}{
+		"disabled":     true,
+		"drift_repair": driftRepairDetect,
+	})
+	if configResp != nil && configResp.IsError() {
+		t.Fatalf("unexpected config error: %v", configResp.Error())
+	}
+
+	if err := env.b.periodic(context.Background(), &logical.Request{Storage: env.storage}); err != nil {
+		t.Fatalf("periodic disabled drift detect: %v", err)
+	}
+
+	status, err := getStatus(
+		context.Background(),
+		env.storage,
+		"app/db",
+		associationIDFromResponse(t, associationResp),
+		syncObjectIDSecretPath,
+	)
+	if err != nil {
+		t.Fatalf("read status: %v", err)
+	}
+	if status != nil {
+		t.Fatalf("status = %#v, want nil when disabled blocks background provider traffic", status)
+	}
+}
+
+func TestPeriodicDriftDetectPreservesPendingStatus(t *testing.T) {
+	env := newBackendTestEnv(t)
+
+	env.writeAppDBSecret("initial")
+	env.createFakeDestination("default")
+	associationResp := env.createFakeAssociationWithResolvedName("prod/drift/app/db")
+	operationID := operationIDsFromResponse(t, associationResp)[0]
+	configResp := env.update(configPath, map[string]interface{}{
+		"restore_guard": true,
+		"drift_repair":  driftRepairDetect,
+	})
+	if configResp != nil && configResp.IsError() {
+		t.Fatalf("unexpected config error: %v", configResp.Error())
+	}
+
+	if err := env.b.periodic(context.Background(), &logical.Request{Storage: env.storage}); err != nil {
+		t.Fatalf("periodic pending drift detect: %v", err)
+	}
+
+	assertOutboxOperation(t, env.storage, operationID, 1, outboxStatePending)
+	status, err := getStatus(
+		context.Background(),
+		env.storage,
+		"app/db",
+		associationIDFromResponse(t, associationResp),
+		syncObjectIDSecretPath,
+	)
+	if err != nil {
+		t.Fatalf("read status: %v", err)
+	}
+	if status == nil {
+		t.Fatal("status must be written while restore guard blocks queued dispatch")
+	}
+	if got := status.State; got != string(domain.SyncStateDrifted) {
+		t.Fatalf("status state = %s, want %s", got, domain.SyncStateDrifted)
+	}
+	if status.LastReconcileTime == "" {
+		t.Fatal("last_reconcile_time must be recorded")
+	}
+	if status.LastDriftDetectedTime == "" {
+		t.Fatal("last_drift_detected_time must be recorded")
+	}
+}
+
+func TestPeriodicDriftRepairEnqueuesWithDistinctTriggerAndToken(t *testing.T) {
+	env := newBackendTestEnv(t)
+
+	env.writeAppDBSecret("initial")
+	env.createFakeDestination("default")
+	associationResp := env.createFakeAssociationWithResolvedName("prod/drift/app/db")
+	initialOperationID := operationIDsFromResponse(t, associationResp)[0]
+	initialOperation := assertOutboxOperation(t, env.storage, initialOperationID, 1, outboxStatePending)
+	if err := deleteOutbox(context.Background(), env.storage, *initialOperation); err != nil {
+		t.Fatalf("delete initial outbox operation: %v", err)
+	}
+	configResp := env.update(configPath, map[string]interface{}{
+		"drift_repair":             driftRepairRepair,
+		"drift_reconcile_interval": minDriftInterval,
+	})
+	if configResp != nil && configResp.IsError() {
+		t.Fatalf("unexpected config error: %v", configResp.Error())
+	}
+	cfg, err := readGlobalConfig(context.Background(), env.storage)
+	if err != nil {
+		t.Fatalf("read config: %v", err)
+	}
+
+	now := nowUTC()
+	if err := env.b.periodicDriftReconcile(context.Background(), env.storage, cfg, now); err != nil {
+		t.Fatalf("periodic drift repair: %v", err)
+	}
+
+	ids, err := listQueuedOutboxIDs(context.Background(), env.storage)
+	if err != nil {
+		t.Fatalf("list queued operations: %v", err)
+	}
+	if len(ids) != 1 {
+		t.Fatalf("queued operations = %v, want one repair operation", ids)
+	}
+	repairOperation := assertOutboxOperation(t, env.storage, ids[0], 1, outboxStatePending)
+	if got := outboxTrigger(*repairOperation); got != outboxTriggerDriftRepair {
+		t.Fatalf("repair trigger = %s, want %s", got, outboxTriggerDriftRepair)
+	}
+	if repairOperation.ID == initialOperation.ID {
+		t.Fatalf("repair operation reused initial operation ID %s", repairOperation.ID)
+	}
+	if repairOperation.IdempotencyKey == initialOperation.IdempotencyKey {
+		t.Fatalf("repair operation reused initial idempotency key %s", repairOperation.IdempotencyKey)
+	}
+	readResp := env.read("queue/" + repairOperation.ID)
+	assertNoErrorResponse(t, readResp)
+	assertResponseValue(t, readResp, "trigger", outboxTriggerDriftRepair)
+
+	if err := env.b.periodicDriftReconcile(
+		context.Background(),
+		env.storage,
+		cfg,
+		now.Add(2*time.Minute),
+	); err != nil {
+		t.Fatalf("second periodic drift repair: %v", err)
+	}
+	ids, err = listQueuedOutboxIDs(context.Background(), env.storage)
+	if err != nil {
+		t.Fatalf("list queued operations after second repair: %v", err)
+	}
+	if len(ids) != 1 || ids[0] != repairOperation.ID {
+		t.Fatalf("queued operations after second repair = %v, want only %s", ids, repairOperation.ID)
+	}
+}
+
+func TestPeriodicRecordsDriftRepairMetric(t *testing.T) {
+	env := newBackendTestEnv(t)
+	recorder := &recordingObserver{}
+	env.b.observer = recorder
+
+	env.writeAppDBSecret("initial")
+	env.createFakeDestination("default")
+	associationResp := env.createFakeAssociationWithResolvedName("prod/drift/app/db")
+	initialOperationID := operationIDsFromResponse(t, associationResp)[0]
+	initialOperation := assertOutboxOperation(t, env.storage, initialOperationID, 1, outboxStatePending)
+	if err := deleteOutbox(context.Background(), env.storage, *initialOperation); err != nil {
+		t.Fatalf("delete initial outbox operation: %v", err)
+	}
+	configResp := env.update(configPath, map[string]interface{}{
+		"drift_repair":             driftRepairRepair,
+		"drift_reconcile_interval": minDriftInterval,
+	})
+	if configResp != nil && configResp.IsError() {
+		t.Fatalf("unexpected config error: %v", configResp.Error())
+	}
+
+	if err := env.b.periodic(context.Background(), &logical.Request{Storage: env.storage}); err != nil {
+		t.Fatalf("periodic drift repair: %v", err)
+	}
+
+	if len(recorder.driftRepairs) != 1 {
+		t.Fatalf("drift repair metrics = %#v, want one event", recorder.driftRepairs)
+	}
+	event := recorder.driftRepairs[0]
+	if event.Result != observability.ResultFailure {
+		t.Fatalf("drift repair result = %s, want %s", event.Result, observability.ResultFailure)
+	}
+	if event.ErrorClass != string(providers.ErrorClassDrift) {
+		t.Fatalf("drift repair error_class = %s, want %s", event.ErrorClass, providers.ErrorClassDrift)
+	}
+	if event.DestinationType != providerTypeFake {
+		t.Fatalf("drift repair destination_type = %s, want %s", event.DestinationType, providerTypeFake)
+	}
+	if event.Granularity != syncGranularitySecretPath {
+		t.Fatalf("drift repair granularity = %s, want %s", event.Granularity, syncGranularitySecretPath)
+	}
+}
+
+type failOnceStatusReadStorage struct {
+	logical.Storage
+	err    error
+	failed bool
+}
+
+func (s *failOnceStatusReadStorage) Get(ctx context.Context, key string) (*logical.StorageEntry, error) {
+	if !s.failed && strings.HasPrefix(key, statusStoragePrefix) {
+		s.failed = true
+		return nil, s.err
+	}
+	return s.Storage.Get(ctx, key)
 }

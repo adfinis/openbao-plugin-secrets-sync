@@ -374,6 +374,7 @@ func outboxOperationResponse(record outboxRecord) map[string]interface{} { //nol
 		responseField("created_time", record.CreatedTime),
 		responseField("updated_time", record.UpdatedTime),
 		responseField("idempotency_key", record.IdempotencyKey),
+		responseField("trigger", record.Trigger),
 		responseField("claimed", isOutboxClaimActive(record, nowUTC())),
 		responseField("claim_owner", record.ClaimOwner),
 		responseField("claim_expires_time", record.ClaimExpiresTime),

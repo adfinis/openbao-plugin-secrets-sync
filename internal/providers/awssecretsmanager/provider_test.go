@@ -681,6 +681,10 @@ func TestUpsertUpdatesOwnedSecretAndTagsHash(t *testing.T) {
 	if got := aws.ToString(client.putSecretValueInput.SecretId); got != testResolvedName {
 		t.Fatalf("secret id = %s, want %s", got, testResolvedName)
 	}
+	wantToken := mutationIdempotencyToken("put", defaultUpsertRequest())
+	if got := aws.ToString(client.putSecretValueInput.ClientRequestToken); got != wantToken {
+		t.Fatalf("client request token = %s, want default mutation token", got)
+	}
 	if client.tagResourceInput == nil {
 		t.Fatal("TagResource input must be captured")
 	}
@@ -711,10 +715,41 @@ func TestUpsertRepairsValueDriftWhenDetectionEnabled(t *testing.T) {
 	if client.putSecretValueInput == nil {
 		t.Fatal("PutSecretValue must repair live value drift")
 	}
+	wantToken := mutationIdempotencyToken("put", request)
+	if got := aws.ToString(client.putSecretValueInput.ClientRequestToken); got != wantToken {
+		t.Fatalf("client request token = %s, want request mutation token", got)
+	}
 	if client.tagResourceInput == nil {
 		t.Fatal("TagResource must refresh ownership metadata after repairing drift")
 	}
 	assertTag(t, client.tagResourceInput.Tags, tagPayloadSHA256, request.PayloadSHA256)
+}
+
+func TestUpsertUsesRequestIdempotencyKeyForPutToken(t *testing.T) {
+	request := defaultUpsertRequest()
+	request.IdempotencyKey = "repair-attempt-1"
+	client := &mockSecretsManagerClient{
+		describeOutput:       ownedDescribeOutput(testPayloadSHAOld),
+		putSecretValueOutput: &secretsmanager.PutSecretValueOutput{VersionId: aws.String("updated-version")},
+		tagResourceOutput:    &secretsmanager.TagResourceOutput{},
+	}
+
+	_, err := runtimeWithClient(t, client).Upsert(context.Background(), request)
+	if err != nil {
+		t.Fatalf("upsert: %v", err)
+	}
+	if client.putSecretValueInput == nil {
+		t.Fatal("PutSecretValue input must be captured")
+	}
+	wantToken := mutationIdempotencyToken("put", request)
+	if got := aws.ToString(client.putSecretValueInput.ClientRequestToken); got != wantToken {
+		t.Fatalf("client request token = %s, want request idempotency token", got)
+	}
+
+	fallback := defaultUpsertRequest()
+	if got, legacy := mutationIdempotencyToken("put", request), mutationIdempotencyToken("put", fallback); got == legacy {
+		t.Fatal("request idempotency key must produce a distinct token")
+	}
 }
 
 func TestUpsertRefreshesMetadataOnlyWhenValueMatchesWithDetectionEnabled(t *testing.T) {

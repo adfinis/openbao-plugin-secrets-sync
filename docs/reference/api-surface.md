@@ -16,7 +16,11 @@ mutation is asynchronous unless an operator explicitly drains due queue work.
 - Destination mutation requires destination authority, an enabled association,
   queue capacity, and an allowed OpenBao replication state. When
   `require_source_opt_in=true`, it also requires source eligibility metadata.
-- The mount-wide `disabled` flag and restore guard block remote mutation.
+- The mount-wide `disabled` flag blocks background provider traffic and remote
+  mutation. Manual reconcile remains available.
+- Restore guard blocks remote mutation. Background drift detection and manual
+  reconcile remain read-only and may refresh local status while the guard is
+  active.
 - Provider failures use stable error classes such as `authn`, `authz`,
   `rate_limit`, `unavailable`, `ownership`, `collision`, and `drift`.
 
@@ -24,8 +28,21 @@ mutation is asynchronous unless an operator explicitly drains due queue work.
 
 | Path | Purpose |
 | --- | --- |
-| `config` | Read or update mount-wide sync settings such as `disabled`, `queue_capacity`, and `require_source_opt_in`. |
+| `config` | Read or update mount-wide sync settings such as `disabled`, `queue_capacity`, `require_source_opt_in`, `drift_repair`, `drift_reconcile_interval`, and `drift_reconcile_batch`. |
 | `config/restore-guard/acknowledge` | Acknowledge restore or clone review and resume remote mutation. |
+
+`drift_repair` controls opt-in background drift work:
+
+- `off` disables background drift work. This is the default.
+- `detect` periodically runs read-only reconcile for due association objects
+  and records status drift.
+- `repair` does the same detection and enqueues owned `DRIFTED` objects for
+  normal outbox upsert repair.
+
+Background drift sweeps use `drift_reconcile_interval` (`1h` default, minimum
+`1m`) and `drift_reconcile_batch` (`16` default) to limit provider read load.
+Repair never mutates providers directly; it creates queue operations with
+`trigger=drift-repair`.
 
 ## Source data and metadata
 
@@ -91,6 +108,10 @@ accepted.
 
 `queue/drain` can execute remote mutations and is operator-scoped. Reconcile
 reads remote state but does not write destination secrets.
+Queue operation reads include `trigger`, which is `user` for ordinary writes
+and manual syncs and `drift-repair` for background repair work.
+Status objects can include `verification`, `last_reconcile_time`,
+`last_drift_detected_time`, `last_repair_time`, and `repair_count`.
 
 ## List pagination
 

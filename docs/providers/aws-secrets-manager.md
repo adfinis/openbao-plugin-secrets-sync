@@ -151,6 +151,11 @@ read-state operations read owned secret values and compare the live value hash
 with the desired payload hash. Manual value-only changes with unchanged
 ownership tags are detected only in that opt-in mode.
 
+Background `drift_repair=detect|repair` uses the same read-state behavior. To
+detect and automatically repair manual AWS value edits, configure the
+destination with `value_drift_detection=true`; otherwise background drift work
+can only reason from ownership tags and payload-hash metadata.
+
 `delete_recovery_window_days` controls the AWS Secrets Manager scheduled-delete
 recovery window used when an association with `delete_mode=delete` deletes an
 owned remote secret. The default is `7`. AWS accepts values from `7` through

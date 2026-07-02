@@ -3,6 +3,7 @@ package backend
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/openbao/openbao/sdk/v2/framework"
 	"github.com/openbao/openbao/sdk/v2/logical"
@@ -30,6 +31,19 @@ func pathConfig(b *secretSyncBackend) *framework.Path {
 				Type: framework.TypeBool,
 				Description: "Require custom_metadata.syncable=true before enabled associations " +
 					"can enqueue or dispatch remote mutation.",
+			},
+			"drift_repair": {
+				Type: framework.TypeString,
+				Description: "Background drift policy: off disables background drift work, detect records " +
+					"periodic read-only drift status, repair also enqueues owned drift repair work.",
+			},
+			"drift_reconcile_interval": {
+				Type:        framework.TypeString,
+				Description: "Minimum interval between background drift checks for one association object.",
+			},
+			"drift_reconcile_batch": {
+				Type:        framework.TypeInt,
+				Description: "Maximum association objects checked by one periodic drift sweep.",
 			},
 		},
 		Operations: map[logical.Operation]framework.OperationHandler{
@@ -85,6 +99,9 @@ func (b *secretSyncBackend) pathConfigRead(
 		responseField("storage_schema_min_compatible_version", state.Schema.MinCompatibleVersion),
 		responseField("queue_capacity", cfg.QueueCapacity),
 		responseField("require_source_opt_in", cfg.RequireSourceOptIn),
+		responseField("drift_repair", cfg.DriftRepair),
+		responseField("drift_reconcile_interval", cfg.DriftReconcileInterval),
+		responseField("drift_reconcile_batch", cfg.DriftReconcileBatch),
 	)}, nil
 }
 
@@ -125,12 +142,40 @@ func (b *secretSyncBackend) pathConfigWrite(
 	if value, ok := data.GetOk("require_source_opt_in"); ok {
 		cfg.RequireSourceOptIn = value.(bool)
 	}
+	if err := applyDriftConfigFields(data, &cfg); err != nil {
+		return logical.ErrorResponse(err.Error()), nil
+	}
 	cfg.UpdatedTime = nowUTC().Format(timeFormatRFC3339)
 	if err := putGlobalConfig(ctx, req.Storage, cfg); err != nil {
 		return nil, err
 	}
 	b.observer.RestoreGuardActive(ctx, cfg.RestoreGuard)
 	return nil, nil
+}
+
+func applyDriftConfigFields(data *framework.FieldData, cfg *globalConfig) error {
+	if value, ok := data.GetOk("drift_repair"); ok {
+		driftRepair := value.(string)
+		if err := validateDriftRepairMode(driftRepair); err != nil {
+			return err
+		}
+		cfg.DriftRepair = driftRepair
+	}
+	if value, ok := data.GetOk("drift_reconcile_interval"); ok {
+		interval := value.(string)
+		if err := validateDriftReconcileInterval(interval); err != nil {
+			return err
+		}
+		cfg.DriftReconcileInterval = interval
+	}
+	if value, ok := data.GetOk("drift_reconcile_batch"); ok {
+		batch := value.(int)
+		if batch < 1 {
+			return fmt.Errorf("drift_reconcile_batch must be greater than or equal to one")
+		}
+		cfg.DriftReconcileBatch = batch
+	}
+	return nil
 }
 
 func (b *secretSyncBackend) pathConfigRestoreGuardAcknowledgeWrite(
@@ -170,6 +215,9 @@ func (b *secretSyncBackend) pathConfigRestoreGuardAcknowledgeWrite(
 		responseField("storage_schema_min_compatible_version", state.Schema.MinCompatibleVersion),
 		responseField("queue_capacity", cfg.QueueCapacity),
 		responseField("require_source_opt_in", cfg.RequireSourceOptIn),
+		responseField("drift_repair", cfg.DriftRepair),
+		responseField("drift_reconcile_interval", cfg.DriftReconcileInterval),
+		responseField("drift_reconcile_batch", cfg.DriftReconcileBatch),
 	)}, nil
 }
 
@@ -244,8 +292,35 @@ func decodeGlobalConfigEntry(entry *logical.StorageEntry) (globalConfig, bool, e
 	} else {
 		cfg.RequireSourceOptIn = *stored.RequireSourceOptIn
 	}
+	if stored.DriftRepair == nil {
+		cfg.DriftRepair = defaultDriftRepair
+		changed = true
+	} else {
+		cfg.DriftRepair = *stored.DriftRepair
+	}
+	if stored.DriftReconcileInterval == nil {
+		cfg.DriftReconcileInterval = defaultDriftInterval
+		changed = true
+	} else {
+		cfg.DriftReconcileInterval = *stored.DriftReconcileInterval
+	}
+	if stored.DriftReconcileBatch == nil {
+		cfg.DriftReconcileBatch = defaultDriftBatch
+		changed = true
+	} else {
+		cfg.DriftReconcileBatch = *stored.DriftReconcileBatch
+	}
 	if cfg.QueueCapacity < 0 {
 		return globalConfig{}, false, fmt.Errorf("stored queue_capacity must be greater than or equal to zero")
+	}
+	if err := validateDriftRepairMode(cfg.DriftRepair); err != nil {
+		return globalConfig{}, false, fmt.Errorf("stored %w", err)
+	}
+	if err := validateDriftReconcileInterval(cfg.DriftReconcileInterval); err != nil {
+		return globalConfig{}, false, fmt.Errorf("stored %w", err)
+	}
+	if cfg.DriftReconcileBatch < 1 {
+		return globalConfig{}, false, fmt.Errorf("stored drift_reconcile_batch must be greater than or equal to one")
 	}
 	return cfg, changed, nil
 }
@@ -259,19 +334,25 @@ func initialGlobalConfig(now string) globalConfig {
 
 func defaultGlobalConfig() globalConfig {
 	return globalConfig{
-		RestoreGuard:       false,
-		QueueCapacity:      defaultQueueCapacity,
-		RequireSourceOptIn: false,
+		RestoreGuard:           false,
+		QueueCapacity:          defaultQueueCapacity,
+		RequireSourceOptIn:     false,
+		DriftRepair:            defaultDriftRepair,
+		DriftReconcileInterval: defaultDriftInterval,
+		DriftReconcileBatch:    defaultDriftBatch,
 	}
 }
 
 type storedGlobalConfig struct {
-	Disabled                     bool   `json:"disabled"`
-	RestoreGuard                 *bool  `json:"restore_guard"`
-	RestoreGuardAcknowledgedTime string `json:"restore_guard_acknowledged_time"`
-	QueueCapacity                *int   `json:"queue_capacity"`
-	RequireSourceOptIn           *bool  `json:"require_source_opt_in"`
-	UpdatedTime                  string `json:"updated_time"`
+	Disabled                     bool    `json:"disabled"`
+	RestoreGuard                 *bool   `json:"restore_guard"`
+	RestoreGuardAcknowledgedTime string  `json:"restore_guard_acknowledged_time"`
+	QueueCapacity                *int    `json:"queue_capacity"`
+	RequireSourceOptIn           *bool   `json:"require_source_opt_in"`
+	DriftRepair                  *string `json:"drift_repair"`
+	DriftReconcileInterval       *string `json:"drift_reconcile_interval"`
+	DriftReconcileBatch          *int    `json:"drift_reconcile_batch"`
+	UpdatedTime                  string  `json:"updated_time"`
 }
 
 type globalConfig struct {
@@ -280,7 +361,34 @@ type globalConfig struct {
 	RestoreGuardAcknowledgedTime string `json:"restore_guard_acknowledged_time"`
 	QueueCapacity                int    `json:"queue_capacity"`
 	RequireSourceOptIn           bool   `json:"require_source_opt_in"`
+	DriftRepair                  string `json:"drift_repair"`
+	DriftReconcileInterval       string `json:"drift_reconcile_interval"`
+	DriftReconcileBatch          int    `json:"drift_reconcile_batch"`
 	UpdatedTime                  string `json:"updated_time"`
 }
 
 const timeFormatRFC3339 = "2006-01-02T15:04:05Z07:00"
+
+func validateDriftRepairMode(mode string) error {
+	switch mode {
+	case driftRepairOff, driftRepairDetect, driftRepairRepair:
+		return nil
+	default:
+		return fmt.Errorf("drift_repair must be one of off, detect, or repair")
+	}
+}
+
+func validateDriftReconcileInterval(value string) error {
+	duration, err := time.ParseDuration(value)
+	if err != nil {
+		return fmt.Errorf("drift_reconcile_interval must be a valid duration")
+	}
+	minimum, err := time.ParseDuration(minDriftInterval)
+	if err != nil {
+		return err
+	}
+	if duration < minimum {
+		return fmt.Errorf("drift_reconcile_interval must be greater than or equal to %s", minDriftInterval)
+	}
+	return nil
+}

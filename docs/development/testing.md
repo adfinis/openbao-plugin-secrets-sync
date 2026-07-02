@@ -77,6 +77,8 @@ Queue, dispatcher, periodic work, and enqueue-intent changes need:
 
 - unit tests for operation state transitions, due indexes, path indexes,
   claim expiry, retry scheduling, cancellation, and pruning;
+- drift detect/repair tests for disabled config, restore guard, queue capacity,
+  duplicate repair suppression, and repair trigger attribution;
 - race tests for concurrent source writes, association writes, runtime cache
   use, and dispatch paths;
 - model-style tests that assert invariants across several operations;

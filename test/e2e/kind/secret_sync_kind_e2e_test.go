@@ -36,11 +36,11 @@ const (
 	openBaoSAName    = "openbao"
 	dataKeyPayload   = "payload"
 	testPollInterval = 500 * time.Millisecond
-	testTimeout      = 45 * time.Second
+	testTimeout      = 90 * time.Second
 )
 
 func TestOpenBaoPluginSyncsToKubernetesSecrets(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
 	defer cancel()
 
 	baoClient := setupMountedOpenBao(t, ctx)
@@ -75,12 +75,20 @@ func TestOpenBaoPluginSyncsToKubernetesSecrets(t *testing.T) {
 	assertKubernetesSecret(t, ctx, kubeClient, namespace, remoteName, "initial", "1")
 	assertStatus(t, baoClient, "SYNCED")
 	assertReconcilePlan(t, baoClient, "SYNCED")
-	assertReconcileApply(t, baoClient, "SYNCED")
 
 	noOpPlan := write(t, baoClient, mountPath+"/associations/app/db/plan", associationRequest(remoteName))
 	if got := noOpPlan.Data["action"]; got != "noop" {
 		t.Fatalf("noop plan action = %v, want noop", got)
 	}
+
+	secret := getKubernetesSecret(t, ctx, kubeClient, namespace, remoteName)
+	setKubernetesPayload(t, secret, "drifted")
+	updateKubernetesSecret(t, ctx, kubeClient, namespace, secret)
+	enableBackgroundRepair(t, baoClient)
+	assertKubernetesSecret(t, ctx, kubeClient, namespace, remoteName, "initial", "1")
+	assertBackgroundRepairStatus(t, baoClient, "value")
+	disableBackgroundDrift(t, baoClient)
+	assertReconcileApply(t, baoClient, "SYNCED")
 
 	writeSource(t, baoClient, "updated")
 	drainQueue(t, baoClient, 1)
@@ -570,6 +578,22 @@ func drainQueue(t *testing.T, client *api.Client, expectedProcessed int) {
 	}
 }
 
+func enableBackgroundRepair(t *testing.T, client *api.Client) {
+	t.Helper()
+	write(t, client, mountPath+"/config", map[string]interface{}{
+		"drift_repair":             "repair",
+		"drift_reconcile_interval": "1m",
+		"drift_reconcile_batch":    4,
+	})
+}
+
+func disableBackgroundDrift(t *testing.T, client *api.Client) {
+	t.Helper()
+	write(t, client, mountPath+"/config", map[string]interface{}{
+		"drift_repair": "off",
+	})
+}
+
 func assertKubernetesSecret(
 	t *testing.T,
 	ctx context.Context,
@@ -779,6 +803,15 @@ func getKubernetesSecret(
 	return secret
 }
 
+func setKubernetesPayload(t *testing.T, secret *corev1.Secret, password string) {
+	t.Helper()
+	payload, err := json.Marshal(map[string]string{"password": password})
+	if err != nil {
+		t.Fatalf("marshal Kubernetes payload: %v", err)
+	}
+	secret.Data[dataKeyPayload] = payload
+}
+
 func updateKubernetesSecret(
 	t *testing.T,
 	ctx context.Context,
@@ -829,6 +862,30 @@ func assertStatusDetails(t *testing.T, client *api.Client, expectedState string,
 	}
 }
 
+func assertBackgroundRepairStatus(t *testing.T, client *api.Client, expectedVerification string) {
+	t.Helper()
+	secret := readStatus(t, client)
+	if got := secret.Data["state"]; got != "SYNCED" {
+		t.Fatalf("status state = %v, want SYNCED", got)
+	}
+	object := objectByID(t, objectsFromSecret(t, secret.Data["objects"]), "secret-path")
+	if got := object["state"]; got != "SYNCED" {
+		t.Fatalf("status object state = %v, want SYNCED", got)
+	}
+	if got := object["verification"]; got != expectedVerification {
+		t.Fatalf("status verification = %v, want %s", got, expectedVerification)
+	}
+	if got := object["last_drift_detected_time"]; got == "" {
+		t.Fatal("last_drift_detected_time must be set after background repair")
+	}
+	if got := object["last_repair_time"]; got == "" {
+		t.Fatal("last_repair_time must be set after background repair")
+	}
+	if got := intFromSecret(t, object["repair_count"]); got < 1 {
+		t.Fatalf("repair_count = %d, want at least 1", got)
+	}
+}
+
 func readStatus(t *testing.T, client *api.Client) *api.Secret {
 	t.Helper()
 	secret, err := client.Logical().Read(mountPath + "/status/app/db")
@@ -839,6 +896,37 @@ func readStatus(t *testing.T, client *api.Client) *api.Secret {
 		t.Fatal("status response is nil")
 	}
 	return secret
+}
+
+func objectsFromSecret(t *testing.T, raw interface{}) []map[string]interface{} {
+	t.Helper()
+	if values, ok := raw.([]interface{}); ok {
+		objects := make([]map[string]interface{}, 0, len(values))
+		for _, value := range values {
+			object, ok := value.(map[string]interface{})
+			if !ok {
+				t.Fatalf("object = %T, want map[string]interface{}", value)
+			}
+			objects = append(objects, object)
+		}
+		return objects
+	}
+	objects, ok := raw.([]map[string]interface{})
+	if !ok {
+		t.Fatalf("objects = %T, want []map[string]interface{}", raw)
+	}
+	return objects
+}
+
+func objectByID(t *testing.T, objects []map[string]interface{}, objectID string) map[string]interface{} {
+	t.Helper()
+	for _, object := range objects {
+		if object["object_id"] == objectID {
+			return object
+		}
+	}
+	t.Fatalf("object %q missing in %#v", objectID, objects)
+	return nil
 }
 
 func assertReconcilePlan(t *testing.T, client *api.Client, expectedState string) {

@@ -129,3 +129,47 @@ func TestReconcileApplyMapsReadStateToStatus(t *testing.T) {
 		})
 	}
 }
+
+func TestReconcileApplySyncedPreservesRepairCount(t *testing.T) {
+	env := newBackendTestEnv(t)
+
+	env.writeAppDBSecret("initial")
+	env.createFakeDestination("default")
+	associationResp := env.createDefaultFakeAssociation()
+	associationID := associationIDFromResponse(t, associationResp)
+	if err := putStatus(context.Background(), env.storage, statusRecord{
+		Path:                  "app/db",
+		Version:               1,
+		AssociationID:         associationID,
+		ObjectID:              syncObjectIDSecretPath,
+		DestinationRef:        "fake/default",
+		ResolvedName:          "prod/app/db",
+		State:                 string(domain.SyncStateDrifted),
+		LastDriftDetectedTime: "2026-07-01T10:00:00Z",
+		LastRepairTime:        "2026-07-01T10:01:00Z",
+		RepairCount:           3,
+		UpdatedTime:           "2026-07-01T10:01:00Z",
+	}); err != nil {
+		t.Fatalf("write drift status: %v", err)
+	}
+
+	resp := env.update("reconcile/app/db")
+	assertNoErrorResponse(t, resp)
+
+	status, err := getStatus(context.Background(), env.storage, "app/db", associationID, syncObjectIDSecretPath)
+	if err != nil {
+		t.Fatalf("read status: %v", err)
+	}
+	if status == nil {
+		t.Fatal("status must be written")
+	}
+	if got := status.State; got != string(domain.SyncStateSynced) {
+		t.Fatalf("status state = %s, want %s", got, domain.SyncStateSynced)
+	}
+	if got := status.RepairCount; got != 3 {
+		t.Fatalf("repair_count = %d, want 3", got)
+	}
+	if got := status.LastRepairTime; got != "2026-07-01T10:01:00Z" {
+		t.Fatalf("last_repair_time = %s, want 2026-07-01T10:01:00Z", got)
+	}
+}

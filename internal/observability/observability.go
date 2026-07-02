@@ -20,6 +20,7 @@ const (
 	MetricReadinessChecks         = "openbao.secret_sync.readiness.checks"
 	MetricRemoteMutationBlocked   = "openbao.secret_sync.remote_mutation.blocked"
 	MetricReconcileRuns           = "openbao.secret_sync.reconcile.runs"
+	MetricDriftRepairs            = "openbao.secret_sync.drift.repairs"
 	MetricQueueCapacity           = "openbao.secret_sync.queue.capacity"
 	MetricQueueUtilization        = "openbao.secret_sync.queue.utilization"
 	MetricRestoreGuardActive      = "openbao.secret_sync.restore_guard.active"
@@ -58,6 +59,7 @@ const (
 	ReasonDisabled         = "disabled"
 	ReasonRestoreGuard     = "restore_guard"
 	ReasonReplicationState = "replication_state"
+	ReasonCapacity         = "capacity"
 )
 
 // Recorder captures the plugin's metric surface.
@@ -68,6 +70,7 @@ type Recorder interface {
 	ReadinessCheck(context.Context, ReadinessCheckEvent)
 	RemoteMutationBlocked(context.Context, RemoteMutationBlockedEvent)
 	ReconcileRun(context.Context, ReconcileRunEvent)
+	DriftRepair(context.Context, DriftRepairEvent)
 	QueueCapacity(context.Context, QueueCapacityEvent)
 	RestoreGuardActive(context.Context, bool)
 }
@@ -106,6 +109,14 @@ type RemoteMutationBlockedEvent struct {
 
 // ReconcileRunEvent describes one reconcile object result.
 type ReconcileRunEvent struct {
+	Result          string
+	ErrorClass      string
+	DestinationType string
+	Granularity     string
+}
+
+// DriftRepairEvent describes one background drift repair operation result.
+type DriftRepairEvent struct {
 	Result          string
 	ErrorClass      string
 	DestinationType string
@@ -180,6 +191,13 @@ func NewWithMeter(meter metric.Meter) (Recorder, error) {
 	if err != nil {
 		return nil, err
 	}
+	driftRepairsTotal, err := meter.Int64Counter(
+		MetricDriftRepairs,
+		metric.WithDescription("Background drift repair operation results."),
+	)
+	if err != nil {
+		return nil, err
+	}
 	restoreGuardActive, err := meter.Int64Gauge(
 		MetricRestoreGuardActive,
 		metric.WithDescription("Whether restore guard currently blocks remote mutation."),
@@ -210,6 +228,7 @@ func NewWithMeter(meter metric.Meter) (Recorder, error) {
 		readinessChecksTotal:       readinessChecksTotal,
 		remoteMutationBlockedTotal: remoteMutationBlockedTotal,
 		reconcileRunsTotal:         reconcileRunsTotal,
+		driftRepairsTotal:          driftRepairsTotal,
 		queueCapacity:              queueCapacity,
 		queueUtilization:           queueUtilization,
 		restoreGuardActive:         restoreGuardActive,
@@ -226,6 +245,7 @@ func (Noop) ReadinessCheck(context.Context, ReadinessCheckEvent)   {}
 func (Noop) RemoteMutationBlocked(context.Context, RemoteMutationBlockedEvent) {
 }
 func (Noop) ReconcileRun(context.Context, ReconcileRunEvent)   {}
+func (Noop) DriftRepair(context.Context, DriftRepairEvent)     {}
 func (Noop) QueueCapacity(context.Context, QueueCapacityEvent) {}
 func (Noop) RestoreGuardActive(context.Context, bool)          {}
 
@@ -237,6 +257,7 @@ type meterRecorder struct {
 	readinessChecksTotal       metric.Int64Counter
 	remoteMutationBlockedTotal metric.Int64Counter
 	reconcileRunsTotal         metric.Int64Counter
+	driftRepairsTotal          metric.Int64Counter
 	queueCapacity              metric.Int64Gauge
 	queueUtilization           metric.Float64Gauge
 	restoreGuardActive         metric.Int64Gauge
@@ -268,6 +289,10 @@ func (r meterRecorder) RemoteMutationBlocked(ctx context.Context, event RemoteMu
 
 func (r meterRecorder) ReconcileRun(ctx context.Context, event ReconcileRunEvent) {
 	r.reconcileRunsTotal.Add(ctx, 1, metric.WithAttributes(reconcileRunAttributes(event)...))
+}
+
+func (r meterRecorder) DriftRepair(ctx context.Context, event DriftRepairEvent) {
+	r.driftRepairsTotal.Add(ctx, 1, metric.WithAttributes(driftRepairAttributes(event)...))
 }
 
 func (r meterRecorder) QueueCapacity(ctx context.Context, event QueueCapacityEvent) {
@@ -319,6 +344,15 @@ func remoteMutationBlockedAttributes(event RemoteMutationBlockedEvent) []attribu
 }
 
 func reconcileRunAttributes(event ReconcileRunEvent) []attribute.KeyValue {
+	return []attribute.KeyValue{
+		attribute.String(AttributeResult, normalize(event.Result)),
+		attribute.String(AttributeErrorClass, normalizeNone(event.ErrorClass)),
+		attribute.String(AttributeDestinationType, normalize(event.DestinationType)),
+		attribute.String(AttributeGranularity, normalize(event.Granularity)),
+	}
+}
+
+func driftRepairAttributes(event DriftRepairEvent) []attribute.KeyValue {
 	return []attribute.KeyValue{
 		attribute.String(AttributeResult, normalize(event.Result)),
 		attribute.String(AttributeErrorClass, normalizeNone(event.ErrorClass)),

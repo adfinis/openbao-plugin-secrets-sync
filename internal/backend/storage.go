@@ -13,7 +13,10 @@ import (
 	"github.com/openbao/openbao/sdk/v2/logical"
 )
 
-var errQueuedOperationClaimed = errors.New("queued operation is currently claimed")
+var (
+	errQueuedOperationClaimed = errors.New("queued operation is currently claimed")
+	errQueueCapacity          = errors.New("sync queue is full")
+)
 
 func isQueuedOperationClaimedError(err error) bool {
 	return errors.Is(err, errQueuedOperationClaimed)
@@ -539,7 +542,21 @@ func getOutbox(ctx context.Context, storage logical.Storage, id string) (*outbox
 	if err := entry.DecodeJSON(&record); err != nil {
 		return nil, err
 	}
+	normalizeOutboxDefaults(&record)
 	return &record, nil
+}
+
+func normalizeOutboxDefaults(record *outboxRecord) {
+	if record.Trigger == "" {
+		record.Trigger = outboxTriggerUser
+	}
+}
+
+func outboxTrigger(record outboxRecord) string {
+	if record.Trigger == "" {
+		return outboxTriggerUser
+	}
+	return record.Trigger
 }
 
 func listQueuedOutboxIDs(ctx context.Context, storage logical.Storage) ([]string, error) {
@@ -678,6 +695,64 @@ func queuedUpsertIDsForPathVersion(
 	return matchingIDs, nil
 }
 
+func hasQueuedUpsertForAssociationObject(
+	ctx context.Context,
+	storage logical.Storage,
+	path string,
+	associationID string,
+	objectID string,
+	minVersion int,
+) (bool, error) {
+	ids, err := listQueuedOutboxIDsForPath(ctx, storage, path)
+	if err != nil {
+		return false, err
+	}
+	for _, id := range ids {
+		record, err := getOutbox(ctx, storage, id)
+		if err != nil {
+			return false, err
+		}
+		if record == nil ||
+			record.Type != outbox.OperationTypeUpsert ||
+			record.AssociationID != associationID ||
+			record.ObjectID != objectID {
+			continue
+		}
+		if record.Version >= minVersion {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+func hasQueuedUpsertForAssociationVersion(
+	ctx context.Context,
+	storage logical.Storage,
+	path string,
+	associationID string,
+	minVersion int,
+) (bool, error) {
+	ids, err := listQueuedOutboxIDsForPath(ctx, storage, path)
+	if err != nil {
+		return false, err
+	}
+	for _, id := range ids {
+		record, err := getOutbox(ctx, storage, id)
+		if err != nil {
+			return false, err
+		}
+		if record == nil ||
+			record.Type != outbox.OperationTypeUpsert ||
+			record.AssociationID != associationID {
+			continue
+		}
+		if record.Version >= minVersion {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
 func cancelQueuedOutboxIDs(ctx context.Context, storage logical.Storage, ids []string) error {
 	for _, id := range ids {
 		record, err := getOutbox(ctx, storage, id)
@@ -750,6 +825,9 @@ func putStatus(ctx context.Context, storage logical.Storage, record statusRecord
 	if existing != nil && record.Version < existing.Version {
 		return nil
 	}
+	if existing != nil {
+		preserveStatusDriftBookkeeping(&record, *existing)
+	}
 	entry, err := logical.StorageEntryJSON(
 		statusStorageKey(record.Path, record.AssociationID, record.ObjectID),
 		record,
@@ -758,6 +836,24 @@ func putStatus(ctx context.Context, storage logical.Storage, record statusRecord
 		return err
 	}
 	return storage.Put(ctx, entry)
+}
+
+func preserveStatusDriftBookkeeping(record *statusRecord, existing statusRecord) {
+	if record.Verification == "" {
+		record.Verification = existing.Verification
+	}
+	if record.LastReconcileTime == "" {
+		record.LastReconcileTime = existing.LastReconcileTime
+	}
+	if record.LastDriftDetectedTime == "" {
+		record.LastDriftDetectedTime = existing.LastDriftDetectedTime
+	}
+	if record.LastRepairTime == "" {
+		record.LastRepairTime = existing.LastRepairTime
+	}
+	if record.RepairCount == 0 {
+		record.RepairCount = existing.RepairCount
+	}
 }
 
 func deleteStatus(ctx context.Context, storage logical.Storage, record statusRecord) error {

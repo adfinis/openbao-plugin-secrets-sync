@@ -292,6 +292,7 @@ func (r destinationRuntime) ReadState(
 		PayloadSHA256:  payloadSHA256ForMode(secret, req.DataMap),
 		SourceVersion:  sourceVersion,
 		RemoteVersion:  secret.ResourceVersion,
+		Verification:   providers.RemoteStateVerificationValue,
 	}, nil
 }
 
