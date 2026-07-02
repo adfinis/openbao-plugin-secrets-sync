@@ -1,10 +1,9 @@
 # OpenBao Secret Sync docs
 
 
-These docs describe the current design and implementation direction for
-`openbao-plugin-secrets-sync`. The plugin is still early-stage, so documents
-may describe intended contracts as well as implemented behavior. When that
-matters, the document should say so explicitly.
+These docs describe how to use, operate, secure, and maintain
+`openbao-plugin-secrets-sync`. Documents in this tree describe maintained
+behavior and contracts.
 
 ## Documentation shape
 
@@ -15,9 +14,9 @@ page when you need to choose the right detailed document.
 
 - [Get started](getting-started/README.md) points to the shortest local
   validation paths.
-- [User guide](guides/user-guide.md) shows the current operator workflow for
-  installing, configuring, writing source data, creating associations, and
-  inspecting status.
+- [User guide](guides/user-guide.md) shows the operator workflow for installing,
+  configuring, writing source data, creating associations, and inspecting
+  status.
 - [Provider guides](providers/README.md) explain destination-specific
   configuration for AWS Secrets Manager, Kubernetes Secrets, and GitLab project
   variables.
@@ -27,8 +26,8 @@ page when you need to choose the right detailed document.
 - [Operations](operations/README.md) collects operator-facing procedures.
 - [Operator runbook](operations/operator-runbook.md) gives operational checks,
   troubleshooting flows, restore-guard handling, and failure response guidance.
-- [Observability](operations/observability.md) describes the current
-  OpenTelemetry metric surface and attribute policy.
+- [Observability](operations/observability.md) describes the OpenTelemetry
+  metric surface and attribute policy.
 - [Release engineering](operations/release.md) describes the artifact workflow
   and plugin verification steps.
 

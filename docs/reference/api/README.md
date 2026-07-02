@@ -8,5 +8,5 @@ plugin.
   to `/v1/secret-sync`.
 
 The OpenAPI spec is intentionally a design and inspection aid while the plugin
-is pre-release. It should help review path shape, field names, defaults,
-response structure, and error classes before the API is treated as stable.
+is pre-release. Use it to review path shape, field names, defaults, response
+structure, and error classes before the API is treated as stable.

@@ -1,11 +1,9 @@
-# Release Engineering
+# Release engineering
 
+This document describes the release artifact workflow for
+`openbao-plugin-secrets-sync`.
 
-This document describes the current release baseline for
-`openbao-plugin-secrets-sync`. The project is still early-stage, so this is a
-minimum artifact workflow rather than the final supply-chain posture.
-
-## Current Release Shape
+## Release shape
 
 Release Please manages changelog and version bumps through
 `.release-please-manifest.json` and `CHANGELOG.md`. It opens release PRs only.
@@ -45,7 +43,7 @@ It contains the static plugin binary at `/openbao-plugin-secrets-sync`.
 Release tags must not contain semver build metadata (`+...`) because the
 OpenBao OCI plugin version is used directly as the image tag.
 
-## Local Artifact Build
+## Local artifact build
 
 Build release artifacts locally:
 
@@ -119,7 +117,7 @@ REPO=adfinis/openbao-plugin-secrets-sync OWNER=adfinis \
   bash hack/ci/generate-provenance-index.sh
 ```
 
-## Release Flow
+## Release flow
 
 The release process has three separate automation steps:
 
@@ -151,13 +149,12 @@ OPENBAO_SECRET_SYNC_RELEASE_TAG_GPG_EMAIL
 Set these values as repository Actions secrets. No broad personal access token
 is required for the default release path.
 
-The current tag ruleset protects semver tags from update and deletion.
+The tag ruleset protects semver tags from update and deletion.
 Automated tag creation is performed by `GITHUB_TOKEN` in the release-tag
-workflow. If release automation moves to GitHub Apps later, restrict semver tag
-creation to the release tag app and keep the release PR and tag identities
-separate.
+workflow. For GitHub App-based release automation, restrict semver tag creation
+to the release tag app and keep the release PR and tag identities separate.
 
-## Artifact Workflow
+## Artifact workflow
 
 The workflow in `.github/workflows/release.yml` runs on the internal
 `release-artifacts` repository dispatch event:
@@ -208,7 +205,7 @@ The workflow:
   conflicting existing assets;
 - refuses to add missing assets to an already published release.
 
-## Operator Verification
+## Operator verification
 
 Download the artifact for the target platform and `checksums.txt`, then verify:
 
@@ -275,7 +272,7 @@ bao plugin register \
 Mount or tune an existing mount to use the registered version according to the
 normal OpenBao plugin lifecycle.
 
-## OCI Plugin Images
+## OCI plugin images
 
 OpenBao supports OCI-based plugin distribution through declarative `plugin`
 configuration. In that model OpenBao downloads an OCI image, extracts the
@@ -340,11 +337,3 @@ plugin "secret" "openbao-plugin-secrets-sync" {
 digest. The binary checksum is recorded per platform in
 `provenance-index.json` under the matching release asset as
 `openbao_plugin_catalog_sha256`.
-
-## Deferred Release Hardening
-
-The release workflow includes a self-contained OpenBao OCI-download e2e smoke
-test before publishing. Remaining release confidence still depends on the first
-real tag run in GitHub, because local tests cannot prove GHCR permissions,
-keyless signing, registry-pushed attestations, or GitHub Release upload
-behavior.

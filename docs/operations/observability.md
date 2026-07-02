@@ -1,14 +1,14 @@
 # Observability
 
 
-The first observability slice instruments the plugin with OpenTelemetry metric
-API calls behind `internal/observability`. It intentionally does not configure
-an exporter, collector endpoint, or credentials. The OpenTelemetry SDK/exporter
-boundary remains a deployment concern.
+Secret Sync emits OpenTelemetry metric API calls through
+`internal/observability`. The plugin does not configure an exporter, collector
+endpoint, or exporter credentials. Configure the OpenTelemetry SDK and exporter
+in the OpenBao deployment.
 
-## Metric Surface
+## Metric surface
 
-Implemented OpenTelemetry instrument names:
+OpenTelemetry instrument names:
 
 ```text
 openbao.secret_sync.queue.depth
@@ -29,7 +29,7 @@ these names in Prometheus form, for example
 series, but that is an exporter transformation rather than the plugin's
 instrument contract.
 
-Current instrumentation points:
+Instrumentation points:
 
 - queue summary reads and drains record queue depth by durable outbox state,
   configured capacity, and capacity utilization;
@@ -45,7 +45,7 @@ Current instrumentation points:
 - config read/write and restore-guard acknowledgement record restore guard
   active state.
 
-## Attribute Policy
+## Attribute policy
 
 Allowed metric attributes:
 
@@ -78,15 +78,15 @@ aws_arn
 account_id
 ```
 
-The first implementation has unit tests that validate generated metric
-attributes against this policy. Status and API responses may still expose
-operator-facing metadata such as paths and remote names, but not payload
-hashes; this policy is stricter for telemetry labels because telemetry is
-usually aggregated and exported outside the OpenBao trust boundary.
+Unit tests validate generated metric attributes against this policy. Status and
+API responses may expose operator-facing metadata such as paths and remote
+names, but not payload hashes. This policy is stricter for telemetry labels
+because telemetry is usually aggregated and exported outside the OpenBao trust
+boundary.
 
-## Exporter Boundary
+## Exporter boundary
 
-The plugin currently uses the global OpenTelemetry meter. Without an installed
-OpenTelemetry SDK meter provider, these instruments are no-op. Future exporter
-work should prefer standard OpenTelemetry environment variables such as
-`OTEL_EXPORTER_OTLP_*` and avoid storing exporter credentials in plugin storage.
+The plugin uses the global OpenTelemetry meter. Without an installed
+OpenTelemetry SDK meter provider, these instruments are no-op. Prefer standard
+OpenTelemetry environment variables such as `OTEL_EXPORTER_OTLP_*` for exporter
+configuration. Do not store exporter credentials in plugin storage.

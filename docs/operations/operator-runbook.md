@@ -1,15 +1,10 @@
-# Operator Runbook
+# Operator runbook
 
+This runbook covers operational workflows for the OpenBao Secret Sync plugin.
+It assumes the plugin is mounted at `secret-sync/`; adjust paths if the mount
+name differs.
 
-This runbook covers current operational workflows for the OpenBao Secret Sync
-plugin. It assumes the plugin is mounted at `secret-sync/`; adjust paths if the
-mount name differs.
-
-The plugin is still early-stage. Treat these steps as implementation guidance
-for local testing, design review, and controlled evaluation, not as a finished
-production operations manual.
-
-## First Checks
+## First checks
 
 Confirm the mount responds:
 
@@ -37,7 +32,7 @@ bao write secret-sync/config disabled=true
 bao write secret-sync/config disabled=false
 ```
 
-## Destination Checks
+## Destination checks
 
 Read destination config. Sensitive fields must be redacted:
 
@@ -67,7 +62,7 @@ Use validation for configuration mistakes and health for runtime dependency
 state. A destination can validate correctly but still be unhealthy because of
 network, IAM, token, RBAC, or provider availability issues.
 
-## Source And Association Checks
+## Source and association checks
 
 Confirm the source path is explicitly syncable:
 
@@ -132,7 +127,7 @@ bao write -force secret-sync/associations/app/db/<association-id>/enable
 bao write -force secret-sync/associations/app/db/<association-id>/sync
 ```
 
-## Queue Operations
+## Queue operations
 
 Read the queue summary:
 
@@ -172,12 +167,12 @@ Cancel discards queued work; it is not retained in the queue summary.
 
 `queue/drain` can execute remote mutations. Keep it operator-scoped.
 
-## Operational Signals
+## Operational signals
 
 The plugin emits OpenTelemetry metric API calls only. Exporter setup remains an
 OpenBao deployment concern.
 
-Useful early alert inputs:
+Useful alert inputs:
 
 - `openbao.secret_sync.restore_guard.active` stays `1` after an expected
   restore or deployment review window;
@@ -190,7 +185,7 @@ Useful early alert inputs:
 - `openbao.secret_sync.readiness.checks` failures identify onboarding blockers
   without exposing source paths or destination names.
 
-## Status And Reconcile
+## Status and reconcile
 
 Read per-source status:
 
@@ -219,7 +214,7 @@ bao write -force secret-sync/reconcile/app/db
 Reconcile reads remote state. It does not write destination secrets and is safe
 to use while the restore guard is active.
 
-## Common Failure Classes
+## Common failure classes
 
 `DESTINATION_AUTH_ERROR` or provider error class `authn`:
 
@@ -264,7 +259,7 @@ to use while the restore guard is active.
 - check queue capacity;
 - verify the association and destination are enabled.
 
-## Restore Or Clone Review
+## Restore or clone review
 
 After restore or clone, keep mutation blocked until remote ownership has been
 reviewed:
@@ -288,7 +283,7 @@ Resume remote mutation:
 bao write -force secret-sync/config/restore-guard/acknowledge
 ```
 
-## Evidence To Capture
+## Evidence to capture
 
 For troubleshooting or issue reports, capture:
 

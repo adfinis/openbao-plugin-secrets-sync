@@ -17,7 +17,7 @@ bao write secret-sync/destinations/aws-sm/prod \
 
 ## Configure assume-role auth
 
-Use `auth_mode=assume_role` when OpenBao should assume a destination role:
+Use `auth_mode=assume_role` when OpenBao assumes a destination role:
 
 ```sh
 bao write secret-sync/destinations/aws-sm/prod \
@@ -28,8 +28,8 @@ bao write secret-sync/destinations/aws-sm/prod \
   session_name=openbao-plugin-secrets-sync
 ```
 
-Static AWS access keys and session tokens are intentionally not supported yet.
-Use workload identity or assume-role auth.
+Static AWS access keys and session tokens are recognized as sensitive fields
+but are not supported auth material. Use workload identity or assume-role auth.
 
 `delete_recovery_window_days` controls the AWS Secrets Manager scheduled-delete
 recovery window used when an association with `delete_mode=delete` deletes an

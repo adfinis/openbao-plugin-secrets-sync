@@ -30,7 +30,7 @@ bao write secret-sync/destinations/gitlab/prod \
 
 Non-local `http://` GitLab URLs are rejected by default. For a local Docker or
 private test network that intentionally uses HTTP, set
-`allow_insecure_http=true`. Production destinations should use HTTPS.
+`allow_insecure_http=true`. Use HTTPS for production destinations.
 
 ## Configure variable attributes
 
@@ -38,13 +38,13 @@ GitLab destination config controls the attributes written to created or updated
 project variables:
 
 - `environment_scope`: GitLab environment scope. The default is `*`.
-- `protected`: whether GitLab should expose the variable only to protected refs.
-- `masked`: whether GitLab should mask the variable value in job logs.
-- `hidden`: whether GitLab should create the variable as masked and hidden.
+- `protected`: whether GitLab exposes the variable only to protected refs.
+- `masked`: whether GitLab masks the variable value in job logs.
+- `hidden`: whether GitLab creates the variable as masked and hidden.
 - `variable_raw`: whether GitLab treats the value as a raw string. The default
-  is `true`; set `false` only when GitLab should expand variable references in
+  is `true`; set `false` only when GitLab expands variable references in
   the value.
-- `variable_type`: `env_var` by default, or `file` when jobs should receive a
+- `variable_type`: `env_var` by default, or `file` when jobs need to receive a
   temporary file path.
 
 `hidden=true` implies `masked=true`. GitLab only supports making a variable
@@ -121,7 +121,7 @@ Source keys used with `secret-key` granularity must be non-empty, have no
 surrounding whitespace, and must not contain `/`, `.`, or `..`.
 
 The GitLab provider also supports `secret-path` associations. Use that shape
-only when one GitLab variable should contain the full canonical JSON payload.
+only when one GitLab variable needs to contain the full canonical JSON payload.
 Do not combine masked variables, `variable_raw=false`, and JSON payloads; use
 `secret-key` with `format=raw` for masked GitLab variables.
 
@@ -129,9 +129,9 @@ Do not combine masked variables, `variable_raw=false`, and JSON payloads; use
 
 Changing a GitLab destination updates stored config and validates the merged
 provider settings, but it does not enqueue sync work for existing associations.
-If a change to `protected`, `masked`, `variable_raw`, or `variable_type` should
-be reflected in existing GitLab variables, plan the association and then trigger
-a manual sync:
+If a change to `protected`, `masked`, `variable_raw`, or `variable_type` needs
+to be reflected in existing GitLab variables, plan the association and then
+trigger a manual sync:
 
 ```sh
 bao write secret-sync/associations/app/db/plan \

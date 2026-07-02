@@ -1,11 +1,10 @@
-# API Compatibility
-
+# API compatibility
 
 `openbao-plugin-secrets-sync` exposes a KV-v2-like local source-secret API. The
 goal is operator familiarity, not drop-in replacement compatibility with the
 OpenBao KV-v2 secrets engine.
 
-## Compatibility Position
+## Compatibility position
 
 The source API is compatible with KV-v2 at the concept and workflow level:
 
@@ -30,7 +29,7 @@ The source API is not a strict client compatibility layer:
 - exact KV-v2 wire compatibility must be proven by golden tests before it is
   claimed.
 
-## Implemented Source Paths
+## Implemented source paths
 
 ```text
 POST   data/<path>       write a new local source version
@@ -45,7 +44,7 @@ LIST   metadata/<path>   list local source metadata keys
 DELETE metadata/<path>   delete all local source metadata and versions
 ```
 
-## List Pagination
+## List pagination
 
 Public LIST endpoints accept OpenBao paginated-list parameters and pass them
 through to storage:
@@ -58,10 +57,9 @@ through to storage:
 This applies to `metadata`, `metadata/<path>`, `destinations/<type>`, and
 `associations`.
 
-`PATCH data/<path>` is intentionally deferred until partial-update semantics
-are worth the extra compatibility and validation surface.
+`PATCH data/<path>` is not part of the source API.
 
-## Metadata Policy
+## Metadata policy
 
 Metadata writes support:
 
