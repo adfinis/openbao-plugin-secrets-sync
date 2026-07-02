@@ -66,8 +66,11 @@ func Backend(_ *logical.BackendConfig) *secretSyncBackend {
 			pathReconcile(&b),
 			pathQueue(&b),
 		),
-		Invalidate: func(_ context.Context, _ string) {
-			b.invalidate()
+		Invalidate: func(ctx context.Context, key string) {
+			b.invalidate(ctx, key)
+		},
+		Clean: func(ctx context.Context) {
+			b.cleanup(ctx)
 		},
 		PeriodicFunc: func(ctx context.Context, req *logical.Request) error {
 			return b.periodic(ctx, req)
@@ -87,11 +90,27 @@ type secretSyncBackend struct {
 	writeLocks       []*locksutil.LockEntry
 	providerRegistry *providers.Registry
 	observer         observability.Recorder
+
+	runtimeCache             map[string]destinationRuntimeCacheEntry
+	runtimeBuilds            map[string]*destinationRuntimeBuild
+	runtimeCacheEpoch        uint64
+	runtimeDestinationEpochs map[string]uint64
 }
 
-func (b *secretSyncBackend) invalidate() {
-	b.cacheMu.Lock()
-	defer b.cacheMu.Unlock()
+func (b *secretSyncBackend) invalidate(ctx context.Context, key string) {
+	ref, ok := destinationRefFromInvalidationKey(key)
+	if ok {
+		b.invalidateDestinationRuntime(ctx, ref)
+		return
+	}
+	if key == "" || strings.HasPrefix(key, destinationStoragePrefix) ||
+		strings.HasPrefix(key, destinationSecretsPrefix) {
+		b.clearDestinationRuntimes(ctx)
+	}
+}
+
+func (b *secretSyncBackend) cleanup(ctx context.Context) {
+	b.clearDestinationRuntimes(ctx)
 }
 
 func (b *secretSyncBackend) HandleRequest(ctx context.Context, req *logical.Request) (*logical.Response, error) {

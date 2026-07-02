@@ -53,26 +53,30 @@ type HealthCase struct {
 
 // PlanCase validates provider dry-run action mapping.
 type PlanCase struct {
-	Name       string
-	Request    providers.PlanRequest
-	Action     string
-	ErrorClass providers.ErrorClass
+	Name        string
+	Destination providers.DestinationConfig
+	Request     providers.PlanRequest
+	Action      string
+	ErrorClass  providers.ErrorClass
 }
 
 // UpsertCase validates a successful upsert mutation.
 type UpsertCase struct {
+	Destination   providers.DestinationConfig
 	Request       providers.UpsertRequest
 	RemoteVersion string
 }
 
 // DeleteCase validates a successful delete mutation.
 type DeleteCase struct {
+	Destination   providers.DestinationConfig
 	Request       providers.DeleteRequest
 	RemoteVersion string
 }
 
 // ReadStateCase validates remote state lookup.
 type ReadStateCase struct {
+	Destination    providers.DestinationConfig
 	Request        providers.ReadStateRequest
 	Exists         bool
 	OwnershipKnown bool
@@ -147,6 +151,7 @@ type MaturityMatrix struct {
 type MaturityCase struct {
 	Name              string
 	Provider          providers.Provider
+	Destination       providers.DestinationConfig
 	Operation         Operation
 	PlanRequest       providers.PlanRequest
 	UpsertRequest     providers.UpsertRequest
@@ -180,28 +185,28 @@ func Run(t *testing.T, harness Harness) {
 		runHealthCheck(t, harness.Provider, *harness.HealthCase)
 	}
 	for _, planCase := range harness.PlanCases {
-		runPlanCheck(t, harness.Provider, planCase)
+		runPlanCheck(t, harness.Provider, harness.ValidDestination, planCase)
 	}
 	if harness.Lifecycle != nil {
-		runLifecycleCheck(t, harness.Provider, *harness.Lifecycle)
+		runLifecycleCheck(t, harness.Provider, harness.ValidDestination, *harness.Lifecycle)
 	}
 	if harness.Maturity != nil {
-		runMaturityMatrix(t, harness.Provider, *harness.Maturity)
+		runMaturityMatrix(t, harness.Provider, harness.ValidDestination, *harness.Maturity)
 	}
 	if harness.UpsertSuccess != nil {
-		runUpsertSuccessCheck(t, harness.Provider, *harness.UpsertSuccess)
+		runUpsertSuccessCheck(t, harness.Provider, harness.ValidDestination, *harness.UpsertSuccess)
 	}
 	if harness.DeleteSuccess != nil {
-		runDeleteSuccessCheck(t, harness.Provider, *harness.DeleteSuccess)
+		runDeleteSuccessCheck(t, harness.Provider, harness.ValidDestination, *harness.DeleteSuccess)
 	}
 	if harness.ReadStateCase != nil {
-		runReadStateCheck(t, harness.Provider, *harness.ReadStateCase)
+		runReadStateCheck(t, harness.Provider, harness.ValidDestination, *harness.ReadStateCase)
 	}
 	for _, errorCase := range harness.UpsertErrors {
-		runUpsertErrorCheck(t, harness.Provider, errorCase)
+		runUpsertErrorCheck(t, harness.Provider, harness.ValidDestination, errorCase)
 	}
 	for _, errorCase := range harness.DeleteErrors {
-		runDeleteErrorCheck(t, harness.Provider, errorCase)
+		runDeleteErrorCheck(t, harness.Provider, harness.ValidDestination, errorCase)
 	}
 }
 
@@ -233,13 +238,13 @@ func runValidationCheck(
 ) {
 	t.Helper()
 	t.Run("validate", func(t *testing.T) {
-		if err := provider.Validate(context.Background(), validDestination); err != nil {
+		if err := provider.ValidateConfig(context.Background(), validDestination); err != nil {
 			t.Fatalf("validate valid destination: %v", err)
 		}
 		if errorCase == nil {
 			return
 		}
-		err := provider.Validate(context.Background(), errorCase.Destination)
+		err := provider.ValidateConfig(context.Background(), errorCase.Destination)
 		assertProviderErrorClass(t, err, errorCase.ErrorClass)
 	})
 }
@@ -247,7 +252,8 @@ func runValidationCheck(
 func runHealthCheck(t *testing.T, provider providers.Provider, healthCase HealthCase) {
 	t.Helper()
 	t.Run("health", func(t *testing.T) {
-		health, err := provider.Health(context.Background(), healthCase.Destination)
+		runtime := openRuntime(t, provider, healthCase.Destination)
+		health, err := runtime.Health(context.Background())
 		if err != nil {
 			t.Fatalf("health: %v", err)
 		}
@@ -263,10 +269,16 @@ func runHealthCheck(t *testing.T, provider providers.Provider, healthCase Health
 	})
 }
 
-func runPlanCheck(t *testing.T, provider providers.Provider, planCase PlanCase) {
+func runPlanCheck(
+	t *testing.T,
+	provider providers.Provider,
+	defaultDestination providers.DestinationConfig,
+	planCase PlanCase,
+) {
 	t.Helper()
 	t.Run("plan/"+planCase.Name, func(t *testing.T) {
-		result, err := provider.Plan(context.Background(), planCase.Request)
+		runtime := openRuntime(t, provider, destinationOrDefault(planCase.Destination, defaultDestination))
+		result, err := runtime.Plan(context.Background(), planCase.Request)
 		if err != nil {
 			t.Fatalf("plan: %v", err)
 		}
@@ -282,10 +294,16 @@ func runPlanCheck(t *testing.T, provider providers.Provider, planCase PlanCase) 
 	})
 }
 
-func runUpsertSuccessCheck(t *testing.T, provider providers.Provider, upsertCase UpsertCase) {
+func runUpsertSuccessCheck(
+	t *testing.T,
+	provider providers.Provider,
+	defaultDestination providers.DestinationConfig,
+	upsertCase UpsertCase,
+) {
 	t.Helper()
 	t.Run("upsert", func(t *testing.T) {
-		result, err := provider.Upsert(context.Background(), upsertCase.Request)
+		runtime := openRuntime(t, provider, destinationOrDefault(upsertCase.Destination, defaultDestination))
+		result, err := runtime.Upsert(context.Background(), upsertCase.Request)
 		if err != nil {
 			t.Fatalf("upsert: %v", err)
 		}
@@ -293,10 +311,16 @@ func runUpsertSuccessCheck(t *testing.T, provider providers.Provider, upsertCase
 	})
 }
 
-func runDeleteSuccessCheck(t *testing.T, provider providers.Provider, deleteCase DeleteCase) {
+func runDeleteSuccessCheck(
+	t *testing.T,
+	provider providers.Provider,
+	defaultDestination providers.DestinationConfig,
+	deleteCase DeleteCase,
+) {
 	t.Helper()
 	t.Run("delete", func(t *testing.T) {
-		result, err := provider.Delete(context.Background(), deleteCase.Request)
+		runtime := openRuntime(t, provider, destinationOrDefault(deleteCase.Destination, defaultDestination))
+		result, err := runtime.Delete(context.Background(), deleteCase.Request)
 		if err != nil {
 			t.Fatalf("delete: %v", err)
 		}
@@ -304,10 +328,16 @@ func runDeleteSuccessCheck(t *testing.T, provider providers.Provider, deleteCase
 	})
 }
 
-func runReadStateCheck(t *testing.T, provider providers.Provider, readStateCase ReadStateCase) {
+func runReadStateCheck(
+	t *testing.T,
+	provider providers.Provider,
+	defaultDestination providers.DestinationConfig,
+	readStateCase ReadStateCase,
+) {
 	t.Helper()
 	t.Run("read-state", func(t *testing.T) {
-		state, err := provider.ReadState(context.Background(), readStateCase.Request)
+		runtime := openRuntime(t, provider, destinationOrDefault(readStateCase.Destination, defaultDestination))
+		state, err := runtime.ReadState(context.Background(), readStateCase.Request)
 		if err != nil {
 			t.Fatalf("read state: %v", err)
 		}
@@ -318,41 +348,52 @@ func runReadStateCheck(t *testing.T, provider providers.Provider, readStateCase 
 	})
 }
 
-func runLifecycleCheck(t *testing.T, provider providers.Provider, lifecycleCase LifecycleCase) {
+func runLifecycleCheck(
+	t *testing.T,
+	provider providers.Provider,
+	defaultDestination providers.DestinationConfig,
+	lifecycleCase LifecycleCase,
+) {
 	t.Helper()
 	name := lifecycleCase.Name
 	if name == "" {
 		name = "default"
 	}
 	t.Run("lifecycle/"+name, func(t *testing.T) {
-		runPlanCheck(t, provider, lifecycleCase.CreatePlan)
-		runUpsertSuccessCheck(t, provider, lifecycleCase.Create)
-		runReadStateCheck(t, provider, lifecycleCase.StateAfterCreate)
-		runPlanCheck(t, provider, lifecycleCase.NoopPlan)
-		runPlanCheck(t, provider, lifecycleCase.UpdatePlan)
-		runUpsertSuccessCheck(t, provider, lifecycleCase.Update)
-		runReadStateCheck(t, provider, lifecycleCase.StateAfterUpdate)
-		runDeleteSuccessCheck(t, provider, lifecycleCase.Delete)
-		runReadStateCheck(t, provider, lifecycleCase.StateAfterDelete)
+		runPlanCheck(t, provider, defaultDestination, lifecycleCase.CreatePlan)
+		runUpsertSuccessCheck(t, provider, defaultDestination, lifecycleCase.Create)
+		runReadStateCheck(t, provider, defaultDestination, lifecycleCase.StateAfterCreate)
+		runPlanCheck(t, provider, defaultDestination, lifecycleCase.NoopPlan)
+		runPlanCheck(t, provider, defaultDestination, lifecycleCase.UpdatePlan)
+		runUpsertSuccessCheck(t, provider, defaultDestination, lifecycleCase.Update)
+		runReadStateCheck(t, provider, defaultDestination, lifecycleCase.StateAfterUpdate)
+		runDeleteSuccessCheck(t, provider, defaultDestination, lifecycleCase.Delete)
+		runReadStateCheck(t, provider, defaultDestination, lifecycleCase.StateAfterDelete)
 	})
 }
 
-func runMaturityMatrix(t *testing.T, provider providers.Provider, matrix MaturityMatrix) {
+func runMaturityMatrix(
+	t *testing.T,
+	provider providers.Provider,
+	defaultDestination providers.DestinationConfig,
+	matrix MaturityMatrix,
+) {
 	t.Helper()
 	t.Run("maturity", func(t *testing.T) {
-		runMaturityGroup(t, provider, "ownership-loss", matrix.OwnershipLoss)
-		runRequiredMaturityCase(t, provider, "auth-failure", matrix.AuthFailure)
-		runRequiredMaturityCase(t, provider, "throttling", matrix.Throttling)
-		runRequiredMaturityCase(t, provider, "payload-limit", matrix.PayloadLimit)
-		runPartialSuccessCase(t, provider, matrix.PartialSuccess)
-		runRequiredMaturityCase(t, provider, "stale-remote-state", matrix.StaleRemoteState)
-		runMaturityGroup(t, provider, "delete-semantics", matrix.DeleteSemantics)
+		runMaturityGroup(t, provider, defaultDestination, "ownership-loss", matrix.OwnershipLoss)
+		runRequiredMaturityCase(t, provider, defaultDestination, "auth-failure", matrix.AuthFailure)
+		runRequiredMaturityCase(t, provider, defaultDestination, "throttling", matrix.Throttling)
+		runRequiredMaturityCase(t, provider, defaultDestination, "payload-limit", matrix.PayloadLimit)
+		runPartialSuccessCase(t, provider, defaultDestination, matrix.PartialSuccess)
+		runRequiredMaturityCase(t, provider, defaultDestination, "stale-remote-state", matrix.StaleRemoteState)
+		runMaturityGroup(t, provider, defaultDestination, "delete-semantics", matrix.DeleteSemantics)
 	})
 }
 
 func runMaturityGroup(
 	t *testing.T,
 	provider providers.Provider,
+	defaultDestination providers.DestinationConfig,
 	name string,
 	cases []MaturityCase,
 ) {
@@ -361,13 +402,14 @@ func runMaturityGroup(
 		t.Fatalf("maturity/%s requires at least one case", name)
 	}
 	for _, maturityCase := range cases {
-		runRequiredMaturityCase(t, provider, name, maturityCase)
+		runRequiredMaturityCase(t, provider, defaultDestination, name, maturityCase)
 	}
 }
 
 func runRequiredMaturityCase(
 	t *testing.T,
 	defaultProvider providers.Provider,
+	defaultDestination providers.DestinationConfig,
 	group string,
 	maturityCase MaturityCase,
 ) {
@@ -380,13 +422,14 @@ func runRequiredMaturityCase(
 		name = string(maturityCase.Operation)
 	}
 	t.Run(group+"/"+name, func(t *testing.T) {
-		runMaturityCase(t, defaultProvider, maturityCase)
+		runMaturityCase(t, defaultProvider, defaultDestination, maturityCase)
 	})
 }
 
 func runPartialSuccessCase(
 	t *testing.T,
 	defaultProvider providers.Provider,
+	defaultDestination providers.DestinationConfig,
 	partialCase PartialSuccessCase,
 ) {
 	t.Helper()
@@ -404,7 +447,7 @@ func runPartialSuccessCase(
 				t.Fatal("atomic partial-success case must not expect an error class")
 			}
 			if partialCase.Case.Operation != "" {
-				runMaturityCase(t, defaultProvider, partialCase.Case)
+				runMaturityCase(t, defaultProvider, defaultDestination, partialCase.Case)
 			}
 		case PartialSuccessClassifiedFailure:
 			if partialCase.Case.Operation == "" {
@@ -413,7 +456,7 @@ func runPartialSuccessCase(
 			if partialCase.Case.ErrorClass == "" {
 				t.Fatal("classified partial-success requires an expected error class")
 			}
-			runMaturityCase(t, defaultProvider, partialCase.Case)
+			runMaturityCase(t, defaultProvider, defaultDestination, partialCase.Case)
 		default:
 			t.Fatalf("unknown partial-success mode %q", partialCase.Mode)
 		}
@@ -423,6 +466,7 @@ func runPartialSuccessCase(
 func runMaturityCase(
 	t *testing.T,
 	defaultProvider providers.Provider,
+	defaultDestination providers.DestinationConfig,
 	maturityCase MaturityCase,
 ) {
 	t.Helper()
@@ -431,15 +475,16 @@ func runMaturityCase(
 	if provider == nil {
 		provider = defaultProvider
 	}
+	destination := destinationOrDefault(maturityCase.Destination, defaultDestination)
 	switch maturityCase.Operation {
 	case OperationPlan:
-		runMaturityPlanCase(t, provider, maturityCase)
+		runMaturityPlanCase(t, provider, destination, maturityCase)
 	case OperationUpsert:
-		runMaturityUpsertCase(t, provider, maturityCase)
+		runMaturityUpsertCase(t, provider, destination, maturityCase)
 	case OperationDelete:
-		runMaturityDeleteCase(t, provider, maturityCase)
+		runMaturityDeleteCase(t, provider, destination, maturityCase)
 	case OperationReadState:
-		runMaturityReadStateCase(t, provider, maturityCase)
+		runMaturityReadStateCase(t, provider, destination, maturityCase)
 	case OperationHealth:
 		runMaturityHealthCase(t, provider, maturityCase)
 	default:
@@ -537,10 +582,12 @@ func assertMutationExpectationWellFormed(t *testing.T, maturityCase MaturityCase
 func runMaturityPlanCase(
 	t *testing.T,
 	provider providers.Provider,
+	destination providers.DestinationConfig,
 	maturityCase MaturityCase,
 ) {
 	t.Helper()
-	result, err := provider.Plan(context.Background(), maturityCase.PlanRequest)
+	runtime := openRuntime(t, provider, destination)
+	result, err := runtime.Plan(context.Background(), maturityCase.PlanRequest)
 	if err != nil {
 		t.Fatalf("plan: %v", err)
 	}
@@ -558,30 +605,36 @@ func runMaturityPlanCase(
 func runMaturityUpsertCase(
 	t *testing.T,
 	provider providers.Provider,
+	destination providers.DestinationConfig,
 	maturityCase MaturityCase,
 ) {
 	t.Helper()
-	result, err := provider.Upsert(context.Background(), maturityCase.UpsertRequest)
+	runtime := openRuntime(t, provider, destination)
+	result, err := runtime.Upsert(context.Background(), maturityCase.UpsertRequest)
 	assertMutationOutcome(t, result, err, maturityCase)
 }
 
 func runMaturityDeleteCase(
 	t *testing.T,
 	provider providers.Provider,
+	destination providers.DestinationConfig,
 	maturityCase MaturityCase,
 ) {
 	t.Helper()
-	result, err := provider.Delete(context.Background(), maturityCase.DeleteRequest)
+	runtime := openRuntime(t, provider, destination)
+	result, err := runtime.Delete(context.Background(), maturityCase.DeleteRequest)
 	assertMutationOutcome(t, result, err, maturityCase)
 }
 
 func runMaturityReadStateCase(
 	t *testing.T,
 	provider providers.Provider,
+	destination providers.DestinationConfig,
 	maturityCase MaturityCase,
 ) {
 	t.Helper()
-	state, err := provider.ReadState(context.Background(), maturityCase.ReadStateRequest)
+	runtime := openRuntime(t, provider, destination)
+	state, err := runtime.ReadState(context.Background(), maturityCase.ReadStateRequest)
 	if maturityCase.ErrorClass != "" {
 		assertProviderErrorClass(t, err, maturityCase.ErrorClass)
 		return
@@ -601,7 +654,8 @@ func runMaturityHealthCase(
 	maturityCase MaturityCase,
 ) {
 	t.Helper()
-	health, err := provider.Health(context.Background(), maturityCase.HealthDestination)
+	runtime := openRuntime(t, provider, maturityCase.HealthDestination)
+	health, err := runtime.Health(context.Background())
 	if err != nil {
 		t.Fatalf("health: %v", err)
 	}
@@ -613,20 +667,58 @@ func runMaturityHealthCase(
 	}
 }
 
-func runUpsertErrorCheck(t *testing.T, provider providers.Provider, errorCase UpsertErrorCase) {
+func runUpsertErrorCheck(
+	t *testing.T,
+	provider providers.Provider,
+	defaultDestination providers.DestinationConfig,
+	errorCase UpsertErrorCase,
+) {
 	t.Helper()
 	t.Run("upsert-error/"+errorCase.Name, func(t *testing.T) {
-		_, err := provider.Upsert(context.Background(), errorCase.Request)
+		runtime := openRuntime(t, provider, defaultDestination)
+		_, err := runtime.Upsert(context.Background(), errorCase.Request)
 		assertProviderErrorClass(t, err, errorCase.ErrorClass)
 	})
 }
 
-func runDeleteErrorCheck(t *testing.T, provider providers.Provider, errorCase DeleteErrorCase) {
+func runDeleteErrorCheck(
+	t *testing.T,
+	provider providers.Provider,
+	defaultDestination providers.DestinationConfig,
+	errorCase DeleteErrorCase,
+) {
 	t.Helper()
 	t.Run("delete-error/"+errorCase.Name, func(t *testing.T) {
-		_, err := provider.Delete(context.Background(), errorCase.Request)
+		runtime := openRuntime(t, provider, defaultDestination)
+		_, err := runtime.Delete(context.Background(), errorCase.Request)
 		assertProviderErrorClass(t, err, errorCase.ErrorClass)
 	})
+}
+
+func openRuntime(
+	t *testing.T,
+	provider providers.Provider,
+	destination providers.DestinationConfig,
+) providers.DestinationRuntime {
+	t.Helper()
+	runtime, err := provider.OpenDestination(context.Background(), destination)
+	if err != nil {
+		t.Fatalf("open destination runtime: %v", err)
+	}
+	if runtime == nil {
+		t.Fatal("destination runtime must not be nil")
+	}
+	return runtime
+}
+
+func destinationOrDefault(
+	destination providers.DestinationConfig,
+	defaultDestination providers.DestinationConfig,
+) providers.DestinationConfig {
+	if destination.Name == "" && destination.Config == nil {
+		return defaultDestination
+	}
+	return destination
 }
 
 func assertCapabilities(

@@ -220,6 +220,7 @@ func (b *secretSyncBackend) reconcileAssociation(
 			ctx,
 			association,
 			provider,
+			*destination,
 			resolvedDestinationConfig,
 			runtimeIdentity,
 			metadata.CurrentVersion,
@@ -234,6 +235,7 @@ func (b *secretSyncBackend) reconcileAssociationObject(
 	ctx context.Context,
 	association associationRecord,
 	provider providers.Provider,
+	destination destinationRecord,
 	destinationConfig providers.DestinationConfig,
 	runtimeIdentity providers.RuntimeIdentity,
 	sourceVersion int,
@@ -271,15 +273,18 @@ func (b *secretSyncBackend) reconcileAssociationObject(
 	}
 	result.payload = payload
 	providerStart := time.Now()
-	remoteState, err := provider.ReadState(ctx, providerReadStateRequest(
-		association,
-		destinationConfig,
-		runtimeIdentity,
-		sourceVersion,
-		payload,
-		objectID,
-		resolvedName,
-	))
+	runtime, err := b.destinationRuntime(ctx, provider, destination, destinationConfig)
+	var remoteState *providers.RemoteState
+	if err == nil {
+		remoteState, err = runtime.ReadState(ctx, providerReadStateRequest(
+			association,
+			runtimeIdentity,
+			sourceVersion,
+			payload,
+			objectID,
+			resolvedName,
+		))
+	}
 	b.recordProviderRequest(ctx, provider.Type(), observability.OperationReadState, err, time.Since(providerStart))
 	if err != nil {
 		result.state = syncStateForFailureClass(providerErrorClass(err))
@@ -326,7 +331,6 @@ func prepareReconcilePayload(
 
 func providerReadStateRequest(
 	association associationRecord,
-	destination providers.DestinationConfig,
 	runtimeIdentity providers.RuntimeIdentity,
 	version int,
 	payload payloadpkg.CanonicalPayload,
@@ -334,7 +338,6 @@ func providerReadStateRequest(
 	resolvedName string,
 ) providers.ReadStateRequest {
 	return providers.ReadStateRequest{
-		Destination:   destination,
 		Runtime:       runtimeIdentity,
 		ResolvedName:  resolvedName,
 		PayloadSHA256: payload.SHA256,

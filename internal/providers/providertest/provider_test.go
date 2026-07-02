@@ -208,6 +208,10 @@ func TestRunExercisesHarnessContracts(t *testing.T) {
 
 type contractProvider struct{}
 
+type contractRuntime struct {
+	destinationName string
+}
+
 func (contractProvider) Type() string {
 	return "contract"
 }
@@ -225,14 +229,34 @@ func (contractProvider) Capabilities() providers.Capabilities {
 	}
 }
 
-func (contractProvider) Validate(_ context.Context, cfg providers.DestinationConfig) error {
+func (contractProvider) ValidateConfig(_ context.Context, cfg providers.DestinationConfig) error {
 	if cfg.Name == "invalid" {
 		return &providers.Error{Class: providers.ErrorClassValidation, Message: "invalid destination"}
 	}
 	return nil
 }
 
-func (contractProvider) Plan(_ context.Context, req providers.PlanRequest) (*providers.PlanResult, error) {
+func (contractProvider) OpenDestination(
+	_ context.Context,
+	cfg providers.DestinationConfig,
+) (providers.DestinationRuntime, error) {
+	if err := (contractProvider{}).ValidateConfig(context.Background(), cfg); err != nil {
+		return nil, err
+	}
+	return contractRuntime{destinationName: cfg.Name}, nil
+}
+
+func (r contractRuntime) Health(_ context.Context) (*providers.HealthResult, error) {
+	if r.destinationName == "unhealthy" {
+		return &providers.HealthResult{
+			Healthy:    false,
+			ErrorClass: providers.ErrorClassUnavailable,
+		}, nil
+	}
+	return &providers.HealthResult{Healthy: true}, nil
+}
+
+func (contractRuntime) Plan(_ context.Context, req providers.PlanRequest) (*providers.PlanResult, error) {
 	switch {
 	case strings.Contains(req.ResolvedName, "update"):
 		return &providers.PlanResult{Action: providers.PlanActionUpdate}, nil
@@ -247,7 +271,7 @@ func (contractProvider) Plan(_ context.Context, req providers.PlanRequest) (*pro
 	}
 }
 
-func (contractProvider) Upsert(_ context.Context, req providers.UpsertRequest) (*providers.SyncResult, error) {
+func (contractRuntime) Upsert(_ context.Context, req providers.UpsertRequest) (*providers.SyncResult, error) {
 	if len(req.Payload) > (contractProvider{}).Capabilities().MaxPayloadBytes {
 		return nil, &providers.Error{Class: providers.ErrorClassCapacity, Message: "payload too large"}
 	}
@@ -257,7 +281,7 @@ func (contractProvider) Upsert(_ context.Context, req providers.UpsertRequest) (
 	return &providers.SyncResult{RemoteVersion: "upserted"}, nil
 }
 
-func (contractProvider) Delete(_ context.Context, req providers.DeleteRequest) (*providers.SyncResult, error) {
+func (contractRuntime) Delete(_ context.Context, req providers.DeleteRequest) (*providers.SyncResult, error) {
 	if strings.Contains(req.ResolvedName, "missing") {
 		return &providers.SyncResult{RemoteVersion: "missing"}, nil
 	}
@@ -267,7 +291,7 @@ func (contractProvider) Delete(_ context.Context, req providers.DeleteRequest) (
 	return &providers.SyncResult{RemoteVersion: "deleted"}, nil
 }
 
-func (contractProvider) ReadState(_ context.Context, req providers.ReadStateRequest) (*providers.RemoteState, error) {
+func (contractRuntime) ReadState(_ context.Context, req providers.ReadStateRequest) (*providers.RemoteState, error) {
 	if strings.Contains(req.ResolvedName, "missing") {
 		return &providers.RemoteState{Exists: false}, nil
 	}
@@ -284,14 +308,8 @@ func (contractProvider) ReadState(_ context.Context, req providers.ReadStateRequ
 	}, nil
 }
 
-func (contractProvider) Health(_ context.Context, cfg providers.DestinationConfig) (*providers.HealthResult, error) {
-	if cfg.Name == "unhealthy" {
-		return &providers.HealthResult{
-			Healthy:    false,
-			ErrorClass: providers.ErrorClassUnavailable,
-		}, nil
-	}
-	return &providers.HealthResult{Healthy: true}, nil
+func (contractRuntime) Close(context.Context) error {
+	return nil
 }
 
 func contractMutationError(resolvedName string) error {
@@ -315,7 +333,6 @@ func contractMutationError(resolvedName string) error {
 
 func contractPlanRequest(suffix string) providers.PlanRequest {
 	return providers.PlanRequest{
-		Destination:   providers.DestinationConfig{Name: "valid"},
 		Runtime:       contractRuntimeIdentity(),
 		ResolvedName:  "prod/" + suffix,
 		Format:        "json",
@@ -334,7 +351,6 @@ func contractUpsertRequest(suffix string, sourceVersion int) providers.UpsertReq
 
 func contractUpsertWithPayload(suffix string, sourceVersion int, payload []byte) providers.UpsertRequest {
 	return providers.UpsertRequest{
-		Destination:   providers.DestinationConfig{Name: "valid"},
 		Runtime:       contractRuntimeIdentity(),
 		ResolvedName:  "prod/" + suffix,
 		Format:        "json",
@@ -349,7 +365,6 @@ func contractUpsertWithPayload(suffix string, sourceVersion int, payload []byte)
 
 func contractDeleteRequest(suffix string, sourceVersion int) providers.DeleteRequest {
 	return providers.DeleteRequest{
-		Destination:   providers.DestinationConfig{Name: "valid"},
 		Runtime:       contractRuntimeIdentity(),
 		ResolvedName:  "prod/" + suffix,
 		SourcePath:    "app/db",
@@ -361,7 +376,6 @@ func contractDeleteRequest(suffix string, sourceVersion int) providers.DeleteReq
 
 func contractReadStateRequest(suffix string, sourceVersion int) providers.ReadStateRequest {
 	return providers.ReadStateRequest{
-		Destination:   providers.DestinationConfig{Name: "valid"},
 		Runtime:       contractRuntimeIdentity(),
 		ResolvedName:  "prod/" + suffix,
 		PayloadSHA256: "sha256:test",

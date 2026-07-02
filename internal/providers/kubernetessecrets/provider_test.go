@@ -14,6 +14,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/util/validation/field"
+	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/kubernetes/fake"
 	k8stesting "k8s.io/client-go/testing"
 )
@@ -173,7 +174,7 @@ func TestValidateDestinationConfig(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			err := (Provider{}).Validate(context.Background(), providers.DestinationConfig{
+			err := (Provider{}).ValidateConfig(context.Background(), providers.DestinationConfig{
 				Name:   testDestinationName,
 				Config: tt.config,
 			})
@@ -247,7 +248,7 @@ func TestPlanActions(t *testing.T) {
 			if tt.secret != nil {
 				client = fake.NewSimpleClientset(tt.secret)
 			}
-			result, err := (Provider{client: client}).Plan(context.Background(), tt.request)
+			result, err := runtimeWithClient(t, client).Plan(context.Background(), tt.request)
 			if err != nil {
 				t.Fatalf("plan: %v", err)
 			}
@@ -263,7 +264,7 @@ func TestPlanActions(t *testing.T) {
 
 func TestUpsertCreatesSecretWithOwnershipMetadata(t *testing.T) {
 	client := fake.NewSimpleClientset()
-	result, err := (Provider{client: client}).Upsert(context.Background(), defaultUpsertRequest(
+	result, err := runtimeWithClient(t, client).Upsert(context.Background(), defaultUpsertRequest(
 		testPayloadSHANew,
 		[]byte(`{"password":"secret"}`),
 		1,
@@ -300,7 +301,7 @@ func TestUpsertUpdatesOwnedSecretAndPreservesForeignMetadata(t *testing.T) {
 	secret.Annotations["example.com/owner"] = "team-a"
 	client := fake.NewSimpleClientset(secret)
 
-	_, err := (Provider{client: client}).Upsert(context.Background(), defaultUpsertRequest(
+	_, err := runtimeWithClient(t, client).Upsert(context.Background(), defaultUpsertRequest(
 		testPayloadSHANew,
 		[]byte(`{"password":"new"}`),
 		1,
@@ -349,7 +350,7 @@ func TestUpsertRejectsUnsafeRemoteState(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			client := fake.NewSimpleClientset(tt.secret)
-			_, err := (Provider{client: client}).Upsert(context.Background(), defaultUpsertRequest(
+			_, err := runtimeWithClient(t, client).Upsert(context.Background(), defaultUpsertRequest(
 				testPayloadSHANew,
 				[]byte(`{"password":"new"}`),
 				1,
@@ -375,7 +376,7 @@ func TestOwnedByRequestRejectsRuntimeIdentityMismatch(t *testing.T) {
 
 func TestDeleteUsesOwnershipMetadata(t *testing.T) {
 	client := fake.NewSimpleClientset(ownedSecret(testPayloadSHAOld, 1, []byte(`{"password":"old"}`)))
-	_, err := (Provider{client: client}).Delete(context.Background(), defaultDeleteRequest(1))
+	_, err := runtimeWithClient(t, client).Delete(context.Background(), defaultDeleteRequest(1))
 	if err != nil {
 		t.Fatalf("delete: %v", err)
 	}
@@ -405,7 +406,7 @@ func TestDeleteRejectsUnsafeRemoteState(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			client := fake.NewSimpleClientset(tt.secret)
-			_, err := (Provider{client: client}).Delete(context.Background(), defaultDeleteRequest(1))
+			_, err := runtimeWithClient(t, client).Delete(context.Background(), defaultDeleteRequest(1))
 			assertProviderErrorClass(t, err, tt.errorClass)
 			if _, getErr := client.CoreV1().Secrets(testNamespace).Get(
 				context.Background(),
@@ -423,7 +424,7 @@ func TestReadStateReportsRemoteMetadataAndPayloadHash(t *testing.T) {
 	delete(secret.Annotations, annotationPayloadSHA256)
 	client := fake.NewSimpleClientset(secret)
 
-	state, err := (Provider{client: client}).ReadState(context.Background(), defaultReadStateRequest("", 1))
+	state, err := runtimeWithClient(t, client).ReadState(context.Background(), defaultReadStateRequest("", 1))
 	if err != nil {
 		t.Fatalf("read state: %v", err)
 	}
@@ -443,7 +444,7 @@ func TestHealthClassifiesKubernetesFailure(t *testing.T) {
 	client.PrependReactor("list", "secrets", func(k8stesting.Action) (bool, runtime.Object, error) {
 		return true, nil, apierrors.NewForbidden(secretsResource, "", errors.New("denied"))
 	})
-	result, err := (Provider{client: client}).Health(context.Background(), defaultDestinationConfig())
+	result, err := runtimeWithClient(t, client).Health(context.Background())
 	if err != nil {
 		t.Fatalf("health: %v", err)
 	}
@@ -623,7 +624,6 @@ func defaultPlanRequest(payloadSHA256 string, sourceVersion int) providers.PlanR
 
 func planRequest(resolvedName string, payloadSHA256 string, sourceVersion int) providers.PlanRequest {
 	return providers.PlanRequest{
-		Destination:   defaultDestinationConfig(),
 		Runtime:       defaultRuntimeIdentity(),
 		ResolvedName:  resolvedName,
 		Format:        "json",
@@ -638,7 +638,6 @@ func planRequest(resolvedName string, payloadSHA256 string, sourceVersion int) p
 
 func defaultUpsertRequest(payloadSHA256 string, payload []byte, sourceVersion int) providers.UpsertRequest {
 	return providers.UpsertRequest{
-		Destination:   defaultDestinationConfig(),
 		Runtime:       defaultRuntimeIdentity(),
 		ResolvedName:  testResolvedName,
 		Format:        "json",
@@ -653,7 +652,6 @@ func defaultUpsertRequest(payloadSHA256 string, payload []byte, sourceVersion in
 
 func defaultDeleteRequest(sourceVersion int) providers.DeleteRequest {
 	return providers.DeleteRequest{
-		Destination:   defaultDestinationConfig(),
 		Runtime:       defaultRuntimeIdentity(),
 		ResolvedName:  testResolvedName,
 		SourcePath:    testSourcePath,
@@ -665,7 +663,6 @@ func defaultDeleteRequest(sourceVersion int) providers.DeleteRequest {
 
 func defaultReadStateRequest(payloadSHA256 string, sourceVersion int) providers.ReadStateRequest {
 	return providers.ReadStateRequest{
-		Destination:   defaultDestinationConfig(),
 		Runtime:       defaultRuntimeIdentity(),
 		ResolvedName:  testResolvedName,
 		PayloadSHA256: payloadSHA256,
@@ -674,6 +671,18 @@ func defaultReadStateRequest(payloadSHA256 string, sourceVersion int) providers.
 		AssociationID: testAssociationID,
 		ObjectID:      testObjectID,
 	}
+}
+
+func runtimeWithClient(t *testing.T, client kubernetes.Interface) providers.DestinationRuntime {
+	t.Helper()
+	destinationRuntime, err := (Provider{client: client}).OpenDestination(context.Background(), defaultDestinationConfig())
+	if err != nil {
+		t.Fatalf("open destination runtime: %v", err)
+	}
+	if destinationRuntime == nil {
+		t.Fatal("destination runtime must not be nil")
+	}
+	return destinationRuntime
 }
 
 func defaultRuntimeIdentity() providers.RuntimeIdentity {

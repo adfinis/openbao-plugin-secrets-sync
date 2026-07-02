@@ -13,6 +13,10 @@ const providerType = "fake"
 // Provider is a deterministic destination provider scaffold.
 type Provider struct{}
 
+type destinationRuntime struct {
+	destinationName string
+}
+
 func (Provider) Type() string {
 	return providerType
 }
@@ -30,7 +34,7 @@ func (Provider) Capabilities() providers.Capabilities {
 	}
 }
 
-func (Provider) Validate(_ context.Context, cfg providers.DestinationConfig) error {
+func (Provider) ValidateConfig(_ context.Context, cfg providers.DestinationConfig) error {
 	switch {
 	case strings.Contains(cfg.Name, "invalid"):
 		return &providers.Error{Class: providers.ErrorClassValidation, Message: "fake destination config invalid"}
@@ -43,7 +47,28 @@ func (Provider) Validate(_ context.Context, cfg providers.DestinationConfig) err
 	}
 }
 
-func (Provider) Plan(_ context.Context, req providers.PlanRequest) (*providers.PlanResult, error) {
+func (Provider) OpenDestination(
+	_ context.Context,
+	cfg providers.DestinationConfig,
+) (providers.DestinationRuntime, error) {
+	if err := (Provider{}).ValidateConfig(context.Background(), cfg); err != nil {
+		return nil, err
+	}
+	return destinationRuntime{destinationName: cfg.Name}, nil
+}
+
+func (r destinationRuntime) Health(_ context.Context) (*providers.HealthResult, error) {
+	if strings.Contains(r.destinationName, "unhealthy") {
+		return &providers.HealthResult{
+			Healthy:    false,
+			Message:    "fake destination is unavailable",
+			ErrorClass: providers.ErrorClassUnavailable,
+		}, nil
+	}
+	return &providers.HealthResult{Healthy: true}, nil
+}
+
+func (destinationRuntime) Plan(_ context.Context, req providers.PlanRequest) (*providers.PlanResult, error) {
 	switch {
 	case strings.Contains(req.ResolvedName, "blocked"):
 		return &providers.PlanResult{
@@ -66,7 +91,7 @@ func (Provider) Plan(_ context.Context, req providers.PlanRequest) (*providers.P
 	}
 }
 
-func (Provider) Upsert(_ context.Context, req providers.UpsertRequest) (*providers.SyncResult, error) {
+func (destinationRuntime) Upsert(_ context.Context, req providers.UpsertRequest) (*providers.SyncResult, error) {
 	if len(req.Payload) > (Provider{}).Capabilities().MaxPayloadBytes {
 		return nil, &providers.Error{Class: providers.ErrorClassCapacity, Message: "fake payload too large"}
 	}
@@ -76,7 +101,7 @@ func (Provider) Upsert(_ context.Context, req providers.UpsertRequest) (*provide
 	return &providers.SyncResult{RemoteVersion: "fake"}, nil
 }
 
-func (Provider) Delete(_ context.Context, req providers.DeleteRequest) (*providers.SyncResult, error) {
+func (destinationRuntime) Delete(_ context.Context, req providers.DeleteRequest) (*providers.SyncResult, error) {
 	if strings.Contains(req.ResolvedName, "missing") {
 		return &providers.SyncResult{RemoteVersion: "missing"}, nil
 	}
@@ -86,7 +111,7 @@ func (Provider) Delete(_ context.Context, req providers.DeleteRequest) (*provide
 	return &providers.SyncResult{RemoteVersion: "deleted"}, nil
 }
 
-func (Provider) ReadState(_ context.Context, req providers.ReadStateRequest) (*providers.RemoteState, error) {
+func (destinationRuntime) ReadState(_ context.Context, req providers.ReadStateRequest) (*providers.RemoteState, error) {
 	switch {
 	case strings.Contains(req.ResolvedName, "missing"):
 		return &providers.RemoteState{Exists: false}, nil
@@ -128,15 +153,8 @@ func (Provider) ReadState(_ context.Context, req providers.ReadStateRequest) (*p
 	}, nil
 }
 
-func (Provider) Health(_ context.Context, cfg providers.DestinationConfig) (*providers.HealthResult, error) {
-	if strings.Contains(cfg.Name, "unhealthy") {
-		return &providers.HealthResult{
-			Healthy:    false,
-			Message:    "fake destination is unavailable",
-			ErrorClass: providers.ErrorClassUnavailable,
-		}, nil
-	}
-	return &providers.HealthResult{Healthy: true}, nil
+func (destinationRuntime) Close(context.Context) error {
+	return nil
 }
 
 func fakeMutationError(resolvedName string) error {

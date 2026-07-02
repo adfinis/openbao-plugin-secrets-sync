@@ -7,12 +7,18 @@ import "context"
 type Provider interface {
 	Type() string
 	Capabilities() Capabilities
-	Validate(context.Context, DestinationConfig) error
+	ValidateConfig(context.Context, DestinationConfig) error
+	OpenDestination(context.Context, DestinationConfig) (DestinationRuntime, error)
+}
+
+// DestinationRuntime is a configured provider destination ready for operations.
+type DestinationRuntime interface {
+	Health(context.Context) (*HealthResult, error)
 	Plan(context.Context, PlanRequest) (*PlanResult, error)
 	Upsert(context.Context, UpsertRequest) (*SyncResult, error)
 	Delete(context.Context, DeleteRequest) (*SyncResult, error)
 	ReadState(context.Context, ReadStateRequest) (*RemoteState, error)
-	Health(context.Context, DestinationConfig) (*HealthResult, error)
+	Close(context.Context) error
 }
 
 // Capabilities declares destination behavior the core engine may rely on.
@@ -81,7 +87,6 @@ func (e *Error) Error() string {
 
 // PlanRequest describes a dry-run provider operation.
 type PlanRequest struct {
-	Destination   DestinationConfig
 	Runtime       RuntimeIdentity
 	ResolvedName  string
 	Format        string
@@ -102,7 +107,6 @@ type PlanResult struct {
 
 // UpsertRequest describes a remote create or update operation.
 type UpsertRequest struct {
-	Destination   DestinationConfig
 	Runtime       RuntimeIdentity
 	ResolvedName  string
 	Format        string
@@ -116,7 +120,6 @@ type UpsertRequest struct {
 
 // DeleteRequest describes a remote delete operation.
 type DeleteRequest struct {
-	Destination   DestinationConfig
 	Runtime       RuntimeIdentity
 	ResolvedName  string
 	SourcePath    string
@@ -127,7 +130,6 @@ type DeleteRequest struct {
 
 // ReadStateRequest describes a remote state lookup.
 type ReadStateRequest struct {
-	Destination   DestinationConfig
 	Runtime       RuntimeIdentity
 	ResolvedName  string
 	PayloadSHA256 string
