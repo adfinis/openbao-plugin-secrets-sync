@@ -46,6 +46,8 @@ status/*                  app/team readers or platform operators
 config                    platform operators
 ```
 
+Use [Policy examples](policies.md) for concrete OpenBao policy snippets.
+
 Association creation is the highest-risk authorization operation because it
 causes a secret to leave OpenBao. It requires source eligibility and
 destination authority.
