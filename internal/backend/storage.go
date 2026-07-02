@@ -5,6 +5,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/adfinis/openbao-plugin-secrets-sync/internal/outbox"
 	"github.com/openbao/openbao/sdk/v2/logical"
@@ -416,6 +417,11 @@ func putOutbox(ctx context.Context, storage logical.Storage, record outboxRecord
 				return err
 			}
 		}
+		if existingDueTime := outboxDueIndexTime(*existing); existingDueTime != "" {
+			if err := storage.Delete(ctx, outboxByDueStorageKey(existingDueTime, existing.ID)); err != nil {
+				return err
+			}
+		}
 	}
 	entry, err := logical.StorageEntryJSON(outboxStorageKey(record.ID), record)
 	if err != nil {
@@ -438,7 +444,17 @@ func putOutbox(ctx context.Context, storage logical.Storage, record outboxRecord
 	if err != nil {
 		return err
 	}
-	return storage.Put(ctx, stateEntry)
+	if err := storage.Put(ctx, stateEntry); err != nil {
+		return err
+	}
+	if dueTime := outboxDueIndexTime(record); dueTime != "" {
+		dueEntry, err := logical.StorageEntryJSON(outboxByDueStorageKey(dueTime, record.ID), record.ID)
+		if err != nil {
+			return err
+		}
+		return storage.Put(ctx, dueEntry)
+	}
+	return nil
 }
 
 func deleteOutbox(ctx context.Context, storage logical.Storage, record outboxRecord) error {
@@ -451,7 +467,13 @@ func deleteOutbox(ctx context.Context, storage logical.Storage, record outboxRec
 	if record.State == "" {
 		return nil
 	}
-	return storage.Delete(ctx, outboxByStateStorageKey(record.State, record.ID))
+	if err := storage.Delete(ctx, outboxByStateStorageKey(record.State, record.ID)); err != nil {
+		return err
+	}
+	if dueTime := outboxDueIndexTime(record); dueTime != "" {
+		return storage.Delete(ctx, outboxByDueStorageKey(dueTime, record.ID))
+	}
+	return nil
 }
 
 func getOutbox(ctx context.Context, storage logical.Storage, id string) (*outboxRecord, error) {
@@ -491,6 +513,38 @@ func listOutboxIDsForStates(ctx context.Context, storage logical.Storage, states
 		ids = append(ids, stateIDs...)
 	}
 	return ids, nil
+}
+
+func listDueOutboxIDs(ctx context.Context, storage logical.Storage, now time.Time) ([]string, error) {
+	keys, err := logical.CollectKeysWithPrefix(ctx, storage, outboxByDueStoragePrefix)
+	if err != nil {
+		return nil, err
+	}
+	sort.Strings(keys)
+	ids := []string{}
+	nowString := now.Format(timeFormatRFC3339)
+	for _, key := range keys {
+		trimmed := strings.TrimPrefix(key, outboxByDueStoragePrefix)
+		dueTime, id, ok := strings.Cut(trimmed, "/")
+		if !ok {
+			continue
+		}
+		if dueTime > nowString {
+			break
+		}
+		ids = append(ids, id)
+	}
+	return ids, nil
+}
+
+func outboxDueIndexTime(record outboxRecord) string {
+	if !isQueuedOutboxState(record.State) {
+		return ""
+	}
+	if _, err := time.Parse(timeFormatRFC3339, record.NotBefore); err == nil {
+		return record.NotBefore
+	}
+	return "0001-01-01T00:00:00Z"
 }
 
 func listOutboxIDsForPath(ctx context.Context, storage logical.Storage, path string) ([]string, error) {

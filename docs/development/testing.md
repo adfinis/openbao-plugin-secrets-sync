@@ -190,8 +190,8 @@ Current queue hardening coverage asserts that:
 - older operations cannot overwrite newer per-object status records;
 - incomplete enqueue intents recover missing outbox work and completed enqueue
   intents are pruned;
-- outbox state indexes are updated when operation state changes or records are
-  deleted;
+- outbox state and due indexes are updated when operation state or schedule
+  changes, and when records are deleted;
 - expired outbox claims are reclaimable and cleared after successful dispatch;
 - retryable provider failures clear claim metadata before moving to
   `retry_wait`;

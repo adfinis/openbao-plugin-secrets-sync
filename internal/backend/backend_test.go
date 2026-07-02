@@ -3085,9 +3085,11 @@ func TestQueueOperationReadCancelAndRetry(t *testing.T) {
 	}
 }
 
-func TestOutboxStateIndexTracksPutAndDelete(t *testing.T) {
+func TestOutboxIndexesTrackPutAndDelete(t *testing.T) {
 	storage := &logical.InmemStorage{}
-	now := nowUTC().Format(timeFormatRFC3339)
+	nowTime := nowUTC()
+	now := nowTime.Format(timeFormatRFC3339)
+	future := nowTime.Add(time.Minute).Format(timeFormatRFC3339)
 	record := outboxRecord{
 		ID:          "op_state_index",
 		Type:        outbox.OperationTypeUpsert,
@@ -3103,19 +3105,25 @@ func TestOutboxStateIndexTracksPutAndDelete(t *testing.T) {
 	}
 	assertOutboxStateIndexed(t, storage, outboxStatePending, record.ID, true)
 	assertOutboxStateIndexed(t, storage, outboxStateRetryWait, record.ID, false)
+	assertOutboxDueIndexed(t, storage, now, record.ID, true)
+	assertOutboxDueIndexed(t, storage, future, record.ID, false)
 
 	record.State = outboxStateRetryWait
+	record.NotBefore = future
 	record.UpdatedTime = now
 	if err := putOutbox(context.Background(), storage, record); err != nil {
 		t.Fatalf("write retry-wait outbox: %v", err)
 	}
 	assertOutboxStateIndexed(t, storage, outboxStatePending, record.ID, false)
 	assertOutboxStateIndexed(t, storage, outboxStateRetryWait, record.ID, true)
+	assertOutboxDueIndexed(t, storage, now, record.ID, false)
+	assertOutboxDueIndexed(t, storage, future, record.ID, true)
 
 	if err := deleteOutbox(context.Background(), storage, record); err != nil {
 		t.Fatalf("delete outbox: %v", err)
 	}
 	assertOutboxStateIndexed(t, storage, outboxStateRetryWait, record.ID, false)
+	assertOutboxDueIndexed(t, storage, future, record.ID, false)
 }
 
 func TestQueueDrainProcessesDueOperations(t *testing.T) {
@@ -3239,6 +3247,29 @@ func TestQueueDrainClearsClaimAfterRetryableFailure(t *testing.T) {
 	if operation.ClaimOwner != "" || operation.ClaimExpiresTime != "" || operation.ClaimAttempt != 0 {
 		t.Fatalf("claim fields after retryable failure = %#v, want cleared", operation)
 	}
+}
+
+func TestQueueDrainSkipsFutureRetryWaitOperation(t *testing.T) {
+	b := Backend(&logical.BackendConfig{})
+	storage := &logical.InmemStorage{}
+
+	writeAppDBSecret(t, b, storage, "initial")
+	createFakeDestination(t, b, storage, "default")
+	associationResp := createFakeAssociationWithResolvedName(t, b, storage, "prod/rate-limit/app/db")
+	operationID := operationIDsFromResponse(t, associationResp)[0]
+
+	runPeriodicAllowed(t, b, storage, "periodic")
+	operation := assertOutboxOperation(t, storage, operationID, 1, outboxStateRetryWait)
+	assertFutureNotBefore(t, operation.NotBefore)
+
+	drainResp := handleRequest(t, b, storage, logical.UpdateOperation, "queue/drain", map[string]interface{}{
+		"max_operations": 1,
+	})
+	assertNoErrorResponse(t, drainResp)
+	if got := drainResp.Data["processed"]; got != 0 {
+		t.Fatalf("processed = %v, want 0 for future retry_wait operation", got)
+	}
+	assertOutboxOperation(t, storage, operationID, 1, outboxStateRetryWait)
 }
 
 func TestQueueDrainHonorsRestoreGuard(t *testing.T) {
@@ -3863,6 +3894,17 @@ func assertOutboxStateIndexed(t *testing.T, storage logical.Storage, state strin
 	}
 	if got := entry != nil; got != want {
 		t.Fatalf("outbox state index %s/%s exists = %t, want %t", state, operationID, got, want)
+	}
+}
+
+func assertOutboxDueIndexed(t *testing.T, storage logical.Storage, dueTime string, operationID string, want bool) {
+	t.Helper()
+	entry, err := storage.Get(context.Background(), outboxByDueStorageKey(dueTime, operationID))
+	if err != nil {
+		t.Fatalf("read outbox due index: %v", err)
+	}
+	if got := entry != nil; got != want {
+		t.Fatalf("outbox due index %s/%s exists = %t, want %t", dueTime, operationID, got, want)
 	}
 }
 

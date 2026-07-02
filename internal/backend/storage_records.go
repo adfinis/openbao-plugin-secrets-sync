@@ -22,6 +22,7 @@ const (
 	associationByDestPrefix    = "associations_by_destination/"
 	associationNamePrefix      = "association_names/"
 	outboxStoragePrefix        = "outbox/"
+	outboxByDueStoragePrefix   = "outbox_by_due/"
 	outboxByPathStoragePrefix  = "outbox_by_path/"
 	outboxByStateStoragePrefix = "outbox_by_state/"
 	defaultQueueCapacity       = 1000
@@ -250,6 +251,10 @@ func outboxStorageKey(id string) string {
 
 func outboxByPathStorageKey(path string, id string) string {
 	return outboxByPathStoragePrefix + path + "/" + id
+}
+
+func outboxByDueStorageKey(dueTime string, id string) string {
+	return outboxByDueStoragePrefix + dueTime + "/" + id
 }
 
 func statusStorageKey(path string, associationID string, objectID string) string {

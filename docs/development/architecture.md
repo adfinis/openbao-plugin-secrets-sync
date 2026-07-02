@@ -84,6 +84,7 @@ associations_by_destination/<type>/<name>/<association-id>
 association_names/<destination-ref>/<resolved-name>/<association-id>
 
 outbox/<operation-id>
+outbox_by_due/<timestamp>/<operation-id>
 outbox_by_path/<normalized-path>/<operation-id>
 outbox_by_state/<state>/<operation-id>
 enqueue_intent/<normalized-path>/<version>
@@ -323,9 +324,9 @@ must accept the version only if enqueue intent recovery guarantees later queue
 creation. The MVP should fail the write before committing the source version
 when capacity is known to be exceeded.
 
-Queue capacity checks, queue summaries, and dispatch start from the
-`outbox_by_state/` index. Dispatch still filters due operations by each
-record's `not_before` timestamp in memory.
+Queue capacity checks and queue summaries start from the `outbox_by_state/`
+index. Dispatch starts from the `outbox_by_due/` index, which contains only
+pending and retry-wait operations.
 
 Queue listing should expose:
 

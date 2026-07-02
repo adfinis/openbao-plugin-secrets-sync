@@ -40,7 +40,7 @@ func (b *secretSyncBackend) processDueOutboxLimit(
 	if err != nil {
 		return 0, err
 	}
-	ids, err := listQueuedOutboxIDs(ctx, storage)
+	ids, err := listDueOutboxIDs(ctx, storage, now)
 	if err != nil {
 		return 0, err
 	}
@@ -51,9 +51,6 @@ func (b *secretSyncBackend) processDueOutboxLimit(
 			return processed, err
 		}
 		if record == nil || !isDispatchableOutboxState(record.State) {
-			continue
-		}
-		if !isOutboxDue(*record, now) {
 			continue
 		}
 		if !isSupportedOperation(*record) {
@@ -131,17 +128,6 @@ func clearOutboxClaim(record *outboxRecord) {
 	record.ClaimOwner = ""
 	record.ClaimExpiresTime = ""
 	record.ClaimAttempt = 0
-}
-
-func isOutboxDue(record outboxRecord, now time.Time) bool {
-	if record.NotBefore == "" {
-		return true
-	}
-	notBefore, err := time.Parse(timeFormatRFC3339, record.NotBefore)
-	if err != nil {
-		return true
-	}
-	return !notBefore.After(now)
 }
 
 func isSupportedOperation(record outboxRecord) bool {
