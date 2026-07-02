@@ -128,6 +128,13 @@ func dataWritePlanFromRequest(
 	if err != nil {
 		return dataWritePlan{}, nil, err
 	}
+	cfg, err := readGlobalConfig(ctx, storage)
+	if err != nil {
+		return dataWritePlan{}, nil, err
+	}
+	if err := validateSourceEligibility(metadata, cfg); err != nil {
+		associations = nil
+	}
 
 	nextVersion := metadata.CurrentVersion + 1
 	nowTime := nowUTC()

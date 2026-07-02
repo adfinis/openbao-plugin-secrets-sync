@@ -44,6 +44,9 @@ func ensureRuntimeState(ctx context.Context, storage logical.Storage) (runtimeSt
 	if err != nil {
 		return runtimeState{}, err
 	}
+	if err := ensureGlobalConfig(ctx, storage, now); err != nil {
+		return runtimeState{}, err
+	}
 	return runtimeState{
 		Schema:         schema,
 		PluginInstance: pluginInstance,

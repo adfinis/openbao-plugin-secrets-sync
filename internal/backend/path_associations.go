@@ -243,7 +243,11 @@ func (b *secretSyncBackend) pathAssociationEnable(
 	if response != nil || err != nil {
 		return response, err
 	}
-	if err := validateSourceEligibility(*metadata); err != nil {
+	cfg, err := readGlobalConfig(ctx, req.Storage)
+	if err != nil {
+		return nil, err
+	}
+	if err := validateSourceEligibility(metadata, cfg); err != nil {
 		return logical.ErrorResponse(err.Error()), nil
 	}
 	if err := validateAssociationDestination(ctx, req.Storage, *record); err != nil {
@@ -293,7 +297,11 @@ func (b *secretSyncBackend) pathAssociationSync(
 	if response != nil || err != nil {
 		return response, err
 	}
-	if err := validateAssociationActivation(*record, *metadata); err != nil {
+	cfg, err := readGlobalConfig(ctx, req.Storage)
+	if err != nil {
+		return nil, err
+	}
+	if err := validateAssociationActivation(*record, metadata, cfg); err != nil {
 		return logical.ErrorResponse(err.Error()), nil
 	}
 	if err := validateAssociationDestination(ctx, req.Storage, *record); err != nil {
@@ -403,7 +411,11 @@ func associationWritePreflight(
 	if metadata == nil || metadata.CurrentVersion == 0 {
 		return nil, nil, logical.ErrorResponse("source path does not exist"), nil
 	}
-	if err := validateAssociationActivation(record, *metadata); err != nil {
+	cfg, err := readGlobalConfig(ctx, storage)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	if err := validateAssociationActivation(record, metadata, cfg); err != nil {
 		return nil, nil, logical.ErrorResponse(err.Error()), nil
 	}
 	if err := validateAssociationDestination(ctx, storage, record); err != nil {
@@ -433,6 +445,10 @@ func (b *secretSyncBackend) pathAssociationPlan(
 	if err != nil {
 		return logical.ErrorResponse(err.Error()), nil
 	}
+	cfg, err := readGlobalConfig(ctx, req.Storage)
+	if err != nil {
+		return nil, err
+	}
 	destination, err := getDestination(ctx, req.Storage, record.DestinationType, record.DestinationName)
 	if err != nil {
 		return nil, err
@@ -448,7 +464,7 @@ func (b *secretSyncBackend) pathAssociationPlan(
 	if err != nil {
 		return nil, err
 	}
-	eligibilityErr := validateAssociationActivation(record, *metadata)
+	eligibilityErr := validateAssociationActivation(record, metadata, cfg)
 	sourceEligible := eligibilityErr == nil
 	if record.Granularity == syncGranularitySecretKey {
 		return b.pathAssociationSecretKeyPlan(
@@ -1598,16 +1614,21 @@ func validateDeleteMode(capabilities providers.Capabilities, deleteMode string) 
 	}
 }
 
-func validateAssociationActivation(record associationRecord, metadata metadataRecord) error {
+func validateAssociationActivation(record associationRecord, metadata *metadataRecord, cfg globalConfig) error {
 	if !record.Enabled {
 		return nil
 	}
-	return validateSourceEligibility(metadata)
+	return validateSourceEligibility(metadata, cfg)
 }
 
-func validateSourceEligibility(metadata metadataRecord) error {
-	if metadata.CustomMetadata[sourceMetadataKeySyncable] != sourceMetadataValueTrue {
-		return fmt.Errorf("source path is not eligible for sync: custom_metadata.syncable must be true")
+func validateSourceEligibility(metadata *metadataRecord, cfg globalConfig) error {
+	if !cfg.RequireSourceOptIn {
+		return nil
+	}
+	if metadata == nil || metadata.CustomMetadata[sourceMetadataKeySyncable] != sourceMetadataValueTrue {
+		return fmt.Errorf(
+			"source path is not eligible for sync: custom_metadata.syncable must be true when require_source_opt_in=true",
+		)
 	}
 	return nil
 }

@@ -123,6 +123,12 @@ func TestPeriodicHonorsRestoreGuard(t *testing.T) {
 	env.createFakeDestination("default")
 	associationResp := env.createDefaultFakeAssociation()
 	operationID := operationIDsFromResponse(t, associationResp)[0]
+	rearmResp := env.update("config", map[string]interface{}{
+		"restore_guard": true,
+	})
+	if rearmResp != nil && rearmResp.IsError() {
+		t.Fatalf("unexpected restore guard rearm error: %v", rearmResp.Error())
+	}
 
 	if err := env.b.periodic(context.Background(), &logical.Request{Storage: env.storage}); err != nil {
 		t.Fatalf("periodic with restore guard: %v", err)

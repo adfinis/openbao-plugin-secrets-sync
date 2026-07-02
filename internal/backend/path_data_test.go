@@ -50,6 +50,35 @@ func TestDataWriteReadAndQueueStatus(t *testing.T) {
 	assertResponseValue(t, statusResp, "version", 1)
 }
 
+func TestDataWriteHonorsStrictSourceOptInBeforeEnqueue(t *testing.T) {
+	env := newBackendTestEnv(t)
+
+	env.writeAppDBSecret("initial")
+	env.createFakeDestination("default")
+	associationResp := env.update("associations/app/db", map[string]interface{}{
+		"destination_type": providerTypeFake,
+		"destination_name": "default",
+		"resolved_name":    "prod/app/db",
+		"granularity":      syncObjectIDSecretPath,
+		"format":           defaultAssociationFormat,
+	})
+	assertNoErrorResponse(t, associationResp)
+	assertOperationIDs(t, associationResp.Data, 1)
+
+	cfgResp := env.update("config", map[string]interface{}{
+		"require_source_opt_in": true,
+	})
+	if cfgResp != nil && cfgResp.IsError() {
+		t.Fatalf("unexpected config write error: %v", cfgResp.Error())
+	}
+	writeResp := env.writeAppDBSecret("rotated")
+	writeMetadata := writeResp.Data["metadata"].(map[string]interface{})
+	if got := writeMetadata["version"]; got != 2 {
+		t.Fatalf("strict write version = %v, want 2", got)
+	}
+	assertOperationIDs(t, writeMetadata, 0)
+}
+
 func TestDataWriteCAS(t *testing.T) {
 	env := newBackendTestEnv(t)
 

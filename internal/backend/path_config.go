@@ -26,6 +26,11 @@ func pathConfig(b *secretSyncBackend) *framework.Path {
 				Type:        framework.TypeInt,
 				Description: "Maximum number of pending outbox operations accepted by the mount.",
 			},
+			"require_source_opt_in": {
+				Type: framework.TypeBool,
+				Description: "Require custom_metadata.syncable=true before enabled associations " +
+					"can enqueue or dispatch remote mutation.",
+			},
 		},
 		Operations: map[logical.Operation]framework.OperationHandler{
 			logical.ReadOperation: &framework.PathOperation{
@@ -38,7 +43,7 @@ func pathConfig(b *secretSyncBackend) *framework.Path {
 			},
 		},
 		HelpSynopsis:    "Configure global secret sync behavior.",
-		HelpDescription: "Controls mount-wide pause, restore guard, and queue capacity settings.",
+		HelpDescription: "Controls mount-wide pause, restore guard, queue capacity, and source opt-in settings.",
 	}
 }
 
@@ -79,6 +84,7 @@ func (b *secretSyncBackend) pathConfigRead(
 		responseField("storage_schema_version", state.Schema.Version),
 		responseField("storage_schema_min_compatible_version", state.Schema.MinCompatibleVersion),
 		responseField("queue_capacity", cfg.QueueCapacity),
+		responseField("require_source_opt_in", cfg.RequireSourceOptIn),
 	)}, nil
 }
 
@@ -115,6 +121,9 @@ func (b *secretSyncBackend) pathConfigWrite(
 			return logical.ErrorResponse("queue_capacity must be greater than or equal to zero"), nil
 		}
 		cfg.QueueCapacity = queueCapacity
+	}
+	if value, ok := data.GetOk("require_source_opt_in"); ok {
+		cfg.RequireSourceOptIn = value.(bool)
 	}
 	cfg.UpdatedTime = nowUTC().Format(timeFormatRFC3339)
 	if err := putGlobalConfig(ctx, req.Storage, cfg); err != nil {
@@ -160,6 +169,7 @@ func (b *secretSyncBackend) pathConfigRestoreGuardAcknowledgeWrite(
 		responseField("storage_schema_version", state.Schema.Version),
 		responseField("storage_schema_min_compatible_version", state.Schema.MinCompatibleVersion),
 		responseField("queue_capacity", cfg.QueueCapacity),
+		responseField("require_source_opt_in", cfg.RequireSourceOptIn),
 	)}, nil
 }
 
@@ -179,21 +189,89 @@ func readGlobalConfig(ctx context.Context, storage logical.Storage) (globalConfi
 	if entry == nil {
 		return defaultGlobalConfig(), nil
 	}
-	var cfg globalConfig
-	if err := entry.DecodeJSON(&cfg); err != nil {
+	cfg, _, err := decodeGlobalConfigEntry(entry)
+	if err != nil {
 		return globalConfig{}, err
-	}
-	if cfg.QueueCapacity < 0 {
-		return globalConfig{}, fmt.Errorf("stored queue_capacity must be greater than or equal to zero")
 	}
 	return cfg, nil
 }
 
+func ensureGlobalConfig(ctx context.Context, storage logical.Storage, now string) error {
+	entry, err := storage.Get(ctx, configPath)
+	if err != nil {
+		return err
+	}
+	if entry == nil {
+		return putGlobalConfig(ctx, storage, initialGlobalConfig(now))
+	}
+	cfg, changed, err := decodeGlobalConfigEntry(entry)
+	if err != nil {
+		return err
+	}
+	if !changed {
+		return nil
+	}
+	cfg.UpdatedTime = now
+	return putGlobalConfig(ctx, storage, cfg)
+}
+
+func decodeGlobalConfigEntry(entry *logical.StorageEntry) (globalConfig, bool, error) {
+	var stored storedGlobalConfig
+	if err := entry.DecodeJSON(&stored); err != nil {
+		return globalConfig{}, false, err
+	}
+	cfg := globalConfig{
+		Disabled:                     stored.Disabled,
+		RestoreGuardAcknowledgedTime: stored.RestoreGuardAcknowledgedTime,
+		UpdatedTime:                  stored.UpdatedTime,
+	}
+	changed := false
+	if stored.RestoreGuard == nil {
+		cfg.RestoreGuard = false
+		changed = true
+	} else {
+		cfg.RestoreGuard = *stored.RestoreGuard
+	}
+	if stored.QueueCapacity == nil {
+		cfg.QueueCapacity = defaultQueueCapacity
+		changed = true
+	} else {
+		cfg.QueueCapacity = *stored.QueueCapacity
+	}
+	if stored.RequireSourceOptIn == nil {
+		cfg.RequireSourceOptIn = false
+		changed = true
+	} else {
+		cfg.RequireSourceOptIn = *stored.RequireSourceOptIn
+	}
+	if cfg.QueueCapacity < 0 {
+		return globalConfig{}, false, fmt.Errorf("stored queue_capacity must be greater than or equal to zero")
+	}
+	return cfg, changed, nil
+}
+
+func initialGlobalConfig(now string) globalConfig {
+	cfg := defaultGlobalConfig()
+	cfg.RestoreGuardAcknowledgedTime = now
+	cfg.UpdatedTime = now
+	return cfg
+}
+
 func defaultGlobalConfig() globalConfig {
 	return globalConfig{
-		RestoreGuard:  true,
-		QueueCapacity: defaultQueueCapacity,
+		RestoreGuard:       false,
+		QueueCapacity:      defaultQueueCapacity,
+		RequireSourceOptIn: false,
 	}
+}
+
+type storedGlobalConfig struct {
+	Disabled                     bool   `json:"disabled"`
+	RestoreGuard                 *bool  `json:"restore_guard"`
+	RestoreGuardAcknowledgedTime string `json:"restore_guard_acknowledged_time"`
+	QueueCapacity                *int   `json:"queue_capacity"`
+	RequireSourceOptIn           *bool  `json:"require_source_opt_in"`
+	UpdatedTime                  string `json:"updated_time"`
 }
 
 type globalConfig struct {
@@ -201,6 +279,7 @@ type globalConfig struct {
 	RestoreGuard                 bool   `json:"restore_guard"`
 	RestoreGuardAcknowledgedTime string `json:"restore_guard_acknowledged_time"`
 	QueueCapacity                int    `json:"queue_capacity"`
+	RequireSourceOptIn           bool   `json:"require_source_opt_in"`
 	UpdatedTime                  string `json:"updated_time"`
 }
 
