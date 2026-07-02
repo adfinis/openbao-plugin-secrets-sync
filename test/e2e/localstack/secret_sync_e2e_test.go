@@ -61,13 +61,9 @@ func TestOpenBaoPluginSyncsToLocalStackSecretsManager(t *testing.T) {
 		awssecretsmanager.ConfigKeyEndpointPolicy: awssecretsmanager.EndpointPolicyLocal,
 		awssecretsmanager.ConfigKeyAuthMode:       awssecretsmanager.AuthModeDefault,
 	})
-	acknowledgeRestoreGuard(t, baoClient)
-	write(t, baoClient, mountPath+"/metadata/app/db", map[string]interface{}{
-		"custom_metadata": map[string]interface{}{
-			"syncable": "true",
-		},
-	})
+	assertFreshConfigDefaults(t, baoClient)
 	writeSource(t, baoClient, "initial")
+	assertSourceReadyWithoutOptIn(t, baoClient)
 
 	plan := write(t, baoClient, mountPath+"/associations/app/db/plan", associationRequest(remoteName))
 	if got := plan.Data["action"]; got != "create" {
@@ -226,11 +222,6 @@ func writeSource(t *testing.T, client *api.Client, password string) {
 	})
 }
 
-func acknowledgeRestoreGuard(t *testing.T, client *api.Client) {
-	t.Helper()
-	write(t, client, mountPath+"/config/restore-guard/acknowledge", map[string]interface{}{})
-}
-
 func write(t *testing.T, client *api.Client, path string, data map[string]interface{}) *api.Secret {
 	t.Helper()
 	secret, err := client.Logical().Write(path, data)
@@ -335,6 +326,49 @@ func assertRemoteDeleteScheduled(
 		}
 		return nil
 	})
+}
+
+func assertFreshConfigDefaults(t *testing.T, client *api.Client) {
+	t.Helper()
+	secret, err := client.Logical().Read(mountPath + "/config")
+	if err != nil {
+		t.Fatalf("read config: %v", err)
+	}
+	if secret == nil {
+		t.Fatal("config response is nil")
+	}
+	if got := secret.Data["restore_guard"]; got != false {
+		t.Fatalf("restore_guard = %v, want false", got)
+	}
+	if got := secret.Data["require_source_opt_in"]; got != false {
+		t.Fatalf("require_source_opt_in = %v, want false", got)
+	}
+	if got := secret.Data["restore_guard_acknowledged_time"]; got == "" {
+		t.Fatal("restore_guard_acknowledged_time must be set")
+	}
+}
+
+func assertSourceReadyWithoutOptIn(t *testing.T, client *api.Client) {
+	t.Helper()
+	secret, err := client.Logical().Read(mountPath + "/sources/app/db/check")
+	if err != nil {
+		t.Fatalf("read source check: %v", err)
+	}
+	if secret == nil {
+		t.Fatal("source check response is nil")
+	}
+	if got := secret.Data["source_opt_in_required"]; got != false {
+		t.Fatalf("source_opt_in_required = %v, want false", got)
+	}
+	if got := secret.Data["syncable"]; got != false {
+		t.Fatalf("syncable = %v, want false", got)
+	}
+	if got := secret.Data["ready"]; got != true {
+		t.Fatalf("ready = %v, want true", got)
+	}
+	if blockers := stringSlice(t, secret.Data["blockers"]); len(blockers) != 0 {
+		t.Fatalf("source blockers = %v, want none", blockers)
+	}
 }
 
 func assertStatus(t *testing.T, client *api.Client, expectedState string) {

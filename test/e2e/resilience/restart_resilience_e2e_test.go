@@ -60,22 +60,17 @@ func TestOpenBaoLifecyclePreservesSecretSyncState(t *testing.T) {
 		forceDeleteSecret(ctx, awsClient, remoteName)
 	})
 
-	write(t, baoClient, mountPath+"/config/restore-guard/acknowledge", map[string]interface{}{})
+	assertConfig(t, baoClient, false, false, false)
 	write(t, baoClient, mountPath+"/config", map[string]interface{}{
 		"disabled": true,
 	})
-	assertConfig(t, baoClient, true, false)
+	assertConfig(t, baoClient, true, false, false)
 
 	write(t, baoClient, mountPath+"/destinations/aws-sm/prod", map[string]interface{}{
 		awssecretsmanager.ConfigKeyRegion:         awsRegion,
 		awssecretsmanager.ConfigKeyEndpointURL:    localstackInBao,
 		awssecretsmanager.ConfigKeyEndpointPolicy: awssecretsmanager.EndpointPolicyLocal,
 		awssecretsmanager.ConfigKeyAuthMode:       awssecretsmanager.AuthModeDefault,
-	})
-	write(t, baoClient, mountPath+"/metadata/app/db", map[string]interface{}{
-		"custom_metadata": map[string]interface{}{
-			"syncable": "true",
-		},
 	})
 	writeSource(t, baoClient, "initial")
 
@@ -91,7 +86,7 @@ func TestOpenBaoLifecyclePreservesSecretSyncState(t *testing.T) {
 	stopOpenBao(t, ctx)
 	standbyClient = newOpenBaoStandbyClient(t, rootToken)
 	waitForOpenBaoReady(t, ctx, standbyClient)
-	assertConfig(t, standbyClient, true, false)
+	assertConfig(t, standbyClient, true, false, false)
 	assertQueue(t, standbyClient, 1, 0)
 	assertStatus(t, standbyClient, "PENDING")
 	assertRemoteMissing(t, ctx, awsClient, remoteName)
@@ -101,7 +96,7 @@ func TestOpenBaoLifecyclePreservesSecretSyncState(t *testing.T) {
 	standby2Client = newOpenBaoStandby2Client(t, rootToken)
 	waitForOpenBaoReady(t, ctx, standby2Client)
 	waitForRaftPeers(t, ctx, baoClient, raftNode0ID, raftNode1ID, raftNode2ID)
-	assertConfig(t, baoClient, true, false)
+	assertConfig(t, baoClient, true, false, false)
 	assertQueue(t, baoClient, 1, 0)
 	assertStatus(t, baoClient, "PENDING")
 
@@ -120,7 +115,7 @@ func TestOpenBaoLifecyclePreservesSecretSyncState(t *testing.T) {
 	standbyClient = newOpenBaoStandbyClient(t, rootToken)
 	waitForOpenBaoReady(t, ctx, standbyClient)
 	waitForRaftPeers(t, ctx, baoClient, raftNode0ID, raftNode1ID, raftNode2ID)
-	assertConfig(t, baoClient, false, false)
+	assertConfig(t, baoClient, false, false, false)
 	assertQueue(t, baoClient, 0, 0)
 	assertStatus(t, baoClient, "SYNCED")
 	assertRemotePayload(t, ctx, awsClient, remoteName, "initial")
@@ -135,7 +130,7 @@ func TestOpenBaoLifecyclePreservesSecretSyncState(t *testing.T) {
 		"disabled": true,
 	})
 	writeSource(t, baoClient, "after-seal")
-	assertConfig(t, baoClient, true, false)
+	assertConfig(t, baoClient, true, false, false)
 	assertQueue(t, baoClient, 1, 0)
 	assertStatus(t, baoClient, "PENDING")
 	assertRemotePayload(t, ctx, awsClient, remoteName, "initial")
@@ -149,7 +144,7 @@ func TestOpenBaoLifecyclePreservesSecretSyncState(t *testing.T) {
 	standbyClient = newOpenBaoStandbyClient(t, rootToken)
 	waitForOpenBaoReady(t, ctx, standbyClient)
 	waitForRaftPeers(t, ctx, baoClient, raftNode0ID, raftNode1ID, raftNode2ID)
-	assertConfig(t, baoClient, true, false)
+	assertConfig(t, baoClient, true, false, false)
 	assertQueue(t, baoClient, 1, 0)
 	assertStatus(t, baoClient, "PENDING")
 
@@ -451,7 +446,13 @@ func drainQueue(t *testing.T, client *api.Client, expectedProcessed int) {
 	}
 }
 
-func assertConfig(t *testing.T, client *api.Client, expectedDisabled bool, expectedRestoreGuard bool) {
+func assertConfig(
+	t *testing.T,
+	client *api.Client,
+	expectedDisabled bool,
+	expectedRestoreGuard bool,
+	expectedSourceOptIn bool,
+) {
 	t.Helper()
 	secret, err := client.Logical().Read(mountPath + "/config")
 	if err != nil {
@@ -465,6 +466,9 @@ func assertConfig(t *testing.T, client *api.Client, expectedDisabled bool, expec
 	}
 	if got := secret.Data["restore_guard"]; got != expectedRestoreGuard {
 		t.Fatalf("config restore_guard = %v, want %v", got, expectedRestoreGuard)
+	}
+	if got := secret.Data["require_source_opt_in"]; got != expectedSourceOptIn {
+		t.Fatalf("config require_source_opt_in = %v, want %v", got, expectedSourceOptIn)
 	}
 }
 
