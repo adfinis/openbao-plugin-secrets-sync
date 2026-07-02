@@ -26,9 +26,8 @@ type coreStateModel struct {
 }
 
 func TestCoreStateModelSourceAssociationQueueLifecycle(t *testing.T) {
-	b := Backend(&logical.BackendConfig{})
-	storage := &logical.InmemStorage{}
-	createFakeDestination(t, b, storage, "default")
+	env := newBackendTestEnv(t)
+	env.createFakeDestination("default")
 
 	model := coreStateModel{}
 	associationID := ""
@@ -40,7 +39,7 @@ func TestCoreStateModelSourceAssociationQueueLifecycle(t *testing.T) {
 		{
 			name: "write initial source without association",
 			run: func(t *testing.T) {
-				resp := writeAppDBSecret(t, b, storage, modelSecretCanary+"-v1")
+				resp := env.writeAppDBSecret(modelSecretCanary + "-v1")
 				metadata := resp.Data["metadata"].(map[string]interface{})
 				assertOperationIDs(t, metadata, 0)
 			},
@@ -53,8 +52,8 @@ func TestCoreStateModelSourceAssociationQueueLifecycle(t *testing.T) {
 		{
 			name: "create association enqueues current version",
 			run: func(t *testing.T) {
-				markAppDBSyncable(t, b, storage)
-				resp := handleRequest(t, b, storage, logical.UpdateOperation, "associations/app/db", map[string]interface{}{
+				env.markAppDBSyncable()
+				resp := env.update("associations/app/db", map[string]interface{}{
 					"destination_type": providerTypeFake,
 					"destination_name": "default",
 					"resolved_name":    modelResolvedName,
@@ -77,7 +76,7 @@ func TestCoreStateModelSourceAssociationQueueLifecycle(t *testing.T) {
 		{
 			name: "drain creates synced status",
 			run: func(t *testing.T) {
-				drainCoreModelQueue(t, b, storage, 1)
+				drainCoreModelQueue(t, env.b, env.storage, 1)
 			},
 			want: coreStateModel{
 				version:         1,
@@ -88,7 +87,7 @@ func TestCoreStateModelSourceAssociationQueueLifecycle(t *testing.T) {
 		{
 			name: "write update enqueues new version",
 			run: func(t *testing.T) {
-				resp := writeAppDBSecret(t, b, storage, modelSecretCanary+"-v2")
+				resp := env.writeAppDBSecret(modelSecretCanary + "-v2")
 				metadata := resp.Data["metadata"].(map[string]interface{})
 				assertOperationIDs(t, metadata, 1)
 			},
@@ -102,11 +101,7 @@ func TestCoreStateModelSourceAssociationQueueLifecycle(t *testing.T) {
 		{
 			name: "disable cancels queued version",
 			run: func(t *testing.T) {
-				resp := handleRequest(
-					t,
-					b,
-					storage,
-					logical.UpdateOperation,
+				resp := env.update(
 					"associations/app/db/"+associationID+"/disable",
 					nil,
 				)
@@ -124,11 +119,7 @@ func TestCoreStateModelSourceAssociationQueueLifecycle(t *testing.T) {
 		{
 			name: "enable requeues current version",
 			run: func(t *testing.T) {
-				resp := handleRequest(
-					t,
-					b,
-					storage,
-					logical.UpdateOperation,
+				resp := env.update(
 					"associations/app/db/"+associationID+"/enable",
 					nil,
 				)
@@ -146,7 +137,7 @@ func TestCoreStateModelSourceAssociationQueueLifecycle(t *testing.T) {
 		{
 			name: "drain update returns synced",
 			run: func(t *testing.T) {
-				drainCoreModelQueue(t, b, storage, 1)
+				drainCoreModelQueue(t, env.b, env.storage, 1)
 			},
 			want: coreStateModel{
 				version:         2,
@@ -157,11 +148,7 @@ func TestCoreStateModelSourceAssociationQueueLifecycle(t *testing.T) {
 		{
 			name: "manual sync requeues current version",
 			run: func(t *testing.T) {
-				resp := handleRequest(
-					t,
-					b,
-					storage,
-					logical.UpdateOperation,
+				resp := env.update(
 					"associations/app/db/"+associationID+"/sync",
 					nil,
 				)
@@ -179,7 +166,7 @@ func TestCoreStateModelSourceAssociationQueueLifecycle(t *testing.T) {
 		{
 			name: "source delete replaces queued upsert with delete",
 			run: func(t *testing.T) {
-				resp := handleRequest(t, b, storage, logical.DeleteOperation, "data/app/db", nil)
+				resp := env.delete("data/app/db")
 				assertNoErrorResponse(t, resp)
 				metadata := resp.Data["metadata"].(map[string]interface{})
 				if ids := operationIDsFromMetadata(t, metadata); len(ids) != 1 {
@@ -195,7 +182,7 @@ func TestCoreStateModelSourceAssociationQueueLifecycle(t *testing.T) {
 		{
 			name: "drain delete records remote missing",
 			run: func(t *testing.T) {
-				drainCoreModelQueue(t, b, storage, 1)
+				drainCoreModelQueue(t, env.b, env.storage, 1)
 			},
 			want: coreStateModel{
 				version: 2,
@@ -208,7 +195,7 @@ func TestCoreStateModelSourceAssociationQueueLifecycle(t *testing.T) {
 		t.Run(step.name, func(t *testing.T) {
 			step.run(t)
 			model = step.want
-			assertCoreStateModel(t, b, storage, model)
+			assertCoreStateModel(t, env.b, env.storage, model)
 		})
 	}
 }
@@ -270,24 +257,21 @@ func TestCoreStateModelProviderFailureInvariants(t *testing.T) {
 
 	for _, testCase := range testCases {
 		t.Run(testCase.name, func(t *testing.T) {
-			b := Backend(&logical.BackendConfig{})
-			storage := &logical.InmemStorage{}
+			env := newBackendTestEnv(t)
 
-			writeAppDBSecret(t, b, storage, modelSecretCanary+"-"+testCase.name)
-			createFakeDestination(t, b, storage, "default")
-			associationResp := createFakeAssociationWithResolvedName(t, b, storage, testCase.resolvedName)
+			env.writeAppDBSecret(modelSecretCanary + "-" + testCase.name)
+			env.createFakeDestination("default")
+			associationResp := env.createFakeAssociationWithResolvedName(testCase.resolvedName)
 			operationID := requireSingleOperationID(t, operationIDsFromResponse(t, associationResp), "association")
 
-			acknowledgeRestoreGuard(t, b, storage)
-			drainResp := handleRequest(t, b, storage, logical.UpdateOperation, "queue/drain", map[string]interface{}{
+			env.acknowledgeRestoreGuard()
+			drainResp := env.update("queue/drain", map[string]interface{}{
 				"max_operations": 1,
 			})
 			assertNoErrorResponse(t, drainResp)
-			if got := drainResp.Data["processed"]; got != 1 {
-				t.Fatalf("processed = %v, want 1", got)
-			}
+			assertResponseValue(t, drainResp, "processed", 1)
 
-			operation := assertOutboxOperation(t, storage, operationID, 1, testCase.operationState)
+			operation := assertOutboxOperation(t, env.storage, operationID, 1, testCase.operationState)
 			if operation.Attempts != 1 {
 				t.Fatalf("attempts = %d, want 1", operation.Attempts)
 			}
@@ -304,13 +288,13 @@ func TestCoreStateModelProviderFailureInvariants(t *testing.T) {
 			if testCase.retryable {
 				sourceState = domain.SyncStatePending
 			}
-			assertCoreStateModel(t, b, storage, coreStateModel{
+			assertCoreStateModel(t, env.b, env.storage, coreStateModel{
 				version:         1,
 				sourceAvailable: true,
 				pending:         boolToInt(testCase.retryable),
 				state:           sourceState,
 			})
-			assertStatusModelFailure(t, b, storage, testCase.errorClass, testCase.state)
+			assertStatusModelFailure(t, env.b, env.storage, testCase.errorClass, testCase.state)
 		})
 	}
 }
@@ -322,9 +306,7 @@ func drainCoreModelQueue(t *testing.T, b *secretSyncBackend, storage logical.Sto
 		"max_operations": 10,
 	})
 	assertNoErrorResponse(t, resp)
-	if got := resp.Data["processed"]; got != wantProcessed {
-		t.Fatalf("processed = %v, want %d", got, wantProcessed)
-	}
+	assertResponseValue(t, resp, "processed", wantProcessed)
 }
 
 func assertCoreStateModel(t *testing.T, b logical.Backend, storage logical.Storage, model coreStateModel) {
@@ -412,13 +394,9 @@ func assertCoreStatusModel(t *testing.T, b logical.Backend, storage logical.Stor
 	t.Helper()
 	resp := handleRequest(t, b, storage, logical.ReadOperation, "status/app/db", nil)
 	assertNoErrorResponse(t, resp)
-	if got := resp.Data["state"]; got != string(model.state) {
-		t.Fatalf("status state = %v, want %s: %#v", got, model.state, resp.Data)
-	}
+	assertResponseValue(t, resp, "state", string(model.state))
 	if model.version > 0 {
-		if got := resp.Data["version"]; got != model.version {
-			t.Fatalf("status version = %v, want %d", got, model.version)
-		}
+		assertResponseValue(t, resp, "version", model.version)
 	}
 	if strings.Contains(fmt.Sprint(resp.Data), modelSecretCanary) {
 		t.Fatalf("status leaks secret canary: %#v", resp.Data)
