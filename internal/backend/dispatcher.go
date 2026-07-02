@@ -40,7 +40,7 @@ func (b *secretSyncBackend) processDueOutboxLimit(
 	if err != nil {
 		return 0, err
 	}
-	ids, err := listOutboxIDs(ctx, storage)
+	ids, err := listQueuedOutboxIDs(ctx, storage)
 	if err != nil {
 		return 0, err
 	}

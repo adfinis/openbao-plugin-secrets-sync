@@ -401,6 +401,22 @@ func listAssociationNameReservationIDs(
 }
 
 func putOutbox(ctx context.Context, storage logical.Storage, record outboxRecord) error {
+	existing, err := getOutbox(ctx, storage, record.ID)
+	if err != nil {
+		return err
+	}
+	if existing != nil {
+		if existing.Path != "" && existing.Path != record.Path {
+			if err := storage.Delete(ctx, outboxByPathStorageKey(existing.Path, existing.ID)); err != nil {
+				return err
+			}
+		}
+		if existing.State != "" && existing.State != record.State {
+			if err := storage.Delete(ctx, outboxByStateStorageKey(existing.State, existing.ID)); err != nil {
+				return err
+			}
+		}
+	}
 	entry, err := logical.StorageEntryJSON(outboxStorageKey(record.ID), record)
 	if err != nil {
 		return err
@@ -412,14 +428,30 @@ func putOutbox(ctx context.Context, storage logical.Storage, record outboxRecord
 	if err != nil {
 		return err
 	}
-	return storage.Put(ctx, indexEntry)
+	if err := storage.Put(ctx, indexEntry); err != nil {
+		return err
+	}
+	if record.State == "" {
+		return nil
+	}
+	stateEntry, err := logical.StorageEntryJSON(outboxByStateStorageKey(record.State, record.ID), record.ID)
+	if err != nil {
+		return err
+	}
+	return storage.Put(ctx, stateEntry)
 }
 
 func deleteOutbox(ctx context.Context, storage logical.Storage, record outboxRecord) error {
 	if err := storage.Delete(ctx, outboxStorageKey(record.ID)); err != nil {
 		return err
 	}
-	return storage.Delete(ctx, outboxByPathStorageKey(record.Path, record.ID))
+	if err := storage.Delete(ctx, outboxByPathStorageKey(record.Path, record.ID)); err != nil {
+		return err
+	}
+	if record.State == "" {
+		return nil
+	}
+	return storage.Delete(ctx, outboxByStateStorageKey(record.State, record.ID))
 }
 
 func getOutbox(ctx context.Context, storage logical.Storage, id string) (*outboxRecord, error) {
@@ -442,11 +474,23 @@ func listOutboxIDs(ctx context.Context, storage logical.Storage) ([]string, erro
 }
 
 func listQueuedOutboxIDs(ctx context.Context, storage logical.Storage) ([]string, error) {
-	ids, err := listOutboxIDs(ctx, storage)
-	if err != nil {
-		return nil, err
+	return listOutboxIDsForStates(ctx, storage, outboxStatePending, outboxStateRetryWait)
+}
+
+func listOutboxIDsForState(ctx context.Context, storage logical.Storage, state string) ([]string, error) {
+	return storage.List(ctx, outboxByStateStoragePrefix+state+"/")
+}
+
+func listOutboxIDsForStates(ctx context.Context, storage logical.Storage, states ...string) ([]string, error) {
+	ids := []string{}
+	for _, state := range states {
+		stateIDs, err := listOutboxIDsForState(ctx, storage, state)
+		if err != nil {
+			return nil, err
+		}
+		ids = append(ids, stateIDs...)
 	}
-	return filterQueuedOutboxIDs(ctx, storage, ids)
+	return ids, nil
 }
 
 func listOutboxIDsForPath(ctx context.Context, storage logical.Storage, path string) ([]string, error) {

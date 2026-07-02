@@ -202,35 +202,39 @@ func (b *secretSyncBackend) recordQueueSummary(ctx context.Context, summary queu
 }
 
 func readQueueSummary(ctx context.Context, storage logical.Storage, now time.Time) (queueSummary, error) {
-	ids, err := listOutboxIDs(ctx, storage)
+	pendingIDs, err := listOutboxIDsForState(ctx, storage, outboxStatePending)
+	if err != nil {
+		return queueSummary{}, err
+	}
+	retryWaitIDs, err := listOutboxIDsForState(ctx, storage, outboxStateRetryWait)
+	if err != nil {
+		return queueSummary{}, err
+	}
+	terminalIDs, err := listOutboxIDsForState(ctx, storage, outboxStateFailedTerminal)
+	if err != nil {
+		return queueSummary{}, err
+	}
+	canceledIDs, err := listOutboxIDsForState(ctx, storage, outboxStateCanceled)
 	if err != nil {
 		return queueSummary{}, err
 	}
 	summary := queueSummary{}
-	for _, id := range ids {
+	summary.Pending = len(pendingIDs)
+	summary.RetryWait = len(retryWaitIDs)
+	summary.Terminal = len(terminalIDs)
+	summary.Canceled = len(canceledIDs)
+	for _, id := range append(pendingIDs, retryWaitIDs...) {
 		record, err := getOutbox(ctx, storage, id)
 		if err != nil {
 			return queueSummary{}, err
 		}
-		if record == nil {
+		if record == nil || !isQueuedOutboxState(record.State) {
 			continue
 		}
-		switch record.State {
-		case outboxStatePending:
-			summary.Pending++
-		case outboxStateRetryWait:
-			summary.RetryWait++
-		case outboxStateFailedTerminal:
-			summary.Terminal++
-		case outboxStateCanceled:
-			summary.Canceled++
+		if isOutboxClaimActive(*record, now) {
+			summary.Claimed++
 		}
-		if isQueuedOutboxState(record.State) {
-			if isOutboxClaimActive(*record, now) {
-				summary.Claimed++
-			}
-			summary.recordQueuedAge(*record, now)
-		}
+		summary.recordQueuedAge(*record, now)
 	}
 	return summary, nil
 }

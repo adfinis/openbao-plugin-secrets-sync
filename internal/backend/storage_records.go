@@ -23,6 +23,7 @@ const (
 	associationNamePrefix      = "association_names/"
 	outboxStoragePrefix        = "outbox/"
 	outboxByPathStoragePrefix  = "outbox_by_path/"
+	outboxByStateStoragePrefix = "outbox_by_state/"
 	defaultQueueCapacity       = 1000
 	defaultMaxVersions         = 10
 	defaultDeleteVersionAfter  = "0s"
@@ -217,6 +218,10 @@ func versionStorageKey(path string, version int) string {
 
 func enqueueIntentStorageKey(path string, version int) string {
 	return enqueueIntentStoragePrefix + path + "/" + strconv.Itoa(version)
+}
+
+func outboxByStateStorageKey(state string, id string) string {
+	return outboxByStateStoragePrefix + state + "/" + id
 }
 
 func destinationStorageKey(destinationType string, name string) string {

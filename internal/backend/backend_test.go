@@ -3085,6 +3085,39 @@ func TestQueueOperationReadCancelAndRetry(t *testing.T) {
 	}
 }
 
+func TestOutboxStateIndexTracksPutAndDelete(t *testing.T) {
+	storage := &logical.InmemStorage{}
+	now := nowUTC().Format(timeFormatRFC3339)
+	record := outboxRecord{
+		ID:          "op_state_index",
+		Type:        outbox.OperationTypeUpsert,
+		Path:        "app/db",
+		Version:     1,
+		State:       outboxStatePending,
+		NotBefore:   now,
+		CreatedTime: now,
+		UpdatedTime: now,
+	}
+	if err := putOutbox(context.Background(), storage, record); err != nil {
+		t.Fatalf("write pending outbox: %v", err)
+	}
+	assertOutboxStateIndexed(t, storage, outboxStatePending, record.ID, true)
+	assertOutboxStateIndexed(t, storage, outboxStateRetryWait, record.ID, false)
+
+	record.State = outboxStateRetryWait
+	record.UpdatedTime = now
+	if err := putOutbox(context.Background(), storage, record); err != nil {
+		t.Fatalf("write retry-wait outbox: %v", err)
+	}
+	assertOutboxStateIndexed(t, storage, outboxStatePending, record.ID, false)
+	assertOutboxStateIndexed(t, storage, outboxStateRetryWait, record.ID, true)
+
+	if err := deleteOutbox(context.Background(), storage, record); err != nil {
+		t.Fatalf("delete outbox: %v", err)
+	}
+	assertOutboxStateIndexed(t, storage, outboxStateRetryWait, record.ID, false)
+}
+
 func TestQueueDrainProcessesDueOperations(t *testing.T) {
 	b := Backend(&logical.BackendConfig{})
 	storage := &logical.InmemStorage{}
@@ -3820,6 +3853,17 @@ func assertOutboxOperation(
 		t.Fatalf("outbox operation state = %s, want %s", got, state)
 	}
 	return operation
+}
+
+func assertOutboxStateIndexed(t *testing.T, storage logical.Storage, state string, operationID string, want bool) {
+	t.Helper()
+	entry, err := storage.Get(context.Background(), outboxByStateStorageKey(state, operationID))
+	if err != nil {
+		t.Fatalf("read outbox state index: %v", err)
+	}
+	if got := entry != nil; got != want {
+		t.Fatalf("outbox state index %s/%s exists = %t, want %t", state, operationID, got, want)
+	}
 }
 
 func assertFutureNotBefore(t *testing.T, raw string) {
