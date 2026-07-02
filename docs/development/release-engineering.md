@@ -1,7 +1,9 @@
 # Release engineering
 
-This document describes the release artifact workflow for
-`openbao-plugin-secrets-sync`.
+This document describes the maintainer release workflow for
+`openbao-plugin-secrets-sync`. Use
+[Install and verify release artifacts](../operations/install-and-verify.md)
+for operator-facing artifact verification and plugin installation.
 
 ## Release shape
 
@@ -10,7 +12,7 @@ Release Please manages changelog and version bumps through
 Signed tag creation, draft GitHub Release creation, and release artifact
 dispatch are handled by the dedicated release-tag workflow.
 
-Dispatched release artifact runs build Linux plugin binaries for:
+The release artifact workflow builds Linux plugin binaries for:
 
 ```text
 linux/amd64
@@ -149,10 +151,10 @@ OPENBAO_SECRET_SYNC_RELEASE_TAG_GPG_EMAIL
 Set these values as repository Actions secrets. No broad personal access token
 is required for the default release path.
 
-The tag ruleset protects semver tags from update and deletion.
-Automated tag creation is performed by `GITHUB_TOKEN` in the release-tag
-workflow. For GitHub App-based release automation, restrict semver tag creation
-to the release tag app and keep the release PR and tag identities separate.
+The tag ruleset protects semver tags from update and deletion. Automated tag
+creation is performed by `GITHUB_TOKEN` in the release-tag workflow. For
+GitHub App-based release automation, restrict semver tag creation to the
+release tag app and keep the release PR and tag identities separate.
 
 ## Artifact workflow
 
@@ -204,136 +206,3 @@ The workflow:
 - uploads the files to the matching GitHub Release without replacing
   conflicting existing assets;
 - refuses to add missing assets to an already published release.
-
-## Operator verification
-
-Download the artifact for the target platform and `checksums.txt`, then verify:
-
-```sh
-shasum -a 256 -c checksums.txt
-```
-
-Verify the checksum file signature with `cosign`:
-
-```sh
-VERSION=0.1.0-preview.1
-REPO=adfinis/openbao-plugin-secrets-sync
-WORKFLOW_REF=refs/heads/main
-WORKFLOW_IDENTITY="https://github.com/${REPO}/.github/workflows/release.yml@${WORKFLOW_REF}"
-
-cosign verify-blob \
-  --new-bundle-format=true \
-  --bundle checksums.txt.bundle \
-  --certificate-identity "${WORKFLOW_IDENTITY}" \
-  --certificate-oidc-issuer https://token.actions.githubusercontent.com \
-  checksums.txt
-```
-
-For public releases, verify the artifact provenance attestation against the
-release workflow identity:
-
-```sh
-gh attestation verify "./openbao-plugin-secrets-sync_${VERSION}_linux_amd64" \
-  --repo "${REPO}" \
-  --signer-workflow "${REPO}/.github/workflows/release.yml" \
-  --source-ref "${WORKFLOW_REF}" \
-  --cert-oidc-issuer https://token.actions.githubusercontent.com \
-  --deny-self-hosted-runners
-```
-
-Inspect the release provenance index:
-
-```sh
-jq '.release, .checksums, .assets, .reproducibility, .attestations' \
-  provenance-index.json
-```
-
-Install the binary into the OpenBao plugin directory under the command name used
-at registration time:
-
-```sh
-install -m 0755 \
-  openbao-plugin-secrets-sync_0.1.0-preview.1_linux_amd64 \
-  /opt/openbao/plugins/openbao-plugin-secrets-sync
-```
-
-Register the plugin with the checksum of the installed binary:
-
-```sh
-sha256="$(shasum -a 256 /opt/openbao/plugins/openbao-plugin-secrets-sync | awk '{print $1}')"
-
-bao plugin register \
-  -sha256="$sha256" \
-  -command=openbao-plugin-secrets-sync \
-  -version=v0.1.0-preview.1 \
-  secret openbao-plugin-secrets-sync
-```
-
-Mount or tune an existing mount to use the registered version according to the
-normal OpenBao plugin lifecycle.
-
-## OCI plugin images
-
-OpenBao supports OCI-based plugin distribution through declarative `plugin`
-configuration. In that model OpenBao downloads an OCI image, extracts the
-plugin binary from the image root, verifies the extracted binary SHA-256, and
-runs the binary as a normal external plugin process.
-
-The release workflow publishes the OCI plugin image as:
-
-```text
-ghcr.io/adfinis/openbao-plugin-secrets-sync:v0.1.0-preview.1
-```
-
-Use the image digest from `provenance-index.json` for verification and
-deployment records:
-
-```sh
-jq -r '.oci_plugin_image.ref, .oci_plugin_image.digest' provenance-index.json
-```
-
-Verify the OCI image signature by digest:
-
-```sh
-IMAGE_NAME=ghcr.io/adfinis/openbao-plugin-secrets-sync
-IMAGE_DIGEST=sha256:<digest-from-provenance-index>
-
-cosign verify \
-  --new-bundle-format=true \
-  --certificate-identity "${WORKFLOW_IDENTITY}" \
-  --certificate-oidc-issuer https://token.actions.githubusercontent.com \
-  "${IMAGE_NAME}@${IMAGE_DIGEST}"
-```
-
-For public releases, verify the OCI image provenance attestation:
-
-```sh
-gh attestation verify "oci://${IMAGE_NAME}@${IMAGE_DIGEST}" \
-  --repo "${REPO}" \
-  --signer-workflow "${REPO}/.github/workflows/release.yml" \
-  --source-ref "${WORKFLOW_REF}" \
-  --cert-oidc-issuer https://token.actions.githubusercontent.com \
-  --deny-self-hosted-runners
-```
-
-Configure OpenBao to download and register the OCI plugin:
-
-```hcl
-plugin_directory = "/opt/openbao/plugins"
-plugin_auto_download = true
-plugin_auto_register = true
-plugin_download_behavior = "fail"
-plugin_download_max_size = 134217728 # 128 MiB, expressed as bytes.
-
-plugin "secret" "openbao-plugin-secrets-sync" {
-  image       = "ghcr.io/adfinis/openbao-plugin-secrets-sync"
-  version     = "v0.1.0-preview.1"
-  binary_name = "openbao-plugin-secrets-sync"
-  sha256sum   = "<openbao_plugin_catalog_sha256 from provenance-index.json>"
-}
-```
-
-`sha256sum` is the checksum of the extracted plugin binary, not the OCI image
-digest. The binary checksum is recorded per platform in
-`provenance-index.json` under the matching release asset as
-`openbao_plugin_catalog_sha256`.

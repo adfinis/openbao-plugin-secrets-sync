@@ -28,8 +28,8 @@ page when you need to choose the right detailed document.
   troubleshooting flows, restore-guard handling, and failure response guidance.
 - [Observability](operations/observability.md) describes the OpenTelemetry
   metric surface and attribute policy.
-- [Release engineering](operations/release.md) describes the artifact workflow
-  and plugin verification steps.
+- [Install and verify release artifacts](operations/install-and-verify.md)
+  describes artifact verification and plugin installation.
 
 ### Review security
 
@@ -49,6 +49,8 @@ page when you need to choose the right detailed document.
   conformance expectations.
 - [Provider implementation guide](development/provider-implementation.md)
   explains the practical steps and review checklist for adding a provider.
+- [Release engineering](development/release-engineering.md) describes the
+  maintainer release automation and artifact workflow.
 - [Testing and hardening](development/testing.md) defines unit, contract, model,
   fuzz, e2e, and security test lanes.
 - [Documentation style](development/documentation-style.md) defines the
