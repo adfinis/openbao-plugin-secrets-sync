@@ -30,6 +30,8 @@ page when you need to choose the right detailed document.
   metric surface and attribute policy.
 - [Install and verify release artifacts](operations/install-and-verify.md)
   describes artifact verification and plugin installation.
+- [Restore and clone review](operations/restore-and-clone.md) describes the
+  restore guard review workflow before remote mutation resumes.
 
 ### Review security
 
@@ -37,6 +39,8 @@ page when you need to choose the right detailed document.
 - [Security model](security/security-model.md) records the threat model,
   authorization shape, redaction rules, restore safety, packaging, and
   operational requirements.
+- [Policy examples](security/policies.md) provides OpenBao policy snippets for
+  common operator, app, delegated-owner, and auditor roles.
 
 ### Build or review implementation
 
@@ -59,6 +63,8 @@ page when you need to choose the right detailed document.
 ### Inspect references
 
 - [Reference](reference/README.md) collects API and compatibility references.
+- [API surface](reference/api-surface.md) explains the Secret Sync API path
+  groups and conceptual contract.
 - [API compatibility](reference/api-compatibility.md) explains the KV-v2-like
   source API claim and the intentional differences.
 - [API inspection artifacts](reference/api/README.md) include the draft OpenAPI
