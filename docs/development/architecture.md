@@ -113,6 +113,12 @@ using the same remote destination.
 restore guard is acknowledged. Provider requests carry it, and providers
 include it in remote ownership metadata where supported.
 
+Each source metadata record carries a random generation. Operation IDs and
+provider idempotency keys include that generation alongside path, source
+version, association, object, and operation type. Deleting and recreating a
+source path therefore cannot reuse historical operation IDs even when version
+numbers restart at 1.
+
 ### Secret Version Record
 
 ```json
@@ -246,10 +252,11 @@ If transactions are not available, use a recoverable state:
 11. release lock.
 
 The reconciler must scan incomplete enqueue intents and committed versions to
-recreate missing outbox records. Completed enqueue intents are pruned after the
-corresponding outbox records are durable; legacy completed intents are pruned
-during recovery scans. This makes crash recovery explicit without retaining
-unbounded completed intent history.
+recreate missing outbox records. Enqueue intents store structured operation
+descriptors, including operation IDs and source generation. Completed enqueue
+intents are removed after the corresponding outbox records are durable. This
+makes crash recovery explicit without retaining unbounded completed intent
+history.
 
 Source metadata writes, source version mutations, and association lifecycle
 mutations use the same source-path lock. Association writes also lock the

@@ -86,6 +86,7 @@ type versionMetadata struct {
 }
 
 type metadataRecord struct {
+	Generation         string                     `json:"generation"`
 	CurrentVersion     int                        `json:"current_version"`
 	OldestVersion      int                        `json:"oldest_version"`
 	MaxVersions        int                        `json:"max_versions"`
@@ -141,8 +142,8 @@ func (record associationRecord) reservationName() string {
 
 type enqueueIntentRecord struct {
 	Path          string                   `json:"path"`
+	Generation    string                   `json:"generation"`
 	Version       int                      `json:"version"`
-	OperationIDs  []string                 `json:"operation_ids"`
 	Operations    []enqueueIntentOperation `json:"operations"`
 	Complete      bool                     `json:"complete"`
 	CreatedTime   string                   `json:"created_time"`
@@ -288,19 +289,21 @@ func nameReservationID(resolvedName string) string {
 }
 
 func newOperationID(
+	generation string,
 	path string,
 	version int,
 	associationID string,
 	objectID string,
 	operationType outbox.OperationType,
 ) string {
-	raw := fmt.Sprintf("%s:%d:%s:%s:%s", path, version, associationID, objectID, operationType)
+	raw := fmt.Sprintf("%s:%s:%d:%s:%s:%s", generation, path, version, associationID, objectID, operationType)
 	sum := sha256.Sum256([]byte(raw))
 	return "op-" + hex.EncodeToString(sum[:8]) + "-" + strconv.Itoa(version)
 }
 
 func newMetadataRecord() metadataRecord {
 	return metadataRecord{
+		Generation:         bestEffortRuntimeID("gen"),
 		MaxVersions:        defaultMaxVersions,
 		DeleteVersionAfter: defaultDeleteVersionAfter,
 		CustomMetadata:     make(map[string]string),

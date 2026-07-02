@@ -192,6 +192,10 @@ Current queue hardening coverage asserts that:
 - older operations cannot overwrite newer per-object status records;
 - incomplete enqueue intents recover missing outbox work and completed enqueue
   intents are pruned;
+- recreated source paths rotate source generation so operation IDs are not
+  reused with reset version numbers;
+- version pruning keeps source versions that are still referenced by queued
+  upserts;
 - successful dispatch writes object status and prunes the completed outbox
   operation;
 - outbox state and due indexes are updated when operation state or schedule

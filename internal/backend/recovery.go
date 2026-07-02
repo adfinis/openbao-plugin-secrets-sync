@@ -2,7 +2,6 @@ package backend
 
 import (
 	"context"
-	"strconv"
 	"time"
 
 	"github.com/adfinis/openbao-plugin-secrets-sync/internal/outbox"
@@ -65,10 +64,7 @@ func recoverableIntentOperations(
 	now string,
 	versionAvailable bool,
 ) ([]outboxRecord, error) {
-	if len(intent.Operations) > 0 {
-		return outboxRecordsFromIntentOperations(ctx, storage, intent, now, versionAvailable)
-	}
-	return legacyOutboxRecordsForIntent(ctx, storage, intent, now, versionAvailable)
+	return outboxRecordsFromIntentOperations(ctx, storage, intent, now, versionAvailable)
 }
 
 func outboxRecordsFromIntentOperations(
@@ -102,36 +98,15 @@ func outboxRecordsFromIntentOperations(
 			NotBefore:      now,
 			CreatedTime:    intent.CreatedTime,
 			UpdatedTime:    now,
-			IdempotencyKey: intent.Path + ":" + strconv.Itoa(intent.Version) + ":" +
-				operation.AssociationID + ":" + operation.ObjectID + ":" + string(operation.Type),
+			IdempotencyKey: operationIdempotencyKey(
+				intent.Generation,
+				intent.Path,
+				intent.Version,
+				operation.AssociationID,
+				operation.ObjectID,
+				operation.Type,
+			),
 		})
-	}
-	return records, nil
-}
-
-func legacyOutboxRecordsForIntent(
-	ctx context.Context,
-	storage logical.Storage,
-	intent enqueueIntentRecord,
-	now string,
-	versionAvailable bool,
-) ([]outboxRecord, error) {
-	if !versionAvailable {
-		return nil, nil
-	}
-	associations, err := listAssociationsForPath(ctx, storage, intent.Path)
-	if err != nil {
-		return nil, err
-	}
-	records := []outboxRecord{}
-	for _, association := range associations {
-		operation := newAssociationOutboxRecord(association, intent.Version, syncObjectIDSecretPath, now)
-		for _, id := range intent.OperationIDs {
-			if operation.ID == id {
-				records = append(records, operation)
-				break
-			}
-		}
 	}
 	return records, nil
 }

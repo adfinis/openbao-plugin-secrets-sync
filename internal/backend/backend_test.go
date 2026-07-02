@@ -1089,8 +1089,10 @@ func TestCurrentVersionMutationQueuesRemoteDelete(t *testing.T) {
 			createFakeDestination(t, b, storage, "default")
 			associationResp := createFakeDeleteModeAssociation(t, b, storage)
 			associationID := associationIDFromResponse(t, associationResp)
+			generation := sourceGeneration(t, storage, "app/db")
 			upsertOperationID := operationIDsFromResponse(t, associationResp)[0]
 			deleteOperationID := newOperationID(
+				generation,
 				"app/db",
 				1,
 				associationID,
@@ -1125,19 +1127,12 @@ func TestUndeleteCurrentVersionQueuesUpsertAfterRemoteDelete(t *testing.T) {
 	writeAppDBSecret(t, b, storage, "initial")
 	createFakeDestination(t, b, storage, "default")
 	associationResp := createFakeDeleteModeAssociation(t, b, storage)
-	associationID := associationIDFromResponse(t, associationResp)
 	upsertOperationID := operationIDsFromResponse(t, associationResp)[0]
 	runPeriodicAllowed(t, b, storage, "periodic upsert")
 
 	deleteResp := handleRequest(t, b, storage, logical.DeleteOperation, "data/app/db", nil)
 	assertNoErrorResponse(t, deleteResp)
-	deleteOperationID := newOperationID(
-		"app/db",
-		1,
-		associationID,
-		syncObjectIDSecretPath,
-		outbox.OperationTypeDelete,
-	)
+	deleteOperationID := operationIDsFromMetadata(t, deleteResp.Data["metadata"].(map[string]interface{}))[0]
 	runPeriodicAllowed(t, b, storage, "periodic delete")
 	assertOutboxMissing(t, storage, deleteOperationID)
 	assertStatusObjectState(t, b, storage, domain.SyncStateRemoteMissing)
@@ -1255,6 +1250,46 @@ func TestMetadataDeleteRequiresAssociationRemoval(t *testing.T) {
 	}
 }
 
+func TestMetadataDeleteRecreateRotatesOperationIDs(t *testing.T) {
+	b := Backend(&logical.BackendConfig{})
+	storage := &logical.InmemStorage{}
+
+	writeAppDBSecret(t, b, storage, "initial")
+	createFakeDestination(t, b, storage, "default")
+	firstAssociationResp := createDefaultFakeAssociation(t, b, storage)
+	firstAssociationID := associationIDFromResponse(t, firstAssociationResp)
+	firstGeneration := sourceGeneration(t, storage, "app/db")
+	firstOperationID := requireSingleOperationID(t, operationIDsFromResponse(t, firstAssociationResp), "first association")
+
+	deleteAssociationResp := handleRequest(
+		t,
+		b,
+		storage,
+		logical.DeleteOperation,
+		"associations/app/db/"+firstAssociationID,
+		nil,
+	)
+	if deleteAssociationResp != nil && deleteAssociationResp.IsError() {
+		t.Fatalf("unexpected association delete error: %v", deleteAssociationResp.Error())
+	}
+	deleteMetadataResp := handleRequest(t, b, storage, logical.DeleteOperation, "metadata/app/db", nil)
+	if deleteMetadataResp != nil && deleteMetadataResp.IsError() {
+		t.Fatalf("unexpected metadata delete error: %v", deleteMetadataResp.Error())
+	}
+
+	writeAppDBSecret(t, b, storage, "recreated")
+	secondAssociationResp := createDefaultFakeAssociation(t, b, storage)
+	secondGeneration := sourceGeneration(t, storage, "app/db")
+	secondOperationID := requireSingleOperationID(t, operationIDsFromResponse(t, secondAssociationResp), "second association")
+
+	if secondGeneration == firstGeneration {
+		t.Fatalf("metadata generation was reused: %s", secondGeneration)
+	}
+	if secondOperationID == firstOperationID {
+		t.Fatalf("operation ID was reused after metadata delete: %s", secondOperationID)
+	}
+}
+
 func TestMetadataWriteEnforcesCASRequiredAndCustomMetadata(t *testing.T) {
 	b := Backend(&logical.BackendConfig{})
 	storage := &logical.InmemStorage{}
@@ -1330,6 +1365,44 @@ func TestMetadataMaxVersionsPrunesOldVersions(t *testing.T) {
 	versions := metadataResp.Data["versions"].(map[string]versionMetadata)
 	if _, ok := versions["1"]; ok {
 		t.Fatalf("metadata versions = %v, want version 1 pruned", versions)
+	}
+}
+
+func TestMetadataMaxVersionsKeepsQueuedSourceVersions(t *testing.T) {
+	b := Backend(&logical.BackendConfig{})
+	storage := &logical.InmemStorage{}
+
+	metadataResp := handleRequest(t, b, storage, logical.UpdateOperation, "metadata/app/db", map[string]interface{}{
+		"max_versions": 1,
+	})
+	assertNoErrorResponse(t, metadataResp)
+	writeAppDBSecret(t, b, storage, "one")
+	createFakeDestination(t, b, storage, "default")
+	associationResp := createDefaultFakeAssociation(t, b, storage)
+	operationID := requireSingleOperationID(t, operationIDsFromResponse(t, associationResp), "association")
+	operation := assertOutboxOperation(t, storage, operationID, 1, outboxStatePending)
+	operation.ClaimOwner = "worker-active"
+	operation.ClaimExpiresTime = nowUTC().Add(time.Hour).Format(timeFormatRFC3339)
+	operation.ClaimAttempt = 1
+	if err := putOutbox(context.Background(), storage, *operation); err != nil {
+		t.Fatalf("write claimed operation: %v", err)
+	}
+
+	writeAppDBSecret(t, b, storage, "two")
+
+	version, err := getVersion(context.Background(), storage, "app/db", 1)
+	if err != nil {
+		t.Fatalf("read protected version: %v", err)
+	}
+	if version == nil {
+		t.Fatal("version 1 must be kept while a queued upsert references it")
+	}
+	metadata, err := getMetadata(context.Background(), storage, "app/db")
+	if err != nil {
+		t.Fatalf("read metadata: %v", err)
+	}
+	if _, ok := metadata.Versions["1"]; !ok {
+		t.Fatalf("metadata versions = %v, want protected version 1", metadata.Versions)
 	}
 }
 
@@ -1868,7 +1941,7 @@ func TestAssociationSecretKeyDisableMarksPerSourceKeyStatus(t *testing.T) {
 	)
 	assertNoErrorResponse(t, disableResp)
 	assertAssociationEnabled(t, disableResp, false)
-	assertStringSlice(t, stringSliceFromResponse(t, disableResp, "canceled_operation_ids"), operationIDs)
+	assertStringSet(t, stringSliceFromResponse(t, disableResp, "canceled_operation_ids"), operationIDs)
 
 	statusResp := handleRequest(t, b, storage, logical.ReadOperation, "status/app/db", nil)
 	assertNoErrorResponse(t, statusResp)
@@ -3539,7 +3612,7 @@ func TestPeriodicRecoversIncompleteEnqueueIntent(t *testing.T) {
 	if err := deleteOutbox(context.Background(), storage, *operation); err != nil {
 		t.Fatalf("delete outbox operation: %v", err)
 	}
-	intent := newEnqueueIntentRecord("app/db", 2, []outboxRecord{*operation}, operation.CreatedTime)
+	intent := newEnqueueIntentRecord("app/db", sourceGeneration(t, storage, "app/db"), 2, []outboxRecord{*operation}, operation.CreatedTime)
 	if err := putEnqueueIntent(context.Background(), storage, intent); err != nil {
 		t.Fatalf("write incomplete enqueue intent: %v", err)
 	}
@@ -3576,7 +3649,7 @@ func TestRecoveryRestoresDeleteIntentAfterSourceDelete(t *testing.T) {
 	if err := deleteOutbox(context.Background(), storage, *operation); err != nil {
 		t.Fatalf("delete outbox operation: %v", err)
 	}
-	intent := newEnqueueIntentRecord("app/db", 1, []outboxRecord{*operation}, operation.CreatedTime)
+	intent := newEnqueueIntentRecord("app/db", sourceGeneration(t, storage, "app/db"), 1, []outboxRecord{*operation}, operation.CreatedTime)
 	if err := putEnqueueIntent(context.Background(), storage, intent); err != nil {
 		t.Fatalf("write incomplete delete enqueue intent: %v", err)
 	}
@@ -3603,8 +3676,9 @@ func TestRecoveryCompletesIntentWithoutCommittedVersion(t *testing.T) {
 		t.Fatalf("read association: %v", err)
 	}
 	now := nowUTC().Format(timeFormatRFC3339)
-	operation := newAssociationOutboxRecord(*association, 99, syncObjectIDSecretPath, now)
-	intent := newEnqueueIntentRecord("app/db", 99, []outboxRecord{operation}, now)
+	generation := sourceGeneration(t, storage, "app/db")
+	operation := newAssociationOutboxRecord(*association, generation, 99, syncObjectIDSecretPath, now)
+	intent := newEnqueueIntentRecord("app/db", generation, 99, []outboxRecord{operation}, now)
 	if err := putEnqueueIntent(context.Background(), storage, intent); err != nil {
 		t.Fatalf("write enqueue intent: %v", err)
 	}
@@ -3631,7 +3705,7 @@ func TestRecoveryCompletesIntentWithoutCommittedVersion(t *testing.T) {
 func TestRecoveryPrunesCompletedEnqueueIntent(t *testing.T) {
 	storage := &logical.InmemStorage{}
 	now := nowUTC().Format(timeFormatRFC3339)
-	intent := newEnqueueIntentRecord("app/db", 1, nil, now)
+	intent := newEnqueueIntentRecord("app/db", "gen-test", 1, nil, now)
 	intent.Complete = true
 	intent.CompletedTime = now
 	if err := putEnqueueIntent(context.Background(), storage, intent); err != nil {
@@ -3797,6 +3871,25 @@ func assertStringSlice(t *testing.T, got []string, want []string) {
 	for i := range want {
 		if got[i] != want[i] {
 			t.Fatalf("string slice = %v, want %v", got, want)
+		}
+	}
+}
+
+func assertStringSet(t *testing.T, got []string, want []string) {
+	t.Helper()
+	if len(got) != len(want) {
+		t.Fatalf("string set = %v, want %v", got, want)
+	}
+	counts := make(map[string]int, len(want))
+	for _, value := range want {
+		counts[value]++
+	}
+	for _, value := range got {
+		counts[value]--
+	}
+	for value, count := range counts {
+		if count != 0 {
+			t.Fatalf("string set = %v, want %v; count for %q = %d", got, want, value, count)
 		}
 	}
 }
@@ -4077,6 +4170,21 @@ func requireSingleOperationID(t *testing.T, operationIDs []string, label string)
 		t.Fatalf("%s operation IDs = %v, want one operation", label, operationIDs)
 	}
 	return operationIDs[0]
+}
+
+func sourceGeneration(t *testing.T, storage logical.Storage, path string) string {
+	t.Helper()
+	metadata, err := getMetadata(context.Background(), storage, path)
+	if err != nil {
+		t.Fatalf("read source metadata: %v", err)
+	}
+	if metadata == nil {
+		t.Fatalf("source metadata %s must exist", path)
+	}
+	if metadata.Generation == "" {
+		t.Fatalf("source metadata %s generation must be set", path)
+	}
+	return metadata.Generation
 }
 
 func operationIDsFromMetadata(t *testing.T, metadata map[string]interface{}) []string {

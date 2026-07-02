@@ -128,12 +128,19 @@ func pruneExcessVersions(ctx context.Context, storage logical.Storage, path stri
 		metadata.OldestVersion = oldestMetadataVersion(metadata)
 		return nil
 	}
+	protectedVersions, err := queuedUpsertVersionsForPath(ctx, storage, path)
+	if err != nil {
+		return err
+	}
 	for version := range metadata.Versions {
 		versionNumber, err := strconv.Atoi(version)
 		if err != nil {
 			return err
 		}
 		if versionNumber >= keepFrom {
+			continue
+		}
+		if _, protected := protectedVersions[versionNumber]; protected {
 			continue
 		}
 		if err := deleteVersion(ctx, storage, path, versionNumber); err != nil {
@@ -164,6 +171,25 @@ func metadataVersionNumbers(metadata *metadataRecord) []int {
 	}
 	sort.Ints(versions)
 	return versions
+}
+
+func queuedUpsertVersionsForPath(ctx context.Context, storage logical.Storage, path string) (map[int]struct{}, error) {
+	ids, err := listQueuedOutboxIDsForPath(ctx, storage, path)
+	if err != nil {
+		return nil, err
+	}
+	versions := make(map[int]struct{})
+	for _, id := range ids {
+		record, err := getOutbox(ctx, storage, id)
+		if err != nil {
+			return nil, err
+		}
+		if record == nil || record.Type != outbox.OperationTypeUpsert {
+			continue
+		}
+		versions[record.Version] = struct{}{}
+	}
+	return versions, nil
 }
 
 func putEnqueueIntent(ctx context.Context, storage logical.Storage, record enqueueIntentRecord) error {

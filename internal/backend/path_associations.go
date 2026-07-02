@@ -1065,6 +1065,7 @@ func (b *secretSyncBackend) enqueueAssociationCurrentVersion(
 	}
 	operations, operationIDs, err := newAssociationOutboxRecords(
 		[]associationRecord{record},
+		metadata.Generation,
 		metadata.CurrentVersion,
 		version.Data,
 		now,
