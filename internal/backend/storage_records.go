@@ -39,6 +39,9 @@ const (
 	providerTypeFake           = "fake"
 	defaultAssociationFormat   = "json"
 	rawAssociationFormat       = "raw"
+	defaultDataMapping         = "payload"
+	dataMappingSourceKeys      = "source-keys"
+	defaultDataKeyTemplate     = "{{ key }}"
 	defaultNameTemplate        = "{{ path }}"
 	defaultPerKeyNameTemplate  = "{{ path }}/{{ key }}"
 	defaultDeleteMode          = deleteModeRetain
@@ -127,6 +130,8 @@ type associationRecord struct {
 	ResolvedName    string `json:"resolved_name"`
 	Granularity     string `json:"granularity"`
 	Format          string `json:"format"`
+	DataMapping     string `json:"data_mapping,omitempty"`
+	DataKeyTemplate string `json:"data_key_template,omitempty"`
 	DeleteMode      string `json:"delete_mode"`
 	Enabled         bool   `json:"enabled"`
 	CreatedTime     string `json:"created_time"`

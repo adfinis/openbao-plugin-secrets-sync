@@ -8,6 +8,7 @@ import (
 
 	"github.com/adfinis/openbao-plugin-secrets-sync/internal/providers/awssecretsmanager"
 	"github.com/adfinis/openbao-plugin-secrets-sync/internal/providers/gitlab"
+	"github.com/adfinis/openbao-plugin-secrets-sync/internal/providers/kubernetessecrets"
 	"github.com/openbao/openbao/sdk/v2/logical"
 )
 
@@ -55,6 +56,22 @@ func TestSecurityBoundaryDestinationReadRedactsSensitiveConfig(t *testing.T) {
 			redactedKeyOrder:  []string{gitlab.ConfigKeyToken},
 			publicConfigKey:   gitlab.ConfigKeyProjectID,
 			publicConfigValue: "platform/app",
+		},
+		{
+			name: "kubernetes token",
+			path: "destinations/k8s/prod",
+			fields: map[string]interface{}{
+				kubernetessecrets.ConfigKeyNamespace: "apps",
+				kubernetessecrets.ConfigKeyAuthMode:  kubernetessecrets.AuthModeToken,
+				kubernetessecrets.ConfigKeyAPIServer: "https://kubernetes.example.com",
+				kubernetessecrets.ConfigKeyToken:     redactionCanary + "-k8s-token",
+			},
+			sensitiveValues: map[string]string{
+				kubernetessecrets.ConfigKeyToken: redactionCanary + "-k8s-token",
+			},
+			redactedKeyOrder:  []string{kubernetessecrets.ConfigKeyToken},
+			publicConfigKey:   kubernetessecrets.ConfigKeyAPIServer,
+			publicConfigValue: "https://kubernetes.example.com",
 		},
 	}
 

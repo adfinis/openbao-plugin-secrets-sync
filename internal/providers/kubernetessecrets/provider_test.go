@@ -2,10 +2,12 @@ package kubernetessecrets
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"strconv"
 	"testing"
 
+	payloadpkg "github.com/adfinis/openbao-plugin-secrets-sync/internal/payload"
 	"github.com/adfinis/openbao-plugin-secrets-sync/internal/providers"
 	"github.com/adfinis/openbao-plugin-secrets-sync/internal/providers/providertest"
 	corev1 "k8s.io/api/core/v1"
@@ -32,6 +34,26 @@ const (
 	testRestoreEpoch    = "epoch-test"
 )
 
+const testCACertPEM = `-----BEGIN CERTIFICATE-----
+MIIDIzCCAgugAwIBAgIUE5FUmToiQv3bNaxE1dI9jJj8bsIwDQYJKoZIhvcNAQEL
+BQAwITEfMB0GA1UEAwwWa3ViZXJuZXRlcy5kZWZhdWx0LnN2YzAeFw0yNjA3MDIx
+NjE0MDdaFw0yNjA3MDMxNjE0MDdaMCExHzAdBgNVBAMMFmt1YmVybmV0ZXMuZGVm
+YXVsdC5zdmMwggEiMA0GCSqGSIb3DQEBAQUAA4IBDwAwggEKAoIBAQCwKLu09rvV
+i57nXOwK7W6iDMM1X606UQrfTb/T5pyjFE1g6DajO/QMZqC4n1+b86uDwpiCjobb
+p+Iu3FaMHEJyoejKQbd2d6VvEjfHHCAson/XZEWgCVwk03L7YCu55zYzaC4tyc/u
+5hsdgnJGvi6TGpxFvhRUkMQcnAwsUBZ7YVV1pc6B81UTWkGYQdo1mIdqHcx1ngQ3
+A7bjmfEtPxVM51DEYc9DJSCmbmXShXAs1kdc424mhBng4hNzAv6hLLFL9DqD6Wmn
+KEcAFi4SrG3IxsC3i8ph1uRQrgZX5ASVj+gwNPhp4937AYU+kJjg2VOY3iQQkOYo
++fy4dIch/zuNAgMBAAGjUzBRMB0GA1UdDgQWBBTxoSmRj83w0WIpKC2cpjZ1U8qI
+aDAfBgNVHSMEGDAWgBTxoSmRj83w0WIpKC2cpjZ1U8qIaDAPBgNVHRMBAf8EBTAD
+AQH/MA0GCSqGSIb3DQEBCwUAA4IBAQCt16lTmsc2/nHqI0Zi77AxPN+XfXdm+oW7
+bdUeOzL1ZhwvXbcbXRzV19mnRM3oAkYQIA5+XDNN63AMm3QQ0sdC9exya+mbGokz
+dh4uSM/A2qc5e08acV9VkRD8aPMBjdYXuKmfeCAkVq3y86EOEYe0Uh+sBVfU2Q+a
+1G+M56JnByoz+zAwI4yUMfqJ5tGvUsB99DuWWzSAtgNKC2mtV9rG7OhEi2hAx42T
+ONdZhbrc5TmwV7TpNa0pSjVsBOjaavQSGw9UN3p4oXoSKaZoFVYN8bbarZM19g5v
+T459I6FRYgo1Ut0HO2F/8edsZ5cAIgn4gVlqDQkMvWK1zNlp59CF
+-----END CERTIFICATE-----`
+
 var secretsResource = schema.GroupResource{Resource: "secrets"}
 
 func TestProviderConformance(t *testing.T) {
@@ -43,6 +65,7 @@ func TestProviderConformance(t *testing.T) {
 			ValueReadback:       true,
 			MetadataReadback:    true,
 			SecretPath:          true,
+			DataMap:             true,
 			UpdateIfOwned:       true,
 			DeleteIfOwned:       true,
 			PayloadHashMetadata: true,
@@ -135,6 +158,25 @@ func TestValidateDestinationConfig(t *testing.T) {
 			},
 		},
 		{
+			name: "token explicit",
+			config: map[string]string{
+				ConfigKeyNamespace:     testNamespace,
+				ConfigKeyAuthMode:      AuthModeToken,
+				ConfigKeyAPIServer:     "https://kubernetes.example.com",
+				ConfigKeyToken:         "bearer-token",
+				ConfigKeyCACertPEM:     testCACertPEM,
+				ConfigKeyTLSServerName: "kubernetes.default.svc",
+			},
+		},
+		{
+			name: "token inferred from api server",
+			config: map[string]string{
+				ConfigKeyNamespace: testNamespace,
+				ConfigKeyAPIServer: "https://kubernetes.example.com",
+				ConfigKeyToken:     "bearer-token",
+			},
+		},
+		{
 			name:       "missing namespace",
 			config:     map[string]string{},
 			errorClass: providers.ErrorClassValidation,
@@ -171,6 +213,66 @@ func TestValidateDestinationConfig(t *testing.T) {
 			},
 			errorClass: providers.ErrorClassValidation,
 		},
+		{
+			name: "token requires api server",
+			config: map[string]string{
+				ConfigKeyNamespace: testNamespace,
+				ConfigKeyAuthMode:  AuthModeToken,
+				ConfigKeyToken:     "bearer-token",
+			},
+			errorClass: providers.ErrorClassValidation,
+		},
+		{
+			name: "token requires https api server",
+			config: map[string]string{
+				ConfigKeyNamespace: testNamespace,
+				ConfigKeyAuthMode:  AuthModeToken,
+				ConfigKeyAPIServer: "http://kubernetes.example.com",
+				ConfigKeyToken:     "bearer-token",
+			},
+			errorClass: providers.ErrorClassValidation,
+		},
+		{
+			name: "token requires token",
+			config: map[string]string{
+				ConfigKeyNamespace: testNamespace,
+				ConfigKeyAuthMode:  AuthModeToken,
+				ConfigKeyAPIServer: "https://kubernetes.example.com",
+			},
+			errorClass: providers.ErrorClassValidation,
+		},
+		{
+			name: "token rejects kubeconfig",
+			config: map[string]string{
+				ConfigKeyNamespace:      testNamespace,
+				ConfigKeyAuthMode:       AuthModeToken,
+				ConfigKeyAPIServer:      "https://kubernetes.example.com",
+				ConfigKeyToken:          "bearer-token",
+				ConfigKeyKubeconfigPath: "/tmp/kubeconfig",
+			},
+			errorClass: providers.ErrorClassValidation,
+		},
+		{
+			name: "kubeconfig rejects token fields",
+			config: map[string]string{
+				ConfigKeyNamespace:      testNamespace,
+				ConfigKeyAuthMode:       AuthModeKubeconfig,
+				ConfigKeyKubeconfigPath: "/tmp/kubeconfig",
+				ConfigKeyToken:          "bearer-token",
+			},
+			errorClass: providers.ErrorClassValidation,
+		},
+		{
+			name: "token rejects invalid ca cert",
+			config: map[string]string{
+				ConfigKeyNamespace: testNamespace,
+				ConfigKeyAuthMode:  AuthModeToken,
+				ConfigKeyAPIServer: "https://kubernetes.example.com",
+				ConfigKeyToken:     "bearer-token",
+				ConfigKeyCACertPEM: "not a certificate",
+			},
+			errorClass: providers.ErrorClassValidation,
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -186,6 +288,37 @@ func TestValidateDestinationConfig(t *testing.T) {
 			}
 			assertProviderErrorClass(t, err, tt.errorClass)
 		})
+	}
+}
+
+func TestTokenRESTConfig(t *testing.T) {
+	options, err := kubernetesDestinationOptionsFromConfig(providers.DestinationConfig{
+		Name: testDestinationName,
+		Config: map[string]string{
+			ConfigKeyNamespace:     testNamespace,
+			ConfigKeyAuthMode:      AuthModeToken,
+			ConfigKeyAPIServer:     "https://kubernetes.example.com",
+			ConfigKeyToken:         "bearer-token",
+			ConfigKeyCACertPEM:     testCACertPEM,
+			ConfigKeyTLSServerName: "kubernetes.default.svc",
+		},
+	})
+	if err != nil {
+		t.Fatalf("options from config: %v", err)
+	}
+
+	restConfig := restConfigForToken(options)
+	if restConfig.Host != "https://kubernetes.example.com" {
+		t.Fatalf("host = %s, want https://kubernetes.example.com", restConfig.Host)
+	}
+	if restConfig.BearerToken != "bearer-token" {
+		t.Fatalf("bearer token = %q, want configured token", restConfig.BearerToken)
+	}
+	if string(restConfig.CAData) != testCACertPEM {
+		t.Fatal("CAData does not match configured ca_cert_pem")
+	}
+	if restConfig.ServerName != "kubernetes.default.svc" {
+		t.Fatalf("server name = %s, want kubernetes.default.svc", restConfig.ServerName)
 	}
 }
 
@@ -325,6 +458,140 @@ func TestUpsertUpdatesOwnedSecretAndPreservesForeignMetadata(t *testing.T) {
 	assertAnnotation(t, updated, annotationPayloadSHA256, testPayloadSHANew)
 }
 
+func TestUpsertCreatesSecretDataMapWithOwnershipMetadata(t *testing.T) {
+	client := fake.NewSimpleClientset()
+	payload := mustDataMapPayload(t, map[string][]byte{
+		"username": []byte("app"),
+		"password": []byte("secret"),
+	})
+	request := defaultDataMapUpsertRequest(payload, 1)
+
+	_, err := runtimeWithClient(t, client).Upsert(context.Background(), request)
+	if err != nil {
+		t.Fatalf("upsert: %v", err)
+	}
+
+	secret, err := client.CoreV1().Secrets(testNamespace).Get(context.Background(), testResolvedName, metav1.GetOptions{})
+	if err != nil {
+		t.Fatalf("get secret: %v", err)
+	}
+	if got := string(secret.Data["username"]); got != "app" {
+		t.Fatalf("username = %q, want app", got)
+	}
+	if got := string(secret.Data["password"]); got != "secret" {
+		t.Fatalf("password = %q, want secret", got)
+	}
+	if _, ok := secret.Data[dataKeyPayload]; ok {
+		t.Fatal("data-map secret must not write legacy payload key")
+	}
+	assertAnnotation(t, secret, annotationFormat, payloadpkg.FormatDataMap)
+	assertAnnotation(t, secret, annotationPayloadSHA256, payload.SHA256)
+	assertDataKeysAnnotation(t, secret, []string{"password", "username"})
+}
+
+func TestUpsertDataMapRemovesStaleManagedKeysAndPreservesForeignKeys(t *testing.T) {
+	initialPayload := mustDataMapPayload(t, map[string][]byte{
+		"username": []byte("old"),
+		"password": []byte("old-secret"),
+	})
+	secret := ownedDataMapSecret(initialPayload.SHA256, map[string][]byte{
+		"username": []byte("old"),
+		"password": []byte("old-secret"),
+		"tls.crt":  []byte("foreign"),
+	}, []string{"password", "username"})
+	client := fake.NewSimpleClientset(secret)
+
+	nextPayload := mustDataMapPayload(t, map[string][]byte{
+		"username": []byte("new"),
+		"token":    []byte("rotated"),
+	})
+	_, err := runtimeWithClient(t, client).Upsert(context.Background(), defaultDataMapUpsertRequest(nextPayload, 2))
+	if err != nil {
+		t.Fatalf("upsert: %v", err)
+	}
+
+	updated, err := client.CoreV1().Secrets(testNamespace).Get(context.Background(), testResolvedName, metav1.GetOptions{})
+	if err != nil {
+		t.Fatalf("get secret: %v", err)
+	}
+	if got := string(updated.Data["username"]); got != "new" {
+		t.Fatalf("username = %q, want new", got)
+	}
+	if got := string(updated.Data["token"]); got != "rotated" {
+		t.Fatalf("token = %q, want rotated", got)
+	}
+	if _, ok := updated.Data["password"]; ok {
+		t.Fatal("stale managed password key must be removed")
+	}
+	if got := string(updated.Data["tls.crt"]); got != "foreign" {
+		t.Fatalf("foreign key = %q, want foreign", got)
+	}
+	assertDataKeysAnnotation(t, updated, []string{"token", "username"})
+}
+
+func TestUpsertDataMapRejectsUnmanagedDataKeyConflict(t *testing.T) {
+	initialPayload := mustDataMapPayload(t, map[string][]byte{
+		"username": []byte("old"),
+	})
+	secret := ownedDataMapSecret(initialPayload.SHA256, map[string][]byte{
+		"username": []byte("old"),
+		"foreign":  []byte("keep"),
+	}, []string{"username"})
+	client := fake.NewSimpleClientset(secret)
+	nextPayload := mustDataMapPayload(t, map[string][]byte{
+		"foreign": []byte("overwrite"),
+	})
+
+	_, err := runtimeWithClient(t, client).Upsert(context.Background(), defaultDataMapUpsertRequest(nextPayload, 2))
+	assertProviderErrorClass(t, err, providers.ErrorClassOwnership)
+
+	unchanged, getErr := client.CoreV1().Secrets(testNamespace).Get(
+		context.Background(),
+		testResolvedName,
+		metav1.GetOptions{},
+	)
+	if getErr != nil {
+		t.Fatalf("get secret: %v", getErr)
+	}
+	if got := string(unchanged.Data["foreign"]); got != "keep" {
+		t.Fatalf("foreign key = %q, want keep", got)
+	}
+}
+
+func TestDeleteDataMapRemovesManagedKeysAndPreservesForeignKeys(t *testing.T) {
+	payload := mustDataMapPayload(t, map[string][]byte{
+		"username": []byte("app"),
+		"password": []byte("secret"),
+	})
+	secret := ownedDataMapSecret(payload.SHA256, map[string][]byte{
+		"username": []byte("app"),
+		"password": []byte("secret"),
+		"tls.crt":  []byte("foreign"),
+	}, []string{"password", "username"})
+	client := fake.NewSimpleClientset(secret)
+	request := defaultDeleteRequest(1)
+	request.DataMap = true
+
+	_, err := runtimeWithClient(t, client).Delete(context.Background(), request)
+	if err != nil {
+		t.Fatalf("delete: %v", err)
+	}
+
+	updated, err := client.CoreV1().Secrets(testNamespace).Get(context.Background(), testResolvedName, metav1.GetOptions{})
+	if err != nil {
+		t.Fatalf("get secret: %v", err)
+	}
+	if len(updated.Data) != 1 || string(updated.Data["tls.crt"]) != "foreign" {
+		t.Fatalf("data after delete = %#v, want only foreign key", updated.Data)
+	}
+	if updated.Labels[labelManaged] != "" {
+		t.Fatal("managed label must be removed when preserving foreign keys")
+	}
+	if got := updated.Annotations[annotationAssociationID]; got != "" {
+		t.Fatalf("association annotation = %q, want removed", got)
+	}
+}
+
 func TestUpsertRejectsUnsafeRemoteState(t *testing.T) {
 	tests := []struct {
 		name       string
@@ -436,6 +703,30 @@ func TestReadStateReportsRemoteMetadataAndPayloadHash(t *testing.T) {
 	}
 	if state.SourceVersion != 1 {
 		t.Fatalf("source version = %d, want 1", state.SourceVersion)
+	}
+}
+
+func TestReadStateReportsDataMapPayloadHashFromManagedKeys(t *testing.T) {
+	payload := mustDataMapPayload(t, map[string][]byte{
+		"username": []byte("app"),
+		"password": []byte("secret"),
+	})
+	secret := ownedDataMapSecret(payload.SHA256, map[string][]byte{
+		"username": []byte("app"),
+		"password": []byte("secret"),
+		"foreign":  []byte("ignored"),
+	}, []string{"password", "username"})
+	delete(secret.Annotations, annotationPayloadSHA256)
+	client := fake.NewSimpleClientset(secret)
+	request := defaultReadStateRequest("", 1)
+	request.DataMap = true
+
+	state, err := runtimeWithClient(t, client).ReadState(context.Background(), request)
+	if err != nil {
+		t.Fatalf("read state: %v", err)
+	}
+	if state.PayloadSHA256 != payload.SHA256 {
+		t.Fatalf("payload sha = %q, want %q", state.PayloadSHA256, payload.SHA256)
 	}
 }
 
@@ -650,6 +941,13 @@ func defaultUpsertRequest(payloadSHA256 string, payload []byte, sourceVersion in
 	}
 }
 
+func defaultDataMapUpsertRequest(payload payloadpkg.CanonicalPayload, sourceVersion int) providers.UpsertRequest {
+	request := defaultUpsertRequest(payload.SHA256, payload.Bytes, sourceVersion)
+	request.Format = payload.Format
+	request.DataMap = payload.Data
+	return request
+}
+
 func defaultDeleteRequest(sourceVersion int) providers.DeleteRequest {
 	return providers.DeleteRequest{
 		Runtime:       defaultRuntimeIdentity(),
@@ -659,6 +957,15 @@ func defaultDeleteRequest(sourceVersion int) providers.DeleteRequest {
 		AssociationID: testAssociationID,
 		ObjectID:      testObjectID,
 	}
+}
+
+func mustDataMapPayload(t *testing.T, data map[string][]byte) payloadpkg.CanonicalPayload {
+	t.Helper()
+	payload, err := payloadpkg.BuildDataMap(data)
+	if err != nil {
+		t.Fatalf("build data-map payload: %v", err)
+	}
+	return payload
 }
 
 func defaultReadStateRequest(payloadSHA256 string, sourceVersion int) providers.ReadStateRequest {
@@ -719,6 +1026,37 @@ func ownedSecret(payloadSHA256 string, sourceVersion int, payload []byte) *corev
 	return secret
 }
 
+func ownedDataMapSecret(
+	payloadSHA256 string,
+	data map[string][]byte,
+	managedKeys []string,
+) *corev1.Secret {
+	secret := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      testResolvedName,
+			Namespace: testNamespace,
+			Labels: map[string]string{
+				labelManaged: "true",
+			},
+			Annotations: map[string]string{
+				annotationAssociationID:  testAssociationID,
+				annotationSourcePath:     testSourcePath,
+				annotationSourceVersion:  "1",
+				annotationObjectID:       testObjectID,
+				annotationPayloadSHA256:  payloadSHA256,
+				annotationFormat:         payloadpkg.FormatDataMap,
+				annotationPluginInstance: testPluginInstance,
+				annotationRestoreEpoch:   testRestoreEpoch,
+			},
+			ResourceVersion: "rv-1",
+		},
+		Type: corev1.SecretTypeOpaque,
+		Data: copyDataMap(data),
+	}
+	applyDataMapMetadata(secret, managedKeys)
+	return secret
+}
+
 func unownedSecret() *corev1.Secret {
 	return &corev1.Secret{
 		ObjectMeta: metav1.ObjectMeta{
@@ -761,5 +1099,26 @@ func assertAnnotation(t *testing.T, secret *corev1.Secret, key string, expected 
 	t.Helper()
 	if got := secret.Annotations[key]; got != expected {
 		t.Fatalf("annotation %s = %s, want %s", key, got, expected)
+	}
+}
+
+func assertDataKeysAnnotation(t *testing.T, secret *corev1.Secret, expected []string) {
+	t.Helper()
+	var got []string
+	if err := json.Unmarshal([]byte(secret.Annotations[annotationDataKeys]), &got); err != nil {
+		t.Fatalf("parse data keys annotation: %v", err)
+	}
+	assertStringSlice(t, got, expected)
+}
+
+func assertStringSlice(t *testing.T, got []string, expected []string) {
+	t.Helper()
+	if len(got) != len(expected) {
+		t.Fatalf("slice = %v, want %v", got, expected)
+	}
+	for index := range got {
+		if got[index] != expected[index] {
+			t.Fatalf("slice = %v, want %v", got, expected)
+		}
 	}
 }

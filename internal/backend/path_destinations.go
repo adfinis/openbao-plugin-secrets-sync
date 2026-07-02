@@ -41,6 +41,9 @@ var destinationConfigFieldKeys = []string{
 	kubernetessecrets.ConfigKeyNamespace,
 	kubernetessecrets.ConfigKeyKubeconfigPath,
 	kubernetessecrets.ConfigKeyKubeContext,
+	kubernetessecrets.ConfigKeyAPIServer,
+	kubernetessecrets.ConfigKeyCACertPEM,
+	kubernetessecrets.ConfigKeyTLSServerName,
 }
 
 var destinationSensitiveConfigFieldKeys = []string{
@@ -77,6 +80,9 @@ var destinationConfigFieldKeysByType = map[string][]string{
 		kubernetessecrets.ConfigKeyKubeconfigPath,
 		kubernetessecrets.ConfigKeyKubeContext,
 		kubernetessecrets.ConfigKeyAuthMode,
+		kubernetessecrets.ConfigKeyAPIServer,
+		kubernetessecrets.ConfigKeyCACertPEM,
+		kubernetessecrets.ConfigKeyTLSServerName,
 	},
 }
 
@@ -89,6 +95,9 @@ var destinationSensitiveConfigFieldKeysByType = map[string][]string{
 	},
 	gitlab.ProviderType: {
 		gitlab.ConfigKeyToken,
+	},
+	kubernetessecrets.ProviderType: {
+		kubernetessecrets.ConfigKeyToken,
 	},
 }
 
@@ -215,8 +224,9 @@ func destinationRequestFields() map[string]*framework.FieldSchema {
 		Description: "Custom endpoint policy for aws-sm destinations: local or private.",
 	}
 	fields[awssecretsmanager.ConfigKeyAuthMode] = &framework.FieldSchema{
-		Type:        framework.TypeString,
-		Description: "Provider auth mode. aws-sm: default, assume_role, or reserved static. k8s: in_cluster or kubeconfig.",
+		Type: framework.TypeString,
+		Description: "Provider auth mode. aws-sm: default, assume_role, or reserved static. " +
+			"k8s: in_cluster, kubeconfig, or token.",
 	}
 	fields[awssecretsmanager.ConfigKeyRoleARN] = &framework.FieldSchema{
 		Type:        framework.TypeString,
@@ -297,8 +307,9 @@ func destinationRequestFields() map[string]*framework.FieldSchema {
 			"Defaults to false.",
 	}
 	fields[gitlab.ConfigKeyToken] = &framework.FieldSchema{
-		Type:        framework.TypeString,
-		Description: "GitLab API token for project variable management.",
+		Type: framework.TypeString,
+		Description: "Provider API token. GitLab uses this for project variable management; " +
+			"k8s uses it as a bearer token when auth_mode=token.",
 		DisplayAttrs: &framework.DisplayAttributes{
 			Sensitive: true,
 		},
@@ -315,6 +326,18 @@ func destinationRequestFields() map[string]*framework.FieldSchema {
 	fields[kubernetessecrets.ConfigKeyKubeContext] = &framework.FieldSchema{
 		Type:        framework.TypeString,
 		Description: "Optional kubeconfig context for k8s destinations using auth_mode kubeconfig.",
+	}
+	fields[kubernetessecrets.ConfigKeyAPIServer] = &framework.FieldSchema{
+		Type:        framework.TypeString,
+		Description: "Kubernetes API server URL for k8s destinations using auth_mode token.",
+	}
+	fields[kubernetessecrets.ConfigKeyCACertPEM] = &framework.FieldSchema{
+		Type:        framework.TypeString,
+		Description: "Optional PEM CA bundle for k8s destinations using auth_mode token.",
+	}
+	fields[kubernetessecrets.ConfigKeyTLSServerName] = &framework.FieldSchema{
+		Type:        framework.TypeString,
+		Description: "Optional TLS server name override for k8s destinations using auth_mode token.",
 	}
 	return fields
 }
@@ -1080,6 +1103,7 @@ func capabilitiesResponse(capabilities providers.Capabilities) map[string]interf
 		responseField("supports_delete_if_owned", capabilities.SupportsDeleteIfOwned),
 		responseField("supports_secret_path", capabilities.SupportsSecretPath),
 		responseField("supports_secret_key", capabilities.SupportsSecretKey),
+		responseField("supports_data_map", capabilities.SupportsDataMap),
 		responseField("max_payload_bytes", capabilities.MaxPayloadBytes),
 	)
 }

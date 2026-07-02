@@ -313,7 +313,7 @@ func prepareReconcilePayload(
 	version versionRecord,
 	objectID string,
 ) (payloadpkg.CanonicalPayload, *operationFailure) {
-	payload, err := buildCanonicalPayloadForObject(association.Format, version.Data, association.Granularity, objectID)
+	payload, err := buildCanonicalPayloadForObject(association, version.Data, objectID)
 	if err != nil {
 		return payloadpkg.CanonicalPayload{}, &operationFailure{
 			class:   providers.ErrorClassValidation,
@@ -341,6 +341,7 @@ func providerReadStateRequest(
 		Runtime:       runtimeIdentity,
 		ResolvedName:  resolvedName,
 		PayloadSHA256: payload.SHA256,
+		DataMap:       normalizedDataMapping(association.DataMapping) == dataMappingSourceKeys,
 		SourcePath:    association.Path,
 		SourceVersion: version,
 		AssociationID: association.ID,

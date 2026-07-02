@@ -74,3 +74,42 @@ func FuzzBuildJSON(f *testing.F) {
 		}
 	})
 }
+
+func TestBuildDataMap(t *testing.T) {
+	data := map[string][]byte{
+		"username": []byte("app"),
+		"password": []byte("secret-canary"),
+	}
+	first, err := BuildDataMap(data)
+	if err != nil {
+		t.Fatalf("build first data map: %v", err)
+	}
+	second, err := BuildDataMap(map[string][]byte{
+		"password": []byte("secret-canary"),
+		"username": []byte("app"),
+	})
+	if err != nil {
+		t.Fatalf("build second data map: %v", err)
+	}
+	if first.Format != FormatDataMap {
+		t.Fatalf("format = %s, want %s", first.Format, FormatDataMap)
+	}
+	if !bytes.Equal(first.Bytes, second.Bytes) || first.SHA256 != second.SHA256 {
+		t.Fatalf(
+			"data-map payload not deterministic: %q/%s vs %q/%s",
+			first.Bytes,
+			first.SHA256,
+			second.Bytes,
+			second.SHA256,
+		)
+	}
+	sum := sha256.Sum256(first.Bytes)
+	wantSHA := "sha256:" + hex.EncodeToString(sum[:])
+	if first.SHA256 != wantSHA {
+		t.Fatalf("sha = %s, want %s", first.SHA256, wantSHA)
+	}
+	data["password"][0] = 'X'
+	if string(first.Data["password"]) != "secret-canary" {
+		t.Fatal("data-map payload must defensively copy source data")
+	}
+}

@@ -11,6 +11,26 @@ import (
 	"github.com/adfinis/openbao-plugin-secrets-sync/internal/providers/kubernetessecrets"
 )
 
+const testKubernetesCACertPEM = `-----BEGIN CERTIFICATE-----
+MIIDIzCCAgugAwIBAgIUE5FUmToiQv3bNaxE1dI9jJj8bsIwDQYJKoZIhvcNAQEL
+BQAwITEfMB0GA1UEAwwWa3ViZXJuZXRlcy5kZWZhdWx0LnN2YzAeFw0yNjA3MDIx
+NjE0MDdaFw0yNjA3MDMxNjE0MDdaMCExHzAdBgNVBAMMFmt1YmVybmV0ZXMuZGVm
+YXVsdC5zdmMwggEiMA0GCSqGSIb3DQEBAQUAA4IBDwAwggEKAoIBAQCwKLu09rvV
+i57nXOwK7W6iDMM1X606UQrfTb/T5pyjFE1g6DajO/QMZqC4n1+b86uDwpiCjobb
+p+Iu3FaMHEJyoejKQbd2d6VvEjfHHCAson/XZEWgCVwk03L7YCu55zYzaC4tyc/u
+5hsdgnJGvi6TGpxFvhRUkMQcnAwsUBZ7YVV1pc6B81UTWkGYQdo1mIdqHcx1ngQ3
+A7bjmfEtPxVM51DEYc9DJSCmbmXShXAs1kdc424mhBng4hNzAv6hLLFL9DqD6Wmn
+KEcAFi4SrG3IxsC3i8ph1uRQrgZX5ASVj+gwNPhp4937AYU+kJjg2VOY3iQQkOYo
++fy4dIch/zuNAgMBAAGjUzBRMB0GA1UdDgQWBBTxoSmRj83w0WIpKC2cpjZ1U8qI
+aDAfBgNVHSMEGDAWgBTxoSmRj83w0WIpKC2cpjZ1U8qIaDAPBgNVHRMBAf8EBTAD
+AQH/MA0GCSqGSIb3DQEBCwUAA4IBAQCt16lTmsc2/nHqI0Zi77AxPN+XfXdm+oW7
+bdUeOzL1ZhwvXbcbXRzV19mnRM3oAkYQIA5+XDNN63AMm3QQ0sdC9exya+mbGokz
+dh4uSM/A2qc5e08acV9VkRD8aPMBjdYXuKmfeCAkVq3y86EOEYe0Uh+sBVfU2Q+a
+1G+M56JnByoz+zAwI4yUMfqJ5tGvUsB99DuWWzSAtgNKC2mtV9rG7OhEi2hAx42T
+ONdZhbrc5TmwV7TpNa0pSjVsBOjaavQSGw9UN3p4oXoSKaZoFVYN8bbarZM19g5v
+T459I6FRYgo1Ut0HO2F/8edsZ5cAIgn4gVlqDQkMvWK1zNlp59CF
+-----END CERTIFICATE-----`
+
 func TestDestinationValidateSupportsRead(t *testing.T) {
 	env := newBackendTestEnv(t)
 	env.createFakeDestination("default")
@@ -279,6 +299,70 @@ func TestKubernetesDestinationConfigLifecycle(t *testing.T) {
 	if got := capabilities["supports_value_readback"]; got != true {
 		t.Fatalf("k8s supports_value_readback = %v, want true", got)
 	}
+	if got := capabilities["supports_data_map"]; got != true {
+		t.Fatalf("k8s supports_data_map = %v, want true", got)
+	}
+}
+
+func TestKubernetesTokenDestinationConfigLifecycle(t *testing.T) {
+	env := newBackendTestEnv(t)
+
+	writeResp := env.update("destinations/k8s/prod", map[string]interface{}{
+		"description":                            "kubernetes production",
+		kubernetessecrets.ConfigKeyNamespace:     "apps",
+		kubernetessecrets.ConfigKeyAuthMode:      kubernetessecrets.AuthModeToken,
+		kubernetessecrets.ConfigKeyAPIServer:     "https://kubernetes.example.com",
+		kubernetessecrets.ConfigKeyToken:         "bearer-token",
+		kubernetessecrets.ConfigKeyCACertPEM:     testKubernetesCACertPEM,
+		kubernetessecrets.ConfigKeyTLSServerName: "kubernetes.default.svc",
+	})
+	if writeResp != nil && writeResp.IsError() {
+		t.Fatalf("unexpected destination write error: %v", writeResp.Error())
+	}
+
+	storedDestination, err := getDestination(context.Background(), env.storage, kubernetessecrets.ProviderType, "prod")
+	if err != nil {
+		t.Fatalf("read stored k8s destination: %v", err)
+	}
+	if _, ok := storedDestination.Config[kubernetessecrets.ConfigKeyToken]; ok {
+		t.Fatal("k8s token must not be stored in destination config")
+	}
+	if got := storedDestination.Config[kubernetessecrets.ConfigKeyAPIServer]; got != "https://kubernetes.example.com" {
+		t.Fatalf("k8s api_server = %v, want https://kubernetes.example.com", got)
+	}
+
+	storedSensitiveConfig, err := getDestinationSensitiveConfig(
+		context.Background(),
+		env.storage,
+		kubernetessecrets.ProviderType,
+		"prod",
+	)
+	if err != nil {
+		t.Fatalf("read k8s sensitive config: %v", err)
+	}
+	if got := storedSensitiveConfig.Config[kubernetessecrets.ConfigKeyToken]; got != "bearer-token" {
+		t.Fatalf("stored k8s token = %v, want bearer-token", got)
+	}
+
+	readResp := env.read("destinations/k8s/prod")
+	assertNoErrorResponse(t, readResp)
+	config := readResp.Data["config"].(map[string]interface{})
+	if _, ok := config[kubernetessecrets.ConfigKeyToken]; ok {
+		t.Fatal("k8s token must not be returned in config")
+	}
+	assertInterfaceMapValue(t, config, kubernetessecrets.ConfigKeyAPIServer, "https://kubernetes.example.com")
+	sensitiveConfig := readResp.Data["sensitive_config"].(map[string]interface{})
+	if got := sensitiveConfig["configured"]; got != true {
+		t.Fatalf("k8s sensitive_config configured = %v, want true", got)
+	}
+	keys := sensitiveConfig["keys"].([]string)
+	if len(keys) != 1 || keys[0] != kubernetessecrets.ConfigKeyToken {
+		t.Fatalf("k8s sensitive keys = %v, want [%s]", keys, kubernetessecrets.ConfigKeyToken)
+	}
+
+	validateResp := env.update("destinations/k8s/prod/validate")
+	assertNoErrorResponse(t, validateResp)
+	assertResponseValue(t, validateResp, "valid", true)
 }
 
 func TestGitLabDestinationConfigLifecycle(t *testing.T) {

@@ -9,6 +9,11 @@ import (
 func associationObjectIDs(association associationRecord, data secretPayload) ([]string, error) {
 	switch association.Granularity {
 	case syncGranularitySecretPath:
+		if normalizedDataMapping(association.DataMapping) == dataMappingSourceKeys {
+			if _, err := buildDataMapPayloadForAssociation(association, data); err != nil {
+				return nil, err
+			}
+		}
 		return []string{syncObjectIDSecretPath}, nil
 	case syncGranularitySecretKey:
 		ids := make([]string, 0, len(data))
@@ -36,6 +41,49 @@ func validateSecretKeyObjectID(key string) error {
 		return fmt.Errorf("secret-key object key %q is not supported", key)
 	}
 	return nil
+}
+
+func renderDataKeyTemplate(template string, key string) (string, error) {
+	rendered := strings.ReplaceAll(template, "{{ key }}", key)
+	if strings.Contains(rendered, "{{") || strings.Contains(rendered, "}}") {
+		return "", fmt.Errorf("unsupported data_key_template %q", template)
+	}
+	if rendered == "" {
+		return "", fmt.Errorf("data key must not be empty")
+	}
+	return rendered, nil
+}
+
+func validateDataMapKey(key string) error {
+	if strings.TrimSpace(key) != key || key == "" {
+		return fmt.Errorf("data key must not be empty or have surrounding whitespace")
+	}
+	if len(key) > 253 {
+		return fmt.Errorf("data key %q exceeds maximum length 253", key)
+	}
+	if key == "." || key == ".." || strings.HasPrefix(key, "..") {
+		return fmt.Errorf("data key %q must not be '.', '..', or start with '..'", key)
+	}
+	for _, character := range key {
+		if isDataMapKeyCharacter(character) {
+			continue
+		}
+		return fmt.Errorf("data key %q must consist of alphanumeric characters, '-', '_' or '.'", key)
+	}
+	return nil
+}
+
+func isDataMapKeyCharacter(character rune) bool {
+	if character >= 'a' && character <= 'z' {
+		return true
+	}
+	if character >= 'A' && character <= 'Z' {
+		return true
+	}
+	if character >= '0' && character <= '9' {
+		return true
+	}
+	return character == '-' || character == '_' || character == '.'
 }
 
 func defaultNameTemplateForGranularity(granularity string) string {
