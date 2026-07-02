@@ -18,6 +18,7 @@ func pathAssociations(b *secretSyncBackend) []*framework.Path {
 	return []*framework.Path{
 		{
 			Pattern: "associations/?",
+			Fields:  paginationFields(),
 			Operations: map[logical.Operation]framework.OperationHandler{
 				logical.ListOperation: &framework.PathOperation{
 					Callback: pathAssociationList,
@@ -855,8 +856,13 @@ func pathAssociationRead(
 	)}, nil
 }
 
-func pathAssociationList(ctx context.Context, req *logical.Request, _ *framework.FieldData) (*logical.Response, error) {
-	keys, err := req.Storage.List(ctx, associationStoragePrefix)
+func pathAssociationList(
+	ctx context.Context,
+	req *logical.Request,
+	data *framework.FieldData,
+) (*logical.Response, error) {
+	pagination := listPaginationFromFieldData(data)
+	keys, err := req.Storage.ListPage(ctx, associationStoragePrefix, pagination.after, pagination.limit)
 	if err != nil {
 		return nil, err
 	}

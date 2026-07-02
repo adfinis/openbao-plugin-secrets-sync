@@ -94,12 +94,12 @@ func pathDestinations(b *secretSyncBackend) []*framework.Path {
 	return []*framework.Path{
 		{
 			Pattern: "destinations/" + framework.GenericNameRegex("type") + "/?",
-			Fields: map[string]*framework.FieldSchema{
+			Fields: withPaginationFields(map[string]*framework.FieldSchema{
 				"type": {
 					Type:        framework.TypeString,
 					Description: "Destination provider type.",
 				},
-			},
+			}),
 			Operations: map[logical.Operation]framework.OperationHandler{
 				logical.ListOperation: &framework.PathOperation{
 					Callback: b.pathDestinationList,
@@ -680,7 +680,7 @@ func (b *secretSyncBackend) pathDestinationList(
 	if err := b.validateDestinationType(destinationType); err != nil {
 		return logical.ErrorResponse(err.Error()), nil
 	}
-	names, err := listDestinationNames(ctx, req.Storage, destinationType)
+	names, err := listDestinationNamesPage(ctx, req.Storage, destinationType, listPaginationFromFieldData(data))
 	if err != nil {
 		return nil, err
 	}

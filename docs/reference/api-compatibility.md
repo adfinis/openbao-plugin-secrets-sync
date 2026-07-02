@@ -45,6 +45,19 @@ LIST   metadata/<path>   list local source metadata keys
 DELETE metadata/<path>   delete all local source metadata and versions
 ```
 
+## List Pagination
+
+Public LIST endpoints accept OpenBao paginated-list parameters and pass them
+through to storage:
+
+- `after`: optional key to begin listing after; it does not need to exist in
+  the result set;
+- `limit`: optional maximum number of keys to return; non-positive values
+  return all keys.
+
+This applies to `metadata`, `metadata/<path>`, `destinations/<type>`, and
+`associations`.
+
 `PATCH data/<path>` is intentionally deferred until partial-update semantics
 are worth the extra compatibility and validation surface.
 

@@ -47,12 +47,17 @@ func deleteMetadata(ctx context.Context, storage logical.Storage, path string) e
 	return storage.Delete(ctx, metadataStorageKey(path))
 }
 
-func listMetadataKeys(ctx context.Context, storage logical.Storage, prefix string) ([]string, error) {
+func listMetadataKeysPage(
+	ctx context.Context,
+	storage logical.Storage,
+	prefix string,
+	pagination listPagination,
+) ([]string, error) {
 	storagePrefix := metadataStoragePrefix
 	if prefix != "" {
 		storagePrefix += prefix + "/"
 	}
-	return storage.List(ctx, storagePrefix)
+	return storage.ListPage(ctx, storagePrefix, pagination.after, pagination.limit)
 }
 
 func getVersion(ctx context.Context, storage logical.Storage, path string, version int) (*versionRecord, error) {
@@ -287,8 +292,13 @@ func deleteDestination(ctx context.Context, storage logical.Storage, destination
 	return storage.Delete(ctx, destinationStorageKey(destinationType, name))
 }
 
-func listDestinationNames(ctx context.Context, storage logical.Storage, destinationType string) ([]string, error) {
-	return storage.List(ctx, destinationStoragePrefix+destinationType+"/")
+func listDestinationNamesPage(
+	ctx context.Context,
+	storage logical.Storage,
+	destinationType string,
+	pagination listPagination,
+) ([]string, error) {
+	return storage.ListPage(ctx, destinationStoragePrefix+destinationType+"/", pagination.after, pagination.limit)
 }
 
 func putDestinationSensitiveConfig(

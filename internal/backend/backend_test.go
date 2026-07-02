@@ -572,6 +572,46 @@ func TestDestinationLifecycle(t *testing.T) {
 	}
 }
 
+func TestDestinationListPagination(t *testing.T) {
+	b := Backend(&logical.BackendConfig{})
+	storage := &logical.InmemStorage{}
+
+	for _, name := range []string{"alpha", "bravo", "charlie"} {
+		createFakeDestination(t, b, storage, name)
+	}
+
+	assertListKeys(t,
+		handleRequest(t, b, storage, logical.ListOperation, "destinations/fake", nil),
+		[]string{"alpha", "bravo", "charlie"},
+	)
+	assertListKeys(t,
+		handleRequest(t, b, storage, logical.ListOperation, "destinations/fake", map[string]interface{}{
+			"limit": 2,
+		}),
+		[]string{"alpha", "bravo"},
+	)
+	assertListKeys(t,
+		handleRequest(t, b, storage, logical.ListOperation, "destinations/fake", map[string]interface{}{
+			"after": "alpha",
+			"limit": 1,
+		}),
+		[]string{"bravo"},
+	)
+	assertListKeys(t,
+		handleRequest(t, b, storage, logical.ListOperation, "destinations/fake", map[string]interface{}{
+			"after": "alpha-missing",
+			"limit": 1,
+		}),
+		[]string{"bravo"},
+	)
+	assertListKeys(t,
+		handleRequest(t, b, storage, logical.ListOperation, "destinations/fake", map[string]interface{}{
+			"limit": 0,
+		}),
+		[]string{"alpha", "bravo", "charlie"},
+	)
+}
+
 func TestDestinationPolicyPrefixesNormalizeAndRead(t *testing.T) {
 	b := Backend(&logical.BackendConfig{})
 	storage := &logical.InmemStorage{}
@@ -1044,6 +1084,48 @@ func TestMetadataReadListAndSoftDelete(t *testing.T) {
 	}
 }
 
+func TestMetadataListPagination(t *testing.T) {
+	b := Backend(&logical.BackendConfig{})
+	storage := &logical.InmemStorage{}
+
+	for _, path := range []string{"app/api", "app/cache", "app/db", "shared/db", "team/db"} {
+		markSourceSyncable(t, b, storage, path)
+	}
+
+	assertListKeys(t,
+		handleRequest(t, b, storage, logical.ListOperation, "metadata", map[string]interface{}{
+			"limit": 2,
+		}),
+		[]string{"app/", "shared/"},
+	)
+	assertListKeys(t,
+		handleRequest(t, b, storage, logical.ListOperation, "metadata", map[string]interface{}{
+			"after": "b",
+			"limit": 1,
+		}),
+		[]string{"shared/"},
+	)
+	assertListKeys(t,
+		handleRequest(t, b, storage, logical.ListOperation, "metadata/app", map[string]interface{}{
+			"limit": 2,
+		}),
+		[]string{"api", "cache"},
+	)
+	assertListKeys(t,
+		handleRequest(t, b, storage, logical.ListOperation, "metadata/app", map[string]interface{}{
+			"after": "api",
+			"limit": 1,
+		}),
+		[]string{"cache"},
+	)
+	assertListKeys(t,
+		handleRequest(t, b, storage, logical.ListOperation, "metadata/app", map[string]interface{}{
+			"limit": -1,
+		}),
+		[]string{"api", "cache", "db"},
+	)
+}
+
 func TestUndeleteAndDestroyVersions(t *testing.T) {
 	b := Backend(&logical.BackendConfig{})
 	storage := &logical.InmemStorage{}
@@ -1497,6 +1579,37 @@ func TestMetadataMaxVersionsKeepsQueuedSourceVersions(t *testing.T) {
 	if _, ok := metadata.Versions["1"]; !ok {
 		t.Fatalf("metadata versions = %v, want protected version 1", metadata.Versions)
 	}
+}
+
+func TestAssociationListPagination(t *testing.T) {
+	b := Backend(&logical.BackendConfig{})
+	storage := &logical.InmemStorage{}
+
+	createFakeDestination(t, b, storage, "default")
+	for _, path := range []string{"app/db", "shared/db", "team/db"} {
+		createFakeAssociationForPath(t, b, storage, path)
+	}
+
+	assertListKeys(t,
+		handleRequest(t, b, storage, logical.ListOperation, "associations", map[string]interface{}{
+			"limit": 2,
+		}),
+		[]string{"app/", "shared/"},
+	)
+	assertListKeys(t,
+		handleRequest(t, b, storage, logical.ListOperation, "associations", map[string]interface{}{
+			"after": "app/",
+			"limit": 1,
+		}),
+		[]string{"shared/"},
+	)
+	assertListKeys(t,
+		handleRequest(t, b, storage, logical.ListOperation, "associations", map[string]interface{}{
+			"after": "b",
+			"limit": 1,
+		}),
+		[]string{"shared/"},
+	)
 }
 
 func TestAssociationCreateQueuesCurrentVersion(t *testing.T) {
@@ -4214,6 +4327,32 @@ func assertNoErrorResponse(t *testing.T, resp *logical.Response) {
 	}
 }
 
+func assertListKeys(t *testing.T, resp *logical.Response, expected []string) {
+	t.Helper()
+	assertNoErrorResponse(t, resp)
+	if len(expected) == 0 {
+		if _, ok := resp.Data["keys"]; !ok {
+			return
+		}
+	}
+	rawKeys, ok := resp.Data["keys"]
+	if !ok {
+		t.Fatalf("list response keys missing, want %v", expected)
+	}
+	keys, ok := rawKeys.([]string)
+	if !ok {
+		t.Fatalf("list response keys = %T, want []string", rawKeys)
+	}
+	if len(keys) != len(expected) {
+		t.Fatalf("list response keys = %v, want %v", keys, expected)
+	}
+	for index, expectedKey := range expected {
+		if keys[index] != expectedKey {
+			t.Fatalf("list response keys = %v, want %v", keys, expected)
+		}
+	}
+}
+
 func assertPrunedEnqueueIntentAndOutbox(
 	t *testing.T,
 	storage logical.Storage,
@@ -4710,6 +4849,31 @@ func createDefaultFakeAssociation(t *testing.T, b logical.Backend, storage logic
 	})
 }
 
+func createFakeAssociationForPath(
+	t *testing.T,
+	b logical.Backend,
+	storage logical.Storage,
+	path string,
+) *logical.Response {
+	t.Helper()
+	markSourceSyncable(t, b, storage, path)
+	resp := handleRequest(t, b, storage, logical.UpdateOperation, "data/"+path, map[string]interface{}{
+		"data": map[string]interface{}{
+			"password": path,
+		},
+	})
+	assertNoErrorResponse(t, resp)
+	resp = handleRequest(t, b, storage, logical.UpdateOperation, "associations/"+path, map[string]interface{}{
+		"destination_type": providerTypeFake,
+		"destination_name": "default",
+		"resolved_name":    "prod/" + path,
+		"granularity":      syncObjectIDSecretPath,
+		"format":           defaultAssociationFormat,
+	})
+	assertNoErrorResponse(t, resp)
+	return resp
+}
+
 func createFakeSecretKeyAssociation(
 	t *testing.T,
 	b logical.Backend,
@@ -4869,7 +5033,12 @@ func (contextCanceledProvider) Health(context.Context, providers.DestinationConf
 
 func markAppDBSyncable(t *testing.T, b logical.Backend, storage logical.Storage) {
 	t.Helper()
-	resp := handleRequest(t, b, storage, logical.UpdateOperation, "metadata/app/db", map[string]interface{}{
+	markSourceSyncable(t, b, storage, "app/db")
+}
+
+func markSourceSyncable(t *testing.T, b logical.Backend, storage logical.Storage, path string) {
+	t.Helper()
+	resp := handleRequest(t, b, storage, logical.UpdateOperation, "metadata/"+path, map[string]interface{}{
 		"custom_metadata": map[string]interface{}{
 			sourceMetadataKeySyncable: sourceMetadataValueTrue,
 		},

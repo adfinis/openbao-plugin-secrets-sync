@@ -14,6 +14,7 @@ func pathMetadata(b *secretSyncBackend) []*framework.Path {
 	return []*framework.Path{
 		{
 			Pattern: "metadata/?",
+			Fields:  paginationFields(),
 			Operations: map[logical.Operation]framework.OperationHandler{
 				logical.ListOperation: &framework.PathOperation{
 					Callback: pathMetadataListRoot,
@@ -25,7 +26,7 @@ func pathMetadata(b *secretSyncBackend) []*framework.Path {
 		},
 		{
 			Pattern: "metadata/" + framework.MatchAllRegex("path") + "/?",
-			Fields: map[string]*framework.FieldSchema{
+			Fields: withPaginationFields(map[string]*framework.FieldSchema{
 				"path": {
 					Type:        framework.TypeString,
 					Description: "Source secret path or metadata list prefix.",
@@ -46,7 +47,7 @@ func pathMetadata(b *secretSyncBackend) []*framework.Path {
 					Type:        framework.TypeMap,
 					Description: "Non-secret source metadata used by sync policy and operators.",
 				},
-			},
+			}),
 			Operations: map[logical.Operation]framework.OperationHandler{
 				logical.CreateOperation: &framework.PathOperation{
 					Callback: b.pathMetadataWrite,
@@ -78,9 +79,9 @@ func pathMetadata(b *secretSyncBackend) []*framework.Path {
 func pathMetadataListRoot(
 	ctx context.Context,
 	req *logical.Request,
-	_ *framework.FieldData,
+	data *framework.FieldData,
 ) (*logical.Response, error) {
-	keys, err := listMetadataKeys(ctx, req.Storage, "")
+	keys, err := listMetadataKeysPage(ctx, req.Storage, "", listPaginationFromFieldData(data))
 	if err != nil {
 		return nil, err
 	}
@@ -92,7 +93,7 @@ func pathMetadataList(ctx context.Context, req *logical.Request, data *framework
 	if err != nil {
 		return logical.ErrorResponse(err.Error()), nil
 	}
-	keys, err := listMetadataKeys(ctx, req.Storage, prefix)
+	keys, err := listMetadataKeysPage(ctx, req.Storage, prefix, listPaginationFromFieldData(data))
 	if err != nil {
 		return nil, err
 	}

@@ -79,6 +79,8 @@ paths:
       x-openbao-operation: list
       parameters:
         - $ref: "#/components/parameters/DestinationType"
+        - $ref: "#/components/parameters/PaginationAfter"
+        - $ref: "#/components/parameters/PaginationLimit"
       responses:
         "200":
           description: Destination names.
@@ -244,6 +246,9 @@ paths:
       operationId: listMetadataRoot
       summary: List root source metadata keys.
       x-openbao-operation: list
+      parameters:
+        - $ref: "#/components/parameters/PaginationAfter"
+        - $ref: "#/components/parameters/PaginationLimit"
       responses:
         "200":
           description: Metadata keys.
@@ -260,6 +265,8 @@ paths:
       x-openbao-operations: [read, list]
       parameters:
         - $ref: "#/components/parameters/SourcePath"
+        - $ref: "#/components/parameters/PaginationAfter"
+        - $ref: "#/components/parameters/PaginationLimit"
       responses:
         "200":
           description: Source metadata or key list.
@@ -421,6 +428,9 @@ paths:
       operationId: listAssociationPrefixes
       summary: List source path prefixes with associations.
       x-openbao-operation: list
+      parameters:
+        - $ref: "#/components/parameters/PaginationAfter"
+        - $ref: "#/components/parameters/PaginationLimit"
       responses:
         "200":
           description: Association source path prefixes.
@@ -731,6 +741,21 @@ components:
         type: string
         pattern: ^op-[0-9a-f]+-[0-9]+$
       description: Queue operation id.
+    PaginationAfter:
+      name: after
+      in: query
+      required: false
+      schema:
+        type: string
+      description: Optional entry to begin listing after. The entry does not need to exist in the result set.
+    PaginationLimit:
+      name: limit
+      in: query
+      required: false
+      schema:
+        type: integer
+        format: int32
+      description: Optional maximum number of entries to return. Non-positive values return all entries.
 
   schemas:
     OpenBaoErrors:
