@@ -247,10 +247,10 @@ Common states in the current implementation include:
 
 For the common single-object case, status includes top-level summary fields
 such as `association_id`, `destination_ref`, `resolved_name`,
-`payload_sha256`, `remote_version`, and `last_operation_id`. The full
-per-object list is still available under `objects`. Status records include
-versions, destination references, remote names, and payload hashes. They must
-not include secret payload values.
+`remote_version`, and `last_operation_id`. The full per-object list is still
+available under `objects`. Status records include versions, destination
+references, remote names, operation ids, and error classes. They must not
+include secret payload values or payload hashes.
 
 Use JSON output when copying identifiers into follow-up commands:
 

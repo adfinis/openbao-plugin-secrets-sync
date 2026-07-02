@@ -508,14 +508,12 @@ func reconcileObjectResponse(result reconcileObjectResult) map[string]interface{
 	remoteExists := false
 	remoteOwnershipKnown := false
 	remoteOwned := false
-	remotePayloadSHA256 := ""
 	remoteSourceVersion := 0
 	remoteVersion := ""
 	if result.remoteState != nil {
 		remoteExists = result.remoteState.Exists
 		remoteOwnershipKnown = result.remoteState.OwnershipKnown
 		remoteOwned = result.remoteState.Owned
-		remotePayloadSHA256 = result.remoteState.PayloadSHA256
 		remoteSourceVersion = result.remoteState.SourceVersion
 		remoteVersion = result.remoteState.RemoteVersion
 	}
@@ -526,11 +524,9 @@ func reconcileObjectResponse(result reconcileObjectResult) map[string]interface{
 		responseField("resolved_name", result.resolvedName),
 		responseField("state", string(result.state)),
 		responseField("version", result.version),
-		responseField("payload_sha256", result.payload.SHA256),
 		responseField("remote_exists", remoteExists),
 		responseField("remote_ownership_known", remoteOwnershipKnown),
 		responseField("remote_owned", remoteOwned),
-		responseField("remote_payload_sha256", remotePayloadSHA256),
 		responseField("remote_source_version", remoteSourceVersion),
 		responseField("remote_version", remoteVersion),
 		responseField("error_class", string(result.errorClass)),

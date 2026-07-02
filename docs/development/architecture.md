@@ -222,7 +222,6 @@ numbers restart at 1.
   },
   "resolved_name": "sync-kv/app/db",
   "state": "SYNCED",
-  "payload_sha256": "sha256:...",
   "remote_version": "provider-version",
   "last_operation_id": "op_01",
   "last_success_time": "2026-06-30T12:00:03Z",

@@ -1443,8 +1443,6 @@ components:
               type: string
             format:
               type: string
-            payload_sha256:
-              type: string
             payload_bytes:
               type: integer
             error_class:
@@ -1467,8 +1465,6 @@ components:
         action:
           type: string
           enum: [create, update, noop, conflict, blocked]
-        payload_sha256:
-          type: string
         payload_bytes:
           type: integer
         error_class:
@@ -1499,8 +1495,6 @@ components:
             destination_ref:
               type: string
             resolved_name:
-              type: string
-            payload_sha256:
               type: string
             remote_version:
               type: string
@@ -1533,8 +1527,6 @@ components:
           $ref: "#/components/schemas/SyncState"
         version:
           type: integer
-        payload_sha256:
-          type: string
         remote_version:
           type: string
         last_operation_id:
@@ -1692,16 +1684,12 @@ components:
           $ref: "#/components/schemas/SyncState"
         version:
           type: integer
-        payload_sha256:
-          type: string
         remote_exists:
           type: boolean
         remote_ownership_known:
           type: boolean
         remote_owned:
           type: boolean
-        remote_payload_sha256:
-          type: string
         remote_source_version:
           type: integer
         remote_version:

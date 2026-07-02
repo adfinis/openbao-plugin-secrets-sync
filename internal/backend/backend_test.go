@@ -1791,9 +1791,7 @@ func TestAssociationSecretKeyRawFormat(t *testing.T) {
 	if got := object["payload_bytes"]; got != len("initial") {
 		t.Fatalf("raw payload bytes = %v, want %d", got, len("initial"))
 	}
-	if got := object["payload_sha256"].(string); !strings.HasPrefix(got, "sha256:") {
-		t.Fatalf("raw payload sha = %q, want sha256 prefix", got)
-	}
+	assertNoPayloadHash(t, object)
 }
 
 func TestAssociationRawFormatRequiresSecretKey(t *testing.T) {
@@ -2427,9 +2425,7 @@ func TestAssociationPlan(t *testing.T) {
 	if got := createResp.Data["source_eligible"]; got != true {
 		t.Fatalf("create source_eligible = %v, want true", got)
 	}
-	if got := createResp.Data["payload_sha256"].(string); !strings.HasPrefix(got, "sha256:") {
-		t.Fatalf("payload_sha256 = %q, want sha256 prefix", got)
-	}
+	assertNoPayloadHash(t, createResp.Data)
 	if got := createResp.Data["payload_bytes"].(int); got <= 0 {
 		t.Fatalf("payload_bytes = %d, want positive", got)
 	}
@@ -3296,9 +3292,7 @@ func TestPeriodicRejectsPayloadOverProviderLimit(t *testing.T) {
 	if strings.Contains(object["last_error"].(string), "secret-canary") {
 		t.Fatalf("last_error contains secret canary: %s", object["last_error"])
 	}
-	if got := object["payload_sha256"].(string); !strings.HasPrefix(got, "sha256:") {
-		t.Fatalf("payload_sha256 = %q, want sha256 prefix", got)
-	}
+	assertNoPayloadHash(t, object)
 }
 
 func TestPeriodicRejectsPayloadOverAWSProviderLimit(t *testing.T) {
@@ -3353,9 +3347,7 @@ func TestPeriodicRejectsPayloadOverAWSProviderLimit(t *testing.T) {
 	if strings.Contains(object["last_error"].(string), "secret-canary") {
 		t.Fatalf("last_error contains secret canary: %s", object["last_error"])
 	}
-	if got := object["payload_sha256"].(string); !strings.HasPrefix(got, "sha256:") {
-		t.Fatalf("payload_sha256 = %q, want sha256 prefix", got)
-	}
+	assertNoPayloadHash(t, object)
 }
 
 func TestPeriodicRetriesTransientProviderErrors(t *testing.T) {
@@ -4295,6 +4287,16 @@ func assertStringSet(t *testing.T, got []string, want []string) {
 	}
 }
 
+func assertNoPayloadHash(t *testing.T, object map[string]interface{}) {
+	t.Helper()
+	if _, ok := object["payload_sha256"]; ok {
+		t.Fatalf("payload_sha256 must not be exposed in response object: %#v", object)
+	}
+	if _, ok := object["remote_payload_sha256"]; ok {
+		t.Fatalf("remote_payload_sha256 must not be exposed in response object: %#v", object)
+	}
+}
+
 func assertResponseBool(t *testing.T, resp *logical.Response, key string, want bool) {
 	t.Helper()
 	if got := resp.Data[key]; got != want {
@@ -4368,9 +4370,7 @@ func assertPlanObject(
 	if got := object["action"]; got != providers.PlanActionCreate {
 		t.Fatalf("%s action = %v, want %s", objectID, got, providers.PlanActionCreate)
 	}
-	if got := object["payload_sha256"].(string); !strings.HasPrefix(got, "sha256:") {
-		t.Fatalf("%s payload_sha256 = %q, want sha256 prefix", objectID, got)
-	}
+	assertNoPayloadHash(t, object)
 	if got := object["payload_bytes"].(int); got <= 0 {
 		t.Fatalf("%s payload_bytes = %d, want positive", objectID, got)
 	}
@@ -4431,9 +4431,7 @@ func assertSecretKeySyncedStatusObject(
 	if got := object["remote_version"]; got != "fake" {
 		t.Fatalf("%s remote_version = %v, want fake", objectID, got)
 	}
-	if got := object["payload_sha256"].(string); !strings.HasPrefix(got, "sha256:") {
-		t.Fatalf("%s payload_sha256 = %q, want sha256 prefix", objectID, got)
-	}
+	assertNoPayloadHash(t, object)
 }
 
 func assertStatusObjectErrorClass(
@@ -4874,7 +4872,5 @@ func assertSyncedStatusObject(t *testing.T, raw interface{}, operationID string)
 	if got := object["remote_version"]; got != "fake" {
 		t.Fatalf("object remote version = %v, want fake", got)
 	}
-	if got := object["payload_sha256"].(string); !strings.HasPrefix(got, "sha256:") {
-		t.Fatalf("object payload_sha256 = %q, want sha256 prefix", got)
-	}
+	assertNoPayloadHash(t, object)
 }
