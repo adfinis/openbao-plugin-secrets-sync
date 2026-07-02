@@ -9,6 +9,9 @@ mutating remote secrets. While the guard is active, background processing and
 manual `queue/drain` remote mutations are blocked. Reconcile planning remains
 available so operators can inspect remote state before resuming sync.
 
+Mounts default `restore_guard=false`. Operators can set `restore_guard=true`
+before or during restore and clone review.
+
 ## Confirm the guard state
 
 Read mount config:

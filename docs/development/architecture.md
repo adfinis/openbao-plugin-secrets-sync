@@ -165,8 +165,9 @@ An association links one source path to one destination. It defines:
 - delete mode;
 - enabled state.
 
-Enabled associations require source eligibility. The default eligibility check
-requires source custom metadata `syncable=true`.
+Enabled associations require source eligibility when
+`require_source_opt_in=true`. Mounts default that setting to `false`. In strict
+mode, eligibility requires source custom metadata `syncable=true`.
 
 The backend validates association requests against provider capabilities before
 it accepts them. Capability checks cover secret-path support, secret-key
@@ -314,7 +315,8 @@ Preserve these invariants:
   metadata and is redacted on reads.
 - Providers mutate only through prepared payloads and resolved destination
   config.
-- Association activation requires source eligibility and destination authority.
+- Association activation requires destination authority and source eligibility
+  when strict source opt-in is enabled.
 - Queue capacity errors occur before a new source version is accepted.
 - Remote deletes require `delete_mode=delete` and provider-owned delete
   support.

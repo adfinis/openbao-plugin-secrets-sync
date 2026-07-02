@@ -8,8 +8,8 @@ source paths to configured external destinations.
 The plugin supports:
 
 - KV-v2-like source storage under `data/*` and `metadata/*`;
-- source opt-in through `sources/<path>/enable` or
-  `custom_metadata.syncable=true`;
+- optional source opt-in through `sources/<path>/enable` or
+  `custom_metadata.syncable=true` when `require_source_opt_in=true`;
 - destination config for AWS Secrets Manager, Kubernetes Secrets, and GitLab
   project variables;
 - asynchronous queue processing with manual `queue/drain`;
@@ -44,12 +44,20 @@ bao secrets enable \
   plugin
 ```
 
-Remote mutation is guarded by default. After a new mount, or after reviewing a
-restore/clone event, explicitly acknowledge the guard before queue workers or
-manual drains can write destination state:
+Fresh mounts start with remote mutation allowed. If `restore_guard=true` after
+a restore, clone, or manual restore-guard rearm, review destination safety
+before acknowledging the guard:
 
 ```sh
 bao write -force secret-sync/config/restore-guard/acknowledge
+```
+
+Fresh mounts also default `require_source_opt_in=false`, so creating an enabled
+association is the source authorization step. To require per-source
+`custom_metadata.syncable=true` before association activation or dispatch, set:
+
+```sh
+bao write secret-sync/config require_source_opt_in=true
 ```
 
 ## Choose a provider
@@ -108,7 +116,7 @@ Source paths are slash-separated OpenBao paths. They cannot contain empty,
 `.` or `..` segments, cannot contain the reserved `versions` segment, and
 cannot end in the reserved `plan` segment.
 
-Mark a source path as syncable:
+Mark a source path as syncable when `require_source_opt_in=true`:
 
 ```sh
 bao write -force secret-sync/sources/app/db/enable

@@ -212,7 +212,7 @@ paths:
       tags: [sources]
       operationId: checkSource
       summary: Check source readiness.
-      description: Reports whether a source has an available current version and explicit sync eligibility.
+      description: Reports whether a source has an available current version and, when required by config, explicit sync eligibility.
       x-openbao-operation: read
       parameters:
         - $ref: "#/components/parameters/SourcePath"
@@ -799,6 +799,9 @@ components:
           minimum: 0
           default: 1000
           description: Maximum queued operations; 0 rejects new enqueue-producing writes.
+        require_source_opt_in:
+          type: boolean
+          description: Require custom_metadata.syncable=true before enabled associations can enqueue or dispatch remote mutation.
       additionalProperties: false
 
     ConfigResponse:
@@ -828,6 +831,9 @@ components:
         queue_capacity:
           type: integer
           description: Maximum queued operations; 0 rejects new enqueue-producing writes.
+        require_source_opt_in:
+          type: boolean
+          description: Whether source syncable metadata is required before enabled associations can enqueue or dispatch remote mutation.
 
     DestinationWriteRequest:
       type: object
@@ -1113,6 +1119,8 @@ components:
               type: boolean
             syncable:
               type: boolean
+            source_opt_in_required:
+              type: boolean
             current_version:
               type: integer
             current_version_available:
@@ -1134,6 +1142,7 @@ components:
             - path
             - ready
             - syncable
+            - source_opt_in_required
             - current_version
             - current_version_available
             - association_count

@@ -71,6 +71,10 @@ masked variable character set. For ordinary masked CI/CD variables, prefer
 
 ## Supported association shapes
 
+The examples assume the source path already has a current local version. Fresh
+mounts default `require_source_opt_in=false`; if strict source opt-in is
+enabled, mark the source with `sources/<path>/enable` first.
+
 Use `secret-key` granularity with `format=raw` for normal CI/CD variable use.
 Each top-level OpenBao source key becomes one GitLab CI/CD variable value.
 GitLab variable keys may contain only letters, digits, and `_`, so choose a

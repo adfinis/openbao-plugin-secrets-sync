@@ -25,7 +25,8 @@ The source API is not a strict client compatibility layer:
 - responses may contain sync-specific fields such as queued operation IDs and
   sync state;
 - metadata deletion is blocked while associations exist;
-- association activation requires source eligibility metadata;
+- association activation may require source eligibility metadata when
+  `require_source_opt_in=true`;
 - sync-specific paths such as `destinations/*`, `associations/*`, `queue/*`,
   and `status/*` are part of the engine contract;
 - exact KV-v2 wire compatibility must be proven by golden tests before it is
@@ -77,7 +78,10 @@ Metadata writes support:
 }
 ```
 
-Enabled associations require:
+Mounts default `require_source_opt_in=false`, so creating an enabled
+association is the source authorization step.
+
+When strict source opt-in is enabled, enabled associations require:
 
 ```json
 {
@@ -88,4 +92,5 @@ Enabled associations require:
 ```
 
 This makes sync opt-in at the source path and keeps destination mutation from
-being triggered by arbitrary local secret writes.
+being triggered by arbitrary local secret writes in delegated strict-mode
+deployments.

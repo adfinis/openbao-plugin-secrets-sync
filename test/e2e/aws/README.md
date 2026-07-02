@@ -112,16 +112,13 @@ bao write secret-sync/destinations/aws-sm/prod \
 
 bao write -force secret-sync/destinations/aws-sm/prod/validate
 bao read secret-sync/destinations/aws-sm/prod/health
-
-bao write -force secret-sync/config/restore-guard/acknowledge
 ```
 
-Create a syncable source secret:
+Create a source secret. Fresh mounts default `require_source_opt_in=false`, so
+metadata opt-in is not required unless you enable strict source opt-in in
+`secret-sync/config`.
 
 ```sh
-bao write secret-sync/metadata/app/db \
-  @<(printf '%s' '{"custom_metadata":{"syncable":"true"}}')
-
 bao write secret-sync/data/app/db \
   @<(printf '%s' '{"data":{"password":"initial"}}')
 ```
