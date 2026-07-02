@@ -63,6 +63,19 @@ Configure at least one destination before you create an association:
 Provider docs include destination config, supported association shape, naming
 constraints, and provider-specific troubleshooting.
 
+## Paginate list responses
+
+Public LIST endpoints accept OpenBao paginated-list parameters:
+
+- `after`: optional key to begin listing after; the key does not need to
+  exist in the result set;
+- `limit`: optional maximum number of keys to return; non-positive values
+  return all keys.
+
+This applies to `metadata`, `metadata/<path>`, `destinations/<type>`, and
+`associations`. Use pagination for automation that may operate across many
+source paths or associations.
+
 ## Constrain destination use
 
 Destinations can restrict which source paths and remote object names may use
