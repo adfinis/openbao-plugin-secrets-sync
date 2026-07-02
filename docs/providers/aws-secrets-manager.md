@@ -58,6 +58,18 @@ bao write secret-sync/destinations/aws-sm/private \
   endpoint_policy=private
 ```
 
+By default, explicit plan, upsert, and read-state checks use AWS tag metadata
+for payload drift decisions. Set `value_drift_detection=true` when the
+destination identity may read secret values and you want those operations to
+compare the live AWS secret value with the desired OpenBao payload hash:
+
+```sh
+bao write secret-sync/destinations/aws-sm/prod \
+  region=eu-central-1 \
+  auth_mode=default \
+  value_drift_detection=true
+```
+
 ## Supported association shapes
 
 The examples assume the source path already has a current local version. Fresh
@@ -103,13 +115,18 @@ Manager name prefix. The provider uses these AWS APIs:
 - `secretsmanager:RestoreSecret` for owned scheduled-delete recovery;
 - `secretsmanager:TagResource` for ownership metadata.
 
+When `value_drift_detection=true`, also grant
+`secretsmanager:GetSecretValue`. If that permission is missing, explicit plan,
+upsert, and read-state operations that need value readback fail visibly instead
+of falling back to metadata-only checks.
+
 When using `auth_mode=assume_role`, the base AWS identity must also be allowed
 to call `sts:AssumeRole` on the configured `role_arn`. Use an `external_id`
 condition when the destination role is shared across trust boundaries.
 
 The manual AWS e2e fixture also grants `GetSecretValue` and `UntagResource` for
-test verification and cleanup. The provider does not use `GetSecretValue` for
-normal sync decisions.
+test verification and cleanup. The provider uses `GetSecretValue` for normal
+sync decisions only when `value_drift_detection=true`.
 
 ## Sensitive fields
 
@@ -127,6 +144,12 @@ path, source version, object ID, payload hash, plugin instance, and restore
 epoch. Owned update and delete operations require matching ownership metadata.
 If ownership cannot be proven, the provider returns an ownership error instead
 of mutating the remote secret.
+
+Plan, upsert no-op detection, and reconcile compare AWS tag metadata by
+default. With `value_drift_detection=true`, explicit plan, upsert, and
+read-state operations read owned secret values and compare the live value hash
+with the desired payload hash. Manual value-only changes with unchanged
+ownership tags are detected only in that opt-in mode.
 
 `delete_recovery_window_days` controls the AWS Secrets Manager scheduled-delete
 recovery window used when an association with `delete_mode=delete` deletes an

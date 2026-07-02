@@ -21,11 +21,11 @@ enabling associations.
 
 ## Capability matrix
 
-| Provider | Auth modes | `secret-path` | `secret-key` | `raw` | `json` | Data map | Read-state | Owned delete | Metadata ownership | Local e2e | Real-provider e2e |
-| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| AWS Secrets Manager | AWS SDK default chain; STS assume role | Yes | No | No | Yes | No | Yes | Yes | AWS tags | LocalStack | Manual AWS |
-| Kubernetes Secrets | In-cluster; kubeconfig; bearer token | Yes | No | No | Yes | Yes | Yes | Yes | Labels and annotations | kind | No |
-| GitLab project variables | GitLab API token | Yes | Yes | Yes | Yes | No | Yes | Yes | Variable description | Dockerized GitLab CE | No |
+| Provider | Auth modes | `secret-path` | `secret-key` | `raw` | `json` | Data map | Read-state | Value readback | Owned delete | Metadata ownership | Local e2e | Real-provider e2e |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| AWS Secrets Manager | AWS SDK default chain; STS assume role | Yes | No | No | Yes | No | Yes | Opt-in | Yes | AWS tags | LocalStack | Manual AWS |
+| Kubernetes Secrets | In-cluster; kubeconfig; bearer token | Yes | No | No | Yes | Yes | Yes | Yes | Yes | Labels and annotations | kind | No |
+| GitLab project variables | GitLab API token | Yes | Yes | Yes | Yes | No | Yes | Yes | Yes | Variable description | Dockerized GitLab CE | No |
 
 ## Provider guides
 

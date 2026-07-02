@@ -104,7 +104,9 @@ type Capabilities struct {
 
 The backend uses capabilities to validate association granularity, data
 mapping, delete mode, and payload size before provider mutation. A provider
-must advertise only behavior it implements and tests.
+must advertise only behavior it implements and tests. Provider-specific
+destination config may still decide whether an implemented capability is used
+for a given destination when that capability changes remote permissions.
 
 ## Runtime identity
 
@@ -387,8 +389,11 @@ Supported association shape:
 
 The provider writes ownership tags, uses metadata readback, rejects ownership
 loss, rejects stale remote source versions, classifies AWS and transport
-errors, supports scheduled-delete recovery for owned secrets, and avoids
-`GetSecretValue`.
+errors, and supports scheduled-delete recovery for owned secrets. By default,
+plan, upsert no-op detection, and read-state use tag metadata. With
+`value_drift_detection=true`, those explicit operations also use
+`GetSecretValue` for owned secrets and compare the live value hash with the
+desired payload hash.
 
 Static AWS access keys, secret access keys, and session tokens are recognized
 as sensitive fields but are not supported auth material.
@@ -410,7 +415,10 @@ Supported association shapes:
 
 The provider writes `Opaque` Secrets, ownership labels and annotations, payload
 hash metadata, and source-version metadata. It supports owned update, owned
-delete, read-state, health checks, and Kubernetes API error classification.
+delete, value readback, read-state, health checks, and Kubernetes API error
+classification. Plan, upsert no-op detection, and read-state compute payload
+hashes from live Secret data rather than trusting stored payload-hash
+annotations first.
 
 The provider does not advertise `secret-key` fan-out.
 
@@ -430,8 +438,8 @@ Supported association shapes:
 
 The provider writes project CI/CD variables, stores ownership metadata in the
 variable description, validates variable attributes and masked payloads,
-repairs attribute drift, supports owned update, owned delete, read-state,
-health checks, and HTTP error classification.
+repairs value and attribute drift, supports owned update, owned delete, value
+readback, read-state, health checks, and HTTP error classification.
 
 Non-local `http://` GitLab base URLs are rejected by default and require
 `allow_insecure_http=true`, which is intended for local Docker or private test
