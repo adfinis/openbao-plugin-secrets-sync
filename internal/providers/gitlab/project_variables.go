@@ -4,6 +4,7 @@ package gitlab
 import (
 	"context"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -15,7 +16,10 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
+	payloadpkg "github.com/adfinis/openbao-plugin-secrets-sync/internal/payload"
 	"github.com/adfinis/openbao-plugin-secrets-sync/internal/providers"
 )
 
@@ -54,6 +58,7 @@ const (
 	variableValueMaxBytes       = 10000
 	variableKeyMaxBytes         = 255
 	variableDescriptionMaxBytes = 255
+	maskedVariableMinChars      = 8
 	defaultHTTPTimeout          = 30 * time.Second
 	gitlabResponseMaxBytes      = 1024 * 1024
 
@@ -117,6 +122,9 @@ func (p Provider) Plan(ctx context.Context, req providers.PlanRequest) (*provide
 	}
 	variable, err := client.GetVariable(ctx, options, req.ResolvedName)
 	if isGitLabNotFound(err) {
+		if err := validateMaskedPayloadForPlan(options, req); err != nil {
+			return blockedValidationPlan(err.Error()), nil
+		}
 		return &providers.PlanResult{Action: providers.PlanActionCreate}, nil
 	}
 	if err != nil {
@@ -137,7 +145,13 @@ func (p Provider) Plan(ctx context.Context, req providers.PlanRequest) (*provide
 			Message:    "gitlab variable has newer managed source version",
 		}, nil
 	}
-	if metadata.PayloadSHA256 == req.PayloadSHA256 {
+	if err := validateHiddenUpdate(options, variable); err != nil {
+		return blockedValidationPlan(err.Error()), nil
+	}
+	if err := validateMaskedPayloadForPlan(options, req); err != nil {
+		return blockedValidationPlan(err.Error()), nil
+	}
+	if metadata.PayloadSHA256 == req.PayloadSHA256 && variableMatchesDestinationOptions(variable, options) {
 		return &providers.PlanResult{Action: providers.PlanActionNoop}, nil
 	}
 	return &providers.PlanResult{Action: providers.PlanActionUpdate}, nil
@@ -157,6 +171,9 @@ func (p Provider) Upsert(ctx context.Context, req providers.UpsertRequest) (*pro
 	input := variableInputFromUpsert(options, req)
 	variable, err := client.GetVariable(ctx, options, req.ResolvedName)
 	if isGitLabNotFound(err) {
+		if err := validateMaskedPayloadForUpsert(options, req); err != nil {
+			return nil, err
+		}
 		created, createErr := client.CreateVariable(ctx, options, input)
 		if createErr != nil {
 			return nil, providerError(classifyGitLabError(createErr))
@@ -173,7 +190,13 @@ func (p Provider) Upsert(ctx context.Context, req providers.UpsertRequest) (*pro
 	if remoteSourceVersionNewer(metadata, req.SourceVersion) {
 		return nil, providerError(providers.ErrorClassDrift)
 	}
-	if metadata.PayloadSHA256 == req.PayloadSHA256 {
+	if err := validateHiddenUpdate(options, variable); err != nil {
+		return nil, err
+	}
+	if err := validateMaskedPayloadForUpsert(options, req); err != nil {
+		return nil, err
+	}
+	if metadata.PayloadSHA256 == req.PayloadSHA256 && variableMatchesInput(variable, input) {
 		return &providers.SyncResult{RemoteVersion: remoteVersion(variable)}, nil
 	}
 	updated, err := client.UpdateVariable(ctx, options, req.ResolvedName, input)
@@ -329,6 +352,9 @@ func gitlabDestinationOptionsFromConfig(cfg providers.DestinationConfig) (gitlab
 	if options.hidden, err = boolConfigValue(cfg, ConfigKeyHidden, false); err != nil {
 		return gitlabDestinationOptions{}, err
 	}
+	if options.hidden {
+		options.masked = true
+	}
 	if options.variableRaw, err = boolConfigValue(cfg, ConfigKeyVariableRaw, true); err != nil {
 		return gitlabDestinationOptions{}, err
 	}
@@ -426,6 +452,81 @@ func validateVariableKey(key string) error {
 	return nil
 }
 
+func validateMaskedPayloadForPlan(options gitlabDestinationOptions, req providers.PlanRequest) error {
+	if !options.masked {
+		return nil
+	}
+	if req.PayloadBytes < maskedVariableMinChars {
+		return validationError("gitlab masked variable value must be at least 8 characters")
+	}
+	if !options.variableRaw && req.Format != payloadpkg.FormatRaw {
+		return validationError("gitlab masked variables with variable_raw=false require raw payload format")
+	}
+	return nil
+}
+
+func validateMaskedPayloadForUpsert(options gitlabDestinationOptions, req providers.UpsertRequest) error {
+	if !options.masked {
+		return nil
+	}
+	if !utf8.Valid(req.Payload) {
+		return validationError("gitlab masked variable value must be valid UTF-8")
+	}
+	value := string(req.Payload)
+	if utf8.RuneCountInString(value) < maskedVariableMinChars {
+		return validationError("gitlab masked variable value must be at least 8 characters")
+	}
+	if strings.ContainsFunc(value, unicode.IsSpace) {
+		return validationError("gitlab masked variable value must be a single line with no spaces")
+	}
+	if !options.variableRaw && req.Format != payloadpkg.FormatRaw {
+		return validationError("gitlab masked variables with variable_raw=false require raw payload format")
+	}
+	if !options.variableRaw && strings.ContainsFunc(value, invalidExpandedMaskedVariableChar) {
+		return validationError("gitlab masked variable value contains characters incompatible with variable_raw=false")
+	}
+	return nil
+}
+
+func invalidExpandedMaskedVariableChar(char rune) bool {
+	if char >= 'A' && char <= 'Z' {
+		return false
+	}
+	if char >= 'a' && char <= 'z' {
+		return false
+	}
+	if char >= '0' && char <= '9' {
+		return false
+	}
+	switch char {
+	case '_', ':', '@', '-', '+', '.', '~', '=', '/':
+		return false
+	default:
+		return true
+	}
+}
+
+func validateHiddenUpdate(options gitlabDestinationOptions, variable *gitlabVariable) error {
+	if options.hidden && !variable.Hidden {
+		return validationError("gitlab hidden variables can only be hidden when they are created")
+	}
+	return nil
+}
+
+func variableMatchesDestinationOptions(variable *gitlabVariable, options gitlabDestinationOptions) bool {
+	return variable.Protected == options.protected &&
+		variable.Masked == options.masked &&
+		variable.VariableRaw == options.variableRaw &&
+		variable.VariableType == options.variableType
+}
+
+func variableMatchesInput(variable *gitlabVariable, input gitlabVariableInput) bool {
+	return variable.Protected == input.Protected &&
+		variable.Masked == input.Masked &&
+		variable.VariableRaw == input.VariableRaw &&
+		variable.VariableType == input.VariableType
+}
+
 type ownershipIdentity struct {
 	AssociationID    string
 	SourcePath       string
@@ -475,32 +576,36 @@ func ownershipIdentityFromReadState(req providers.ReadStateRequest) ownershipIde
 }
 
 type variableMetadata struct {
-	ManagedBy        string `json:"managed_by"`
-	AssociationID    string `json:"association_id"`
-	SourcePath       string `json:"source_path"`
-	SourcePathHash   string `json:"-"`
-	ObjectID         string `json:"object_id"`
-	ObjectIDHash     string `json:"-"`
-	PluginInstanceID string `json:"plugin_instance_id,omitempty"`
-	RestoreEpoch     string `json:"restore_epoch,omitempty"`
-	SourceVersion    int    `json:"source_version"`
-	PayloadSHA256    string `json:"payload_sha256"`
-	PayloadFormat    string `json:"payload_format"`
-	EnvironmentRef   string `json:"environment_scope"`
+	ManagedBy            string `json:"managed_by"`
+	AssociationID        string `json:"association_id"`
+	SourcePath           string `json:"source_path"`
+	SourcePathHash       string `json:"-"`
+	ObjectID             string `json:"object_id"`
+	ObjectIDHash         string `json:"-"`
+	PluginInstanceID     string `json:"plugin_instance_id,omitempty"`
+	PluginInstanceIDHash string `json:"-"`
+	RestoreEpoch         string `json:"restore_epoch,omitempty"`
+	RestoreEpochHash     string `json:"-"`
+	SourceVersion        int    `json:"source_version"`
+	PayloadSHA256        string `json:"payload_sha256"`
+	PayloadFormat        string `json:"payload_format"`
+	EnvironmentRef       string `json:"environment_scope"`
 }
 
 type variableMetadataWire struct {
-	ManagedBy        string `json:"m"`
-	AssociationID    string `json:"a"`
-	SourcePath       string `json:"p,omitempty"`
-	SourcePathHash   string `json:"ph,omitempty"`
-	ObjectID         string `json:"o,omitempty"`
-	ObjectIDHash     string `json:"oh,omitempty"`
-	PluginInstanceID string `json:"i,omitempty"`
-	RestoreEpoch     string `json:"r,omitempty"`
-	SourceVersion    int    `json:"v"`
-	PayloadSHA256    string `json:"h"`
-	PayloadFormat    string `json:"f"`
+	ManagedBy            string `json:"m"`
+	AssociationID        string `json:"a"`
+	SourcePath           string `json:"p,omitempty"`
+	SourcePathHash       string `json:"ph,omitempty"`
+	ObjectID             string `json:"o,omitempty"`
+	ObjectIDHash         string `json:"oh,omitempty"`
+	PluginInstanceID     string `json:"i,omitempty"`
+	PluginInstanceIDHash string `json:"ih,omitempty"`
+	RestoreEpoch         string `json:"r,omitempty"`
+	RestoreEpochHash     string `json:"rh,omitempty"`
+	SourceVersion        int    `json:"v"`
+	PayloadSHA256        string `json:"h"`
+	PayloadFormat        string `json:"f"`
 }
 
 func variableInputFromUpsert(options gitlabDestinationOptions, req providers.UpsertRequest) gitlabVariableInput {
@@ -545,15 +650,44 @@ func metadataDescription(metadata variableMetadata) string {
 	if len(payload) <= variableDescriptionMaxBytes {
 		return payload
 	}
-	wire.ObjectID = ""
-	wire.ObjectIDHash = metadataIdentityHash(metadata.ObjectID)
-	payload = mustMarshalMetadata(wire)
-	if len(payload) <= variableDescriptionMaxBytes {
-		return payload
+	if compactWireIdentity(&wire.ObjectID, &wire.ObjectIDHash) {
+		payload = mustMarshalMetadata(wire)
+		if len(payload) <= variableDescriptionMaxBytes {
+			return payload
+		}
 	}
-	wire.SourcePath = ""
-	wire.SourcePathHash = metadataIdentityHash(metadata.SourcePath)
+	if compactWireIdentity(&wire.SourcePath, &wire.SourcePathHash) {
+		payload = mustMarshalMetadata(wire)
+		if len(payload) <= variableDescriptionMaxBytes {
+			return payload
+		}
+	}
+	if compactWireIdentity(&wire.PluginInstanceID, &wire.PluginInstanceIDHash) {
+		payload = mustMarshalMetadata(wire)
+		if len(payload) <= variableDescriptionMaxBytes {
+			return payload
+		}
+	}
+	if compactWireIdentity(&wire.RestoreEpoch, &wire.RestoreEpochHash) {
+		payload = mustMarshalMetadata(wire)
+		if len(payload) <= variableDescriptionMaxBytes {
+			return payload
+		}
+	}
 	return mustMarshalMetadata(wire)
+}
+
+func compactWireIdentity(value *string, hash *string) bool {
+	if value == nil || hash == nil || *value == "" {
+		return false
+	}
+	compact := metadataIdentityHash(*value)
+	if len(compact) >= len(*value) {
+		return false
+	}
+	*value = ""
+	*hash = compact
+	return true
 }
 
 func mustMarshalMetadata(metadata variableMetadataWire) string {
@@ -571,17 +705,19 @@ func ownershipMetadata(variable *gitlabVariable) (variableMetadata, bool) {
 	var wire variableMetadataWire
 	if err := json.Unmarshal([]byte(variable.Description), &wire); err == nil && wire.ManagedBy != "" {
 		metadata := variableMetadata{
-			ManagedBy:        metadataManagedBy,
-			AssociationID:    wire.AssociationID,
-			SourcePath:       wire.SourcePath,
-			SourcePathHash:   wire.SourcePathHash,
-			ObjectID:         wire.ObjectID,
-			ObjectIDHash:     wire.ObjectIDHash,
-			PluginInstanceID: wire.PluginInstanceID,
-			RestoreEpoch:     wire.RestoreEpoch,
-			SourceVersion:    wire.SourceVersion,
-			PayloadSHA256:    wire.PayloadSHA256,
-			PayloadFormat:    wire.PayloadFormat,
+			ManagedBy:            metadataManagedBy,
+			AssociationID:        wire.AssociationID,
+			SourcePath:           wire.SourcePath,
+			SourcePathHash:       wire.SourcePathHash,
+			ObjectID:             wire.ObjectID,
+			ObjectIDHash:         wire.ObjectIDHash,
+			PluginInstanceID:     wire.PluginInstanceID,
+			PluginInstanceIDHash: wire.PluginInstanceIDHash,
+			RestoreEpoch:         wire.RestoreEpoch,
+			RestoreEpochHash:     wire.RestoreEpochHash,
+			SourceVersion:        wire.SourceVersion,
+			PayloadSHA256:        wire.PayloadSHA256,
+			PayloadFormat:        wire.PayloadFormat,
 		}
 		return metadata, wire.ManagedBy == metadataManagedByCompact || wire.ManagedBy == metadataManagedBy
 	}
@@ -597,27 +733,36 @@ func ownedByRequest(metadata variableMetadata, metadataOwned bool, identity owne
 		return false
 	}
 	sourcePathMatches := metadata.SourcePath == identity.SourcePath ||
-		(metadata.SourcePathHash != "" && metadata.SourcePathHash == metadataIdentityHash(identity.SourcePath))
+		(metadata.SourcePathHash != "" && metadataIdentityHashMatches(metadata.SourcePathHash, identity.SourcePath))
 	objectIDMatches := metadata.ObjectID == identity.ObjectID ||
-		(metadata.ObjectIDHash != "" && metadata.ObjectIDHash == metadataIdentityHash(identity.ObjectID))
+		(metadata.ObjectIDHash != "" && metadataIdentityHashMatches(metadata.ObjectIDHash, identity.ObjectID))
 	return metadata.AssociationID == identity.AssociationID &&
 		sourcePathMatches &&
 		objectIDMatches &&
-		runtimeMetadataValueMatches(metadata.PluginInstanceID, identity.PluginInstanceID) &&
-		runtimeMetadataValueMatches(metadata.RestoreEpoch, identity.RestoreEpoch) &&
+		runtimeMetadataValueMatches(metadata.PluginInstanceID, metadata.PluginInstanceIDHash, identity.PluginInstanceID) &&
+		runtimeMetadataValueMatches(metadata.RestoreEpoch, metadata.RestoreEpochHash, identity.RestoreEpoch) &&
 		identity.AssociationID != "" &&
 		identity.SourcePath != "" &&
 		identity.ObjectID != ""
 }
 
-func runtimeMetadataValueMatches(actual string, expected string) bool {
+func runtimeMetadataValueMatches(actual string, actualHash string, expected string) bool {
 	if expected == "" {
 		return true
 	}
-	return actual == expected
+	return actual == expected || (actualHash != "" && metadataIdentityHashMatches(actualHash, expected))
 }
 
 func metadataIdentityHash(value string) string {
+	sum := sha256.Sum256([]byte(value))
+	return base64.RawURLEncoding.EncodeToString(sum[:16])
+}
+
+func metadataIdentityHashMatches(actualHash string, value string) bool {
+	return actualHash == metadataIdentityHash(value) || actualHash == legacyMetadataIdentityHash(value)
+}
+
+func legacyMetadataIdentityHash(value string) string {
 	sum := sha256.Sum256([]byte(value))
 	return hex.EncodeToString(sum[:16])
 }
@@ -650,6 +795,14 @@ func blockedPlan(errorClass providers.ErrorClass) *providers.PlanResult {
 	}
 }
 
+func blockedValidationPlan(message string) *providers.PlanResult {
+	return &providers.PlanResult{
+		Action:     providers.PlanActionBlocked,
+		ErrorClass: providers.ErrorClassValidation,
+		Message:    message,
+	}
+}
+
 func providerError(errorClass providers.ErrorClass) error {
 	return &providers.Error{Class: errorClass, Message: "gitlab request failed"}
 }
@@ -668,6 +821,7 @@ type gitlabVariable struct {
 	EnvironmentScope string `json:"environment_scope"`
 	Protected        bool   `json:"protected"`
 	Masked           bool   `json:"masked"`
+	Hidden           bool   `json:"hidden"`
 	VariableRaw      bool   `json:"raw"`
 	VariableType     string `json:"variable_type"`
 	Description      string `json:"description"`
@@ -719,7 +873,7 @@ func (c httpProjectVariableClient) CreateVariable(
 	options gitlabDestinationOptions,
 	input gitlabVariableInput,
 ) (*gitlabVariable, error) {
-	req, err := c.newRequest(ctx, options, http.MethodPost, variablesPath(options.projectID), nil, input.form())
+	req, err := c.newRequest(ctx, options, http.MethodPost, variablesPath(options.projectID), nil, input.createForm())
 	if err != nil {
 		return nil, err
 	}
@@ -742,7 +896,7 @@ func (c httpProjectVariableClient) UpdateVariable(
 		http.MethodPut,
 		variablePath(options.projectID, key),
 		environmentScopeQuery(options),
-		input.form(),
+		input.updateForm(),
 	)
 	if err != nil {
 		return nil, err
@@ -783,10 +937,20 @@ func (input gitlabVariableInput) form() url.Values {
 	values.Set("raw", strconv.FormatBool(input.VariableRaw))
 	values.Set("variable_type", input.VariableType)
 	values.Set("description", input.Description)
+	return values
+}
+
+func (input gitlabVariableInput) createForm() url.Values {
+	values := input.form()
 	if input.Hidden {
+		values.Set("masked", "true")
 		values.Set("masked_and_hidden", "true")
 	}
 	return values
+}
+
+func (input gitlabVariableInput) updateForm() url.Values {
+	return input.form()
 }
 
 func (c httpProjectVariableClient) newRequest(

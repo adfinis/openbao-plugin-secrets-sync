@@ -309,6 +309,12 @@ bao write -force secret-sync/associations/app/db/<association-id>/enable
 bao write -force secret-sync/associations/app/db/<association-id>/sync
 ```
 
+Destination config writes validate and store the new provider settings, but do
+not enqueue existing associations by themselves. If a destination config change
+should update remote object attributes, run an association plan to review the
+desired state, then use manual association sync or write a new source version to
+enqueue work.
+
 Delete an association:
 
 ```sh
