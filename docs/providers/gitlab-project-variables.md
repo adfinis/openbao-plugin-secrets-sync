@@ -48,6 +48,16 @@ bao read secret-sync/destinations/gitlab/prod/check
 
 ## Create project variables
 
+Mark the source path as syncable and write the current source secret before
+planning an association:
+
+```sh
+bao write -force secret-sync/sources/app/db/enable
+
+bao write secret-sync/data/app/db \
+  @<(printf '%s' '{"data":{"password":"initial-password"}}')
+```
+
 Use `secret-key` granularity with `format=raw` for normal CI/CD variable use.
 Each top-level OpenBao source key becomes one GitLab CI/CD variable value.
 GitLab variable keys may contain only letters, digits, and `_`, so choose a
