@@ -13,9 +13,9 @@ mutation is asynchronous unless an operator explicitly drains due queue work.
 - Destination sensitive fields are redacted on destination reads.
 - Plan, queue, status, reconcile, metrics, and logs do not expose source
   payload values.
-- Destination mutation requires source eligibility, destination authority, an
-  enabled association, queue capacity, and an allowed OpenBao replication
-  state.
+- Destination mutation requires destination authority, an enabled association,
+  queue capacity, and an allowed OpenBao replication state. When
+  `require_source_opt_in=true`, it also requires source eligibility metadata.
 - The mount-wide `disabled` flag and restore guard block remote mutation.
 - Provider failures use stable error classes such as `authn`, `authz`,
   `rate_limit`, `unavailable`, `ownership`, `collision`, and `drift`.
@@ -24,7 +24,7 @@ mutation is asynchronous unless an operator explicitly drains due queue work.
 
 | Path | Purpose |
 | --- | --- |
-| `config` | Read or update mount-wide sync settings such as `disabled` and `queue_capacity`. |
+| `config` | Read or update mount-wide sync settings such as `disabled`, `queue_capacity`, and `require_source_opt_in`. |
 | `config/restore-guard/acknowledge` | Acknowledge restore or clone review and resume remote mutation. |
 
 ## Source data and metadata
@@ -42,6 +42,9 @@ mutation is asynchronous unless an operator explicitly drains due queue work.
 
 Each source write creates a new version. Writes that produce sync work reserve
 queue capacity before accepting the new source version.
+Mounts default `require_source_opt_in=false`. When strict opt-in is enabled,
+`sources/<path>/enable` sets `custom_metadata.syncable=true` and source checks
+report `source_not_syncable` until that metadata is present.
 
 ## Destinations
 

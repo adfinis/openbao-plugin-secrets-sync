@@ -39,19 +39,19 @@ func TestSourceCheckReportsReadiness(t *testing.T) {
 	initialResp := env.read("sources/app/db/check")
 	assertNoErrorResponse(t, initialResp)
 	assertResponseValue(t, initialResp, "ready", false)
+	assertResponseValue(t, initialResp, "source_opt_in_required", false)
 	assertResponseValue(t, initialResp, "current_version", 0)
 	assertStringSlice(t, initialResp.Data["blockers"].([]string), []string{
 		"source_missing",
-		"source_not_syncable",
 	})
 
 	env.writeAppDBSecret("secret")
 	writtenResp := env.read("sources/app/db/check")
 	assertNoErrorResponse(t, writtenResp)
-	assertResponseValue(t, writtenResp, "ready", false)
+	assertResponseValue(t, writtenResp, "ready", true)
 	assertResponseValue(t, writtenResp, "current_version", 1)
 	assertResponseValue(t, writtenResp, "current_version_available", true)
-	assertStringSlice(t, writtenResp.Data["blockers"].([]string), []string{"source_not_syncable"})
+	assertStringSlice(t, writtenResp.Data["blockers"].([]string), []string{})
 
 	env.createFakeDestination("default")
 	enableResp := env.update("sources/app/db/enable")
@@ -69,6 +69,38 @@ func TestSourceCheckReportsReadiness(t *testing.T) {
 	assertResponseValue(t, readyResp, "association_count", 1)
 	assertResponseValue(t, readyResp, "enabled_association_count", 1)
 	assertResponseValue(t, readyResp, "queued_operations", 1)
+	assertStringSlice(t, readyResp.Data["blockers"].([]string), []string{})
+}
+
+func TestSourceCheckReportsStrictOptInBlocker(t *testing.T) {
+	env := newBackendTestEnv(t)
+
+	cfgResp := env.update("config", map[string]interface{}{
+		"require_source_opt_in": true,
+	})
+	if cfgResp != nil && cfgResp.IsError() {
+		t.Fatalf("unexpected config write error: %v", cfgResp.Error())
+	}
+
+	initialResp := env.read("sources/app/db/check")
+	assertNoErrorResponse(t, initialResp)
+	assertResponseValue(t, initialResp, "source_opt_in_required", true)
+	assertStringSlice(t, initialResp.Data["blockers"].([]string), []string{
+		"source_missing",
+		"source_not_syncable",
+	})
+
+	env.writeAppDBSecret("secret")
+	writtenResp := env.read("sources/app/db/check")
+	assertNoErrorResponse(t, writtenResp)
+	assertResponseValue(t, writtenResp, "ready", false)
+	assertStringSlice(t, writtenResp.Data["blockers"].([]string), []string{"source_not_syncable"})
+
+	enableResp := env.update("sources/app/db/enable")
+	assertNoErrorResponse(t, enableResp)
+	readyResp := env.read("sources/app/db/check")
+	assertNoErrorResponse(t, readyResp)
+	assertResponseValue(t, readyResp, "ready", true)
 	assertStringSlice(t, readyResp.Data["blockers"].([]string), []string{})
 }
 

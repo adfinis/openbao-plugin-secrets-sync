@@ -10,10 +10,11 @@ import (
 
 func TestConfigDefaults(t *testing.T) {
 	b := Backend(&logical.BackendConfig{})
+	storage := &logical.InmemStorage{}
 	req := &logical.Request{
 		Operation: logical.ReadOperation,
 		Path:      configPath,
-		Storage:   &logical.InmemStorage{},
+		Storage:   storage,
 	}
 
 	resp, err := b.HandleRequest(context.Background(), req)
@@ -23,8 +24,11 @@ func TestConfigDefaults(t *testing.T) {
 	if resp == nil {
 		t.Fatal("response must not be nil")
 	}
-	assertResponseValue(t, resp, "restore_guard", true)
-	assertResponseValue(t, resp, "restore_guard_acknowledged_time", "")
+	assertResponseValue(t, resp, "restore_guard", false)
+	if got := resp.Data["restore_guard_acknowledged_time"]; got == "" {
+		t.Fatal("restore_guard_acknowledged_time must be set for fresh mounts")
+	}
+	assertResponseValue(t, resp, "require_source_opt_in", false)
 	assertResponseValue(t, resp, "storage_schema_version", currentStorageSchema)
 	assertResponseValue(t, resp, "storage_schema_min_compatible_version", minSupportedStorageSchema)
 	if got, ok := resp.Data["plugin_instance_id"].(string); !ok || !strings.HasPrefix(got, "inst-") {
@@ -32,6 +36,54 @@ func TestConfigDefaults(t *testing.T) {
 	}
 	if got, ok := resp.Data["restore_epoch"].(string); !ok || !strings.HasPrefix(got, "epoch-") {
 		t.Fatalf("restore_epoch = %v, want epoch-*", resp.Data["restore_epoch"])
+	}
+}
+
+func TestConfigInitializesDefaultsForExistingStorageWithoutConfig(t *testing.T) {
+	env := newBackendTestEnv(t)
+	metadata := newMetadataRecord()
+	if err := putMetadata(context.Background(), env.storage, "app/db", metadata); err != nil {
+		t.Fatalf("write existing metadata fixture: %v", err)
+	}
+
+	resp := env.read(configPath)
+	assertNoErrorResponse(t, resp)
+	assertResponseValue(t, resp, "restore_guard", false)
+	if got := resp.Data["restore_guard_acknowledged_time"]; got == "" {
+		t.Fatal("restore_guard_acknowledged_time must be set")
+	}
+	assertResponseValue(t, resp, "require_source_opt_in", false)
+	assertResponseValue(t, resp, "queue_capacity", defaultQueueCapacity)
+}
+
+func TestConfigDecodesMissingSourceOptInAsDefault(t *testing.T) {
+	env := newBackendTestEnv(t)
+	entry, err := logical.StorageEntryJSON(configPath, map[string]interface{}{
+		"restore_guard":  false,
+		"queue_capacity": 0,
+	})
+	if err != nil {
+		t.Fatalf("build config entry: %v", err)
+	}
+	if err := env.storage.Put(context.Background(), entry); err != nil {
+		t.Fatalf("write config fixture: %v", err)
+	}
+
+	resp := env.read(configPath)
+	assertNoErrorResponse(t, resp)
+	assertResponseValue(t, resp, "restore_guard", false)
+	assertResponseValue(t, resp, "require_source_opt_in", false)
+	assertResponseValue(t, resp, "queue_capacity", 0)
+
+	cfg, err := readGlobalConfig(context.Background(), env.storage)
+	if err != nil {
+		t.Fatalf("read config: %v", err)
+	}
+	if cfg.RequireSourceOptIn {
+		t.Fatal("missing require_source_opt_in must decode as false")
+	}
+	if cfg.QueueCapacity != 0 {
+		t.Fatalf("queue_capacity = %d, want 0", cfg.QueueCapacity)
 	}
 }
 
@@ -48,10 +100,12 @@ func TestConfigWriteMergesDefaultsAndValidatesQueueCapacity(t *testing.T) {
 	readResp := env.read(configPath)
 	assertNoErrorResponse(t, readResp)
 	assertResponseValue(t, readResp, "queue_capacity", 12)
-	assertResponseValue(t, readResp, "restore_guard", true)
+	assertResponseValue(t, readResp, "restore_guard", false)
+	assertResponseValue(t, readResp, "require_source_opt_in", false)
 
 	zeroResp := env.update(configPath, map[string]interface{}{
-		"queue_capacity": 0,
+		"queue_capacity":        0,
+		"require_source_opt_in": true,
 	})
 	if zeroResp != nil && zeroResp.IsError() {
 		t.Fatalf("unexpected zero queue_capacity error: %v", zeroResp.Error())
@@ -59,6 +113,7 @@ func TestConfigWriteMergesDefaultsAndValidatesQueueCapacity(t *testing.T) {
 	readZeroResp := env.read(configPath)
 	assertNoErrorResponse(t, readZeroResp)
 	assertResponseValue(t, readZeroResp, "queue_capacity", 0)
+	assertResponseValue(t, readZeroResp, "require_source_opt_in", true)
 
 	negativeResp := env.update(configPath, map[string]interface{}{
 		"queue_capacity": -1,
@@ -74,6 +129,7 @@ func TestConfigRestoreGuardAcknowledge(t *testing.T) {
 	initialResp := env.read(configPath)
 	assertNoErrorResponse(t, initialResp)
 	initialEpoch := initialResp.Data["restore_epoch"].(string)
+	assertResponseValue(t, initialResp, "restore_guard", false)
 
 	ackResp := env.update("config/restore-guard/acknowledge")
 	assertNoErrorResponse(t, ackResp)
@@ -82,8 +138,8 @@ func TestConfigRestoreGuardAcknowledge(t *testing.T) {
 		t.Fatal("restore_guard_acknowledged_time must be set")
 	}
 	ackEpoch := ackResp.Data["restore_epoch"].(string)
-	if ackEpoch == "" || ackEpoch == initialEpoch {
-		t.Fatalf("restore_epoch after acknowledgement = %q, want new epoch distinct from %q", ackEpoch, initialEpoch)
+	if ackEpoch != initialEpoch {
+		t.Fatalf("restore_epoch after fresh-mount acknowledgement = %q, want unchanged %q", ackEpoch, initialEpoch)
 	}
 
 	readResp := env.read(configPath)
@@ -106,4 +162,11 @@ func TestConfigRestoreGuardAcknowledge(t *testing.T) {
 	assertNoErrorResponse(t, readResp)
 	assertResponseValue(t, readResp, "restore_guard", true)
 	assertResponseValue(t, readResp, "restore_guard_acknowledged_time", "")
+
+	ackResp = env.update("config/restore-guard/acknowledge")
+	assertNoErrorResponse(t, ackResp)
+	ackEpoch = ackResp.Data["restore_epoch"].(string)
+	if ackEpoch == "" || ackEpoch == initialEpoch {
+		t.Fatalf("restore_epoch after guarded acknowledgement = %q, want new epoch distinct from %q", ackEpoch, initialEpoch)
+	}
 }

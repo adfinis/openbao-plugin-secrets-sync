@@ -46,3 +46,29 @@ func TestDispatchHonorsTightenedDestinationPolicy(t *testing.T) {
 	assertStatusObjectErrorClass(t, env.b, env.storage, providers.ErrorClassValidation)
 	assertStatusObjectState(t, env.b, env.storage, domain.SyncStateValidationError)
 }
+
+func TestDispatchHonorsTightenedSourceOptInPolicy(t *testing.T) {
+	env := newBackendTestEnv(t)
+
+	env.writeAppDBSecret("initial")
+	env.createFakeDestination("default")
+	associationResp := env.update("associations/app/db", map[string]interface{}{
+		"destination_type": providerTypeFake,
+		"destination_name": "default",
+		"resolved_name":    "prod/app/db",
+		"granularity":      syncObjectIDSecretPath,
+		"format":           defaultAssociationFormat,
+	})
+	operationID := operationIDsFromResponse(t, associationResp)[0]
+
+	cfgResp := env.update("config", map[string]interface{}{
+		"require_source_opt_in": true,
+	})
+	if cfgResp != nil && cfgResp.IsError() {
+		t.Fatalf("unexpected config write error: %v", cfgResp.Error())
+	}
+	env.runPeriodicAllowed("periodic after source opt-in policy tightened")
+	assertOutboxOperation(t, env.storage, operationID, 1, outboxStateFailedTerminal)
+	assertStatusObjectErrorClass(t, env.b, env.storage, providers.ErrorClassValidation)
+	assertStatusObjectState(t, env.b, env.storage, domain.SyncStateValidationError)
+}

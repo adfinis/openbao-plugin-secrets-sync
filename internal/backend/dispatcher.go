@@ -476,6 +476,10 @@ func (b *secretSyncBackend) loadUpsertContext(
 			resolvedName: association.ResolvedName,
 		}, nil
 	}
+	failure, err := sourceEligibilityFailureForDispatch(ctx, storage, *association)
+	if failure != nil || err != nil {
+		return nil, failure, err
+	}
 	return &upsertContext{
 		version:     version,
 		association: association,
@@ -542,11 +546,38 @@ func (b *secretSyncBackend) loadDeleteContext(
 			resolvedName: association.ResolvedName,
 		}, nil
 	}
+	failure, err := sourceEligibilityFailureForDispatch(ctx, storage, *association)
+	if failure != nil || err != nil {
+		return nil, failure, err
+	}
 	return &deleteContext{
 		association: association,
 		destination: destination,
 		provider:    provider,
 	}, nil, nil
+}
+
+func sourceEligibilityFailureForDispatch(
+	ctx context.Context,
+	storage logical.Storage,
+	association associationRecord,
+) (*operationFailure, error) {
+	cfg, err := readGlobalConfig(ctx, storage)
+	if err != nil {
+		return nil, err
+	}
+	metadata, err := getMetadata(ctx, storage, association.Path)
+	if err != nil {
+		return nil, err
+	}
+	if err := validateAssociationActivation(association, metadata, cfg); err != nil {
+		return &operationFailure{
+			class:        providers.ErrorClassValidation,
+			message:      err.Error(),
+			resolvedName: association.ResolvedName,
+		}, nil
+	}
+	return nil, nil
 }
 
 func prepareProviderPayload(

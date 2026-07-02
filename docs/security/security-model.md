@@ -49,13 +49,14 @@ config                    platform operators
 Use [Policy examples](policies.md) for concrete OpenBao policy snippets.
 
 Association creation is the highest-risk authorization operation because it
-causes a secret to leave OpenBao. It requires source eligibility and
-destination authority.
+causes a secret to leave OpenBao. It requires destination authority and, when
+`require_source_opt_in=true`, source eligibility.
 
 Source eligibility can be proven through:
 
 - read permission on `data/<path>` at association create/update time;
-- required source metadata such as `syncable=true`;
+- required source metadata such as `syncable=true` when strict source opt-in is
+  enabled;
 - an operator-only association path that bypasses delegated creation.
 
 Destination authority can be proven through:
@@ -76,7 +77,8 @@ dispatch, and does not expose source payload data in responses.
 
 Implemented controls:
 
-- `custom_metadata.syncable=true` before enabled association activation;
+- optional `custom_metadata.syncable=true` before enabled association
+  activation when `require_source_opt_in=true`;
 - destination-level allowed source path prefixes;
 - destination-level allowed resolved remote-name prefixes;
 - required ownership metadata;
@@ -210,7 +212,8 @@ overwrite newer remote state.
 
 The plugin uses a restore guard:
 
-- `restore_guard=true` after detected or operator-declared restore;
+- fresh mounts start with `restore_guard=false`;
+- operators can set `restore_guard=true` after restore or clone review starts;
 - background and manual-drain remote mutations disabled while the guard is
   active;
 - `reconcile/<path>/plan` and `reconcile/<path>` before pushing restored data

@@ -325,6 +325,12 @@ func TestQueueDrainHonorsRestoreGuard(t *testing.T) {
 	env.createFakeDestination("default")
 	associationResp := env.createDefaultFakeAssociation()
 	operationID := operationIDsFromResponse(t, associationResp)[0]
+	rearmResp := env.update("config", map[string]interface{}{
+		"restore_guard": true,
+	})
+	if rearmResp != nil && rearmResp.IsError() {
+		t.Fatalf("unexpected restore guard rearm error: %v", rearmResp.Error())
+	}
 
 	drainResp := env.update("queue/drain", map[string]interface{}{
 		"max_operations": 1,

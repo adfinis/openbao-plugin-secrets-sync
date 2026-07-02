@@ -12,8 +12,8 @@ Confirm the mount responds:
 bao read secret-sync/config
 ```
 
-After a new mount or after a restore/clone review, remote mutation is blocked
-until the restore guard is acknowledged:
+If `restore_guard=true`, remote mutation is blocked until restore or clone
+review is complete and the guard is acknowledged:
 
 ```sh
 bao write -force secret-sync/config/restore-guard/acknowledge
@@ -64,11 +64,15 @@ network, IAM, token, RBAC, or provider availability issues.
 
 ## Source and association checks
 
-Confirm the source path is explicitly syncable:
+When strict source opt-in is enabled, confirm the source path is explicitly
+syncable:
 
 ```sh
 bao write -force secret-sync/sources/app/db/enable
 ```
+
+This is required only when `require_source_opt_in=true`. Mounts default to
+`require_source_opt_in=false`.
 
 To inspect the underlying metadata:
 

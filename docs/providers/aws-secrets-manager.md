@@ -60,6 +60,10 @@ bao write secret-sync/destinations/aws-sm/private \
 
 ## Supported association shapes
 
+The examples assume the source path already has a current local version. Fresh
+mounts default `require_source_opt_in=false`; if strict source opt-in is
+enabled, mark the source with `sources/<path>/enable` first.
+
 The AWS provider supports `secret-path` granularity with `format=json`. The
 default association shape works for AWS Secrets Manager:
 

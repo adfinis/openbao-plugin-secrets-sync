@@ -25,7 +25,7 @@ func pathSources(b *secretSyncBackend) []*framework.Path {
 				},
 			},
 			HelpSynopsis:    "Check source sync readiness.",
-			HelpDescription: "Reports whether a source path has a current version and is marked syncable.",
+			HelpDescription: "Reports whether a source path has a current version and, when required, is marked syncable.",
 		},
 		{
 			Pattern: "sources/(?P<path>.+)/enable",
@@ -86,18 +86,23 @@ func (b *secretSyncBackend) pathSourceCheck(
 	if err != nil {
 		return nil, err
 	}
+	cfg, err := readGlobalConfig(ctx, req.Storage)
+	if err != nil {
+		return nil, err
+	}
 	currentVersion := 0
 	syncable := false
 	if metadata != nil {
 		currentVersion = metadata.CurrentVersion
 		syncable = sourceMetadataSyncable(*metadata)
 	}
-	blockers := sourceReadinessBlockers(metadata, syncable, currentVersionAvailable)
+	blockers := sourceReadinessBlockers(metadata, syncable, currentVersionAvailable, cfg.RequireSourceOptIn)
 	b.recordReadinessCheck(ctx, observability.CheckSource, "", blockers)
 	return &logical.Response{Data: newResponseData(
 		responseField("path", path),
 		responseField("ready", len(blockers) == 0),
 		responseField("syncable", syncable),
+		responseField("source_opt_in_required", cfg.RequireSourceOptIn),
 		responseField("current_version", currentVersion),
 		responseField("current_version_available", currentVersionAvailable),
 		responseField("association_count", len(associations)),
@@ -161,6 +166,7 @@ func sourceReadinessBlockers(
 	metadata *metadataRecord,
 	syncable bool,
 	currentVersionAvailable bool,
+	sourceOptInRequired bool,
 ) []string {
 	blockers := []string{}
 	if metadata == nil || metadata.CurrentVersion == 0 {
@@ -168,7 +174,7 @@ func sourceReadinessBlockers(
 	} else if !currentVersionAvailable {
 		blockers = append(blockers, "current_version_unavailable")
 	}
-	if !syncable {
+	if sourceOptInRequired && !syncable {
 		blockers = append(blockers, "source_not_syncable")
 	}
 	return blockers

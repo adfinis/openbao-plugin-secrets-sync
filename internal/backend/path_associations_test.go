@@ -355,6 +355,12 @@ func TestOperationMetricsUseGranularityLabels(t *testing.T) {
 func TestAssociationRequiresSyncableMetadata(t *testing.T) {
 	env := newBackendTestEnv(t)
 
+	cfgResp := env.update("config", map[string]interface{}{
+		"require_source_opt_in": true,
+	})
+	if cfgResp != nil && cfgResp.IsError() {
+		t.Fatalf("unexpected config write error: %v", cfgResp.Error())
+	}
 	env.writeAppDBSecret("initial")
 	env.createFakeDestination("default")
 
@@ -378,6 +384,23 @@ func TestAssociationRequiresSyncableMetadata(t *testing.T) {
 		"format":           defaultAssociationFormat,
 	})
 	assertNoErrorResponse(t, allowedResp)
+}
+
+func TestAssociationAllowsNonSyncableSourceByDefault(t *testing.T) {
+	env := newBackendTestEnv(t)
+
+	env.writeAppDBSecret("initial")
+	env.createFakeDestination("default")
+
+	resp := env.update("associations/app/db", map[string]interface{}{
+		"destination_type": providerTypeFake,
+		"destination_name": "default",
+		"resolved_name":    "prod/app/db",
+		"granularity":      syncObjectIDSecretPath,
+		"format":           defaultAssociationFormat,
+	})
+	assertNoErrorResponse(t, resp)
+	assertOperationIDs(t, resp.Data, 1)
 }
 
 func TestAssociationDestinationPolicyConstraints(t *testing.T) {
@@ -468,6 +491,12 @@ func TestAssociationDestinationPolicyConstraints(t *testing.T) {
 func TestAssociationPlan(t *testing.T) {
 	env := newBackendTestEnv(t)
 
+	cfgResp := env.update("config", map[string]interface{}{
+		"require_source_opt_in": true,
+	})
+	if cfgResp != nil && cfgResp.IsError() {
+		t.Fatalf("unexpected config write error: %v", cfgResp.Error())
+	}
 	env.writeAppDBSecret("initial")
 	env.createFakeDestination("default")
 
@@ -550,6 +579,12 @@ func TestAssociationDisableEnableAndManualSync(t *testing.T) {
 func TestAssociationEnableRequiresSyncableMetadata(t *testing.T) {
 	env := newBackendTestEnv(t)
 
+	cfgResp := env.update("config", map[string]interface{}{
+		"require_source_opt_in": true,
+	})
+	if cfgResp != nil && cfgResp.IsError() {
+		t.Fatalf("unexpected config write error: %v", cfgResp.Error())
+	}
 	env.writeAppDBSecret("initial")
 	env.createFakeDestination("default")
 	resp := env.update("associations/app/db", map[string]interface{}{

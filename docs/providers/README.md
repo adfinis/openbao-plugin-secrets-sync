@@ -5,6 +5,12 @@ Use these pages when you configure a destination provider. Each provider page
 focuses on destination setup, auth choices, validation commands, and provider
 constraints.
 
+Provider association examples assume the source path already has a current
+local version. Fresh mounts default `require_source_opt_in=false`, so no
+provider-specific `syncable` step is required. If strict source opt-in is
+enabled, mark the source with `sources/<path>/enable` before creating or
+enabling associations.
+
 ## Provider summary
 
 | Provider | Destination type | Remote object | Supported association shape |
