@@ -4,7 +4,9 @@
 goal is operator familiarity, not drop-in replacement compatibility with the
 OpenBao KV-v2 secrets engine.
 
-Use [API surface](api-surface.md) for the full Secret Sync path group summary.
+Use [Source model](../concepts/source-model.md) for the source data mental
+model. Use [API surface](api-surface.md) for the full Secret Sync path group
+summary.
 
 ## Compatibility position
 

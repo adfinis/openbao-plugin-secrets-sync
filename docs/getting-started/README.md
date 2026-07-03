@@ -7,9 +7,11 @@ path from build to first sync.
 ## Start here
 
 - [User guide](../guides/user-guide.md)
-- [AWS Secrets Manager provider](../providers/aws-secrets-manager.md)
-- [Kubernetes Secrets provider](../providers/kubernetes-secrets.md)
-- [GitLab project variables provider](../providers/gitlab-project-variables.md)
+- [Secret shapes](../guides/secret-shapes.md)
+- [Sync model](../concepts/sync-model.md)
+- [AWS Secrets Manager provider](../providers/aws-secrets-manager/README.md)
+- [Kubernetes Secrets provider](../providers/kubernetes-secrets/README.md)
+- [GitLab project variables provider](../providers/gitlab-project-variables/README.md)
 
 ## Validate locally
 

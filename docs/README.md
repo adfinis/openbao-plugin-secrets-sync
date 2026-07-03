@@ -14,16 +14,43 @@ page when you need to choose the right detailed document.
 
 - [Get started](getting-started/README.md) points to the shortest local
   validation paths.
-- [User guide](guides/user-guide.md) shows the operator workflow for installing,
-  configuring, writing source data, creating associations, and inspecting
+- [User guide](guides/user-guide.md) shows the first-success workflow for
+  installing, writing source data, creating one association, and checking
   status.
+- [Secret shapes](guides/secret-shapes.md) explains how source paths become
+  AWS, Kubernetes, or GitLab remote objects.
+- [Delegated use](guides/delegated-use.md) explains strict source opt-in and
+  destination prefix constraints.
 - [Provider guides](providers/README.md) explain destination-specific
   configuration for AWS Secrets Manager, Kubernetes Secrets, and GitLab project
   variables.
 
+### Understand the model
+
+- [Concepts](concepts/README.md) collects the shared model behind user,
+  provider, and operator docs.
+- [Source model](concepts/source-model.md) explains why Secret Sync stores
+  source data in its own mount and how its KV-v2-like source API behaves.
+- [Sync model](concepts/sync-model.md) explains source state, associations,
+  destination selectors, provider object shapes, and the main safety model.
+- [Convergence](concepts/convergence.md) explains queued operations,
+  `sync_operation_ids`, event dispatch, `queue/drain`, status states, manual
+  sync, retry, and cancel.
+- [Reconcile and drift](concepts/reconcile-and-drift.md) explains reconcile
+  plan versus apply, background detect versus repair, verification, restore
+  guard behavior, and disabled behavior.
+- [Ownership and safety](concepts/ownership-and-safety.md) explains remote
+  ownership metadata, restore identity, drift, collisions, and safe recovery.
+- [Templating](concepts/templating.md) explains how `resolved_name`,
+  `name_template`, and `data_key_template` turn source paths and keys into
+  provider object names.
+
 ### Operate the plugin
 
 - [Operations](operations/README.md) collects operator-facing procedures.
+- [Runtime configuration](operations/runtime-configuration.md) explains
+  mount-wide pause, restore guard, queue capacity, drift work, and dispatch
+  tuning.
 - [Operator runbook](operations/operator-runbook.md) gives operational checks,
   troubleshooting flows, restore-guard handling, and failure response guidance.
 - [Observability](operations/observability.md) describes the OpenTelemetry
@@ -47,7 +74,9 @@ page when you need to choose the right detailed document.
 - [Development](development/README.md) collects implementation-facing
   documents.
 - [Architecture](development/architecture.md) explains the plugin boundary,
-  storage model, queueing, background work, and consistency model.
+  component model, provider boundary, and consistency model.
+- [Backend](development/backend/README.md) explains backend storage, request
+  lifecycles, queueing, background work, safety gates, and diagnostics.
 - [Provider contract](development/provider-contract.md) defines the provider
   interface, capability model, payload rules, ownership behavior, and
   conformance expectations.
@@ -89,12 +118,21 @@ page when you need to choose the right detailed document.
 
 When behavior changes, update docs at the same ownership level as the code:
 
-- User-visible command or response changes: update the user guide and runbook.
-- Provider configuration changes: update the affected provider guide.
+- First-success workflow changes: update the user guide.
+- Source-model, source-shape, templating, ownership, or provider-object
+  changes: update secret shapes, provider guides, concepts, and the sync model
+  when the mental model changes.
+- Runtime, queue, convergence, drift, reconcile, restore, or dispatch changes:
+  update runtime configuration, concepts, and the runbook when recovery behavior
+  changes.
+- Delegated authorization or source opt-in changes: update delegated use,
+  security policy examples, and the security model.
+- Provider configuration, naming, ownership, or capability changes: update the
+  affected provider guide.
 - Provider interface or capability changes: update the provider contract and
   provider implementation guide.
-- Queue, restore, authorization, or redaction changes: update security,
-  testing, and the runbook.
+- Redaction changes: update security, testing, concepts, and the affected
+  response documentation.
 - New hardening evidence: update testing and the affected development or
   operations document.
 - Documentation wording or structure changes: follow the project

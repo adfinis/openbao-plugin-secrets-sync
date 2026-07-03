@@ -1,4 +1,4 @@
-# Security and operations
+# Security Model
 
 ## Threat model
 
@@ -36,14 +36,18 @@ OpenBao policies remain the primary authorization layer. The plugin exposes
 separate path surfaces so operators can delegate safely:
 
 ```text
-data/*                    app/team writers and readers
-metadata/*                app/team readers or delegated owners
-associations/*            platform operators or delegated app owners
-destinations/*            platform operators
-queue/*                   platform operators
-reconcile*                platform operators
-status/*                  app/team readers or platform operators
-config                    platform operators
+info                            all roles that need API defaults or capabilities
+config                          platform operators
+config/restore-guard/*          platform operators
+data/*                          app/team writers and readers
+metadata/*                      app/team readers, writers, or delegated owners
+sources/*                       app/team writers or delegated owners
+destinations/*                  platform operators
+associations/*                  platform operators or delegated app owners
+queue/*                         platform operators
+status/*                        app/team readers or platform operators
+reconcile/<path>/plan           delegated owners or platform operators
+reconcile/<path>                platform operators when applying status refresh
 ```
 
 Use [Policy examples](policies.md) for concrete OpenBao policy snippets.
@@ -52,20 +56,23 @@ Association creation is the highest-risk authorization operation because it
 causes a secret to leave OpenBao. It requires destination authority and, when
 `require_source_opt_in=true`, source eligibility.
 
-Source eligibility can be proven through:
+Source eligibility is local source metadata, not an implicit source-read
+permission check. When strict source opt-in is enabled, the backend requires
+`custom_metadata.syncable=true` before an enabled association can enqueue or
+dispatch sync work. OpenBao policy must therefore control who can update
+`metadata/<path>` or call `sources/<path>/enable`.
 
-- read permission on `data/<path>` at association create/update time;
-- required source metadata such as `syncable=true` when strict source opt-in is
-  enabled;
-- an operator-only association path that bypasses delegated creation.
+Delegated association owners do not need source payload read access unless the
+deployment also wants them to inspect the secret value. Combine delegated
+association access with app reader or writer policy only when that is intended.
 
 Destination authority can be proven through:
 
-- destination path policy;
+- OpenBao policy controlling who can write `destinations/*`;
 - destination-level source path prefix constraints;
 - destination-level resolved remote-name prefix constraints;
-- association-level provider constraints;
-- optional required metadata such as team, environment, or owner.
+- provider capability checks during association plan, activation, manual sync,
+  enable, and dispatch.
 
 Event-triggered dispatch and `queue/drain` execute remote mutations only through
 the durable queue dispatcher. They honor the global disabled flag and restore
@@ -97,10 +104,13 @@ destination policy tightened after enqueue still blocks remote mutation.
 - Reads return only requested secret data, following OpenBao policy.
 - Secret payloads do not appear in logs, status records, metrics, or error
   strings.
-- Status records can include versions, destination names, and
-  remote object identifiers, but not values.
+- Queue, status, plan, and reconcile responses can include versions,
+  destination names, verification markers, and remote object identifiers, but
+  not source values.
+- Durable status records can include payload hashes for comparison and drift
+  tracking, but payload hashes are not telemetry labels.
 - Tests include canary secret values and assert they do not appear in
-  logs, errors, status, plan output, or metrics.
+  logs, errors, queue, status, plan output, reconcile output, or metrics.
 
 Source secret versions and destination credentials are stored under
 seal-wrapped storage prefixes.
@@ -149,7 +159,12 @@ clients; GitLab provider requests also use bounded response-body reads.
 
 ## Ownership and collision controls
 
-Default safety mode is `overwrite_owned_only`.
+The implemented safety posture is ownership-only overwrite. There is no API
+setting that force-overwrites unowned remote objects.
+
+Use [Ownership and safety](../concepts/ownership-and-safety.md) for the
+operator-facing model behind ownership metadata, drift, collisions, stale
+objects, and restore identity.
 
 Remote ownership metadata includes the fields supported by the provider:
 
@@ -171,8 +186,10 @@ the request carries them; missing or mismatched values are treated as ownership
 loss.
 
 If ownership metadata is absent or conflicts, the plugin reports
-`REMOTE_OWNERSHIP_LOST` or `DRIFTED` and does not overwrite unless policy
-explicitly allows weaker behavior.
+`REMOTE_OWNERSHIP_LOST` and does not overwrite. If ownership matches but the
+remote payload differs from the current OpenBao source version, reconcile
+reports `DRIFTED`. Operators can remove or inspect the remote object and then
+run manual sync when OpenBao should recreate or repair the object.
 
 Delete behavior:
 
@@ -198,7 +215,7 @@ For remote operations, the plugin persists and logs correlation metadata:
 - association ID;
 - object ID;
 - operation ID;
-- destination type and name;
+- destination reference;
 - remote object identifier;
 - result state and error class.
 
@@ -215,13 +232,13 @@ The plugin uses a restore guard:
 
 - fresh mounts start with `restore_guard=false`;
 - operators can set `restore_guard=true` after restore or clone review starts;
-- background, event-triggered, and manual-drain remote mutations disabled while
+- event-triggered, periodic, and manual-drain remote mutation is disabled while
   the guard is active;
 - background drift detection may continue to update local status from provider
   read-state checks while the guard is active, but repair enqueue and dispatch
   remain blocked;
-- `reconcile/<path>/plan` and `reconcile/<path>` before pushing restored data
-  to destinations;
+- `reconcile/<path>/plan` and `reconcile/<path>` remain available to inspect
+  provider state before pushing restored data to destinations;
 - explicit operator acknowledgement to resume sync;
 - persisted restore epoch rotated on acknowledgement and included in provider
   ownership metadata where possible.
@@ -234,18 +251,21 @@ Instrument metrics through the OpenTelemetry metric API where practical. The
 plugin must not store exporter credentials in plugin storage. Keep exporter and
 collector setup as a deployment concern.
 
-OpenTelemetry instruments:
+OpenTelemetry instrument names are documented in
+[Observability](../operations/observability.md). Security-relevant instruments
+include:
 
 ```text
-openbao.secret_sync.queue.depth{state}
-openbao.secret_sync.operations{operation,result,error_class,destination_type,granularity}
-openbao.secret_sync.provider.requests{provider,operation,result,error_class}
-openbao.secret_sync.provider.request.duration{provider,operation,result,error_class}
-openbao.secret_sync.reconcile.runs{result,error_class,destination_type,granularity}
-openbao.secret_sync.drift.repairs{result,error_class,destination_type,granularity}
-openbao.secret_sync.remote_mutation.blocked{operation,reason}
+openbao.secret_sync.queue.depth
 openbao.secret_sync.queue.capacity
 openbao.secret_sync.queue.utilization
+openbao.secret_sync.operations
+openbao.secret_sync.provider.requests
+openbao.secret_sync.provider.request.duration
+openbao.secret_sync.readiness.checks
+openbao.secret_sync.remote_mutation.blocked
+openbao.secret_sync.reconcile.runs
+openbao.secret_sync.drift.repairs
 openbao.secret_sync.restore_guard.active
 ```
 
@@ -287,18 +307,15 @@ Health is layered:
 - destination authorized;
 - restore guard state visible.
 
-Destination outages degrade sync status, not local secret read/write
-availability, unless a separate synchronous mode is enabled.
+Destination outages degrade sync status and queue progress, not local source
+read/write availability. There is no synchronous provider-write mode.
 
 ## Rate limiting
 
-Rate limits are tracked at these levels for production readiness:
-
-- global plugin concurrency;
-- per-destination concurrency;
-- per-provider API rate.
-
-Rate-limit state is visible in status and queue output.
+Implemented rate-limit handling is based on provider error classification and
+bounded queue retry. Provider `rate_limit` errors map to
+`DESTINATION_RATE_LIMITED` status and retry-wait queue state. Queue capacity
+limits accepted backlog before source writes commit.
 
 Automatic retry policy:
 

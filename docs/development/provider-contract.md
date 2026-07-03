@@ -259,32 +259,38 @@ cannot store all fields.
 
 ## Name templates
 
-The template engine is intentionally small. Supported values:
+The template engine is intentionally small and currently performs literal
+placeholder replacement only. It does not support functions, filters,
+conditionals, loops, escaping, or nested expressions.
+
+Use [Templating](../concepts/templating.md) for the user-facing contract and
+provider constraint guidance.
+
+Supported `name_template` placeholders:
 
 ```text
-path
-key
-destination_type
-destination_name
+{{ path }}
+{{ key }}
+{{ destination.type }}
+{{ destination.name }}
 ```
 
-Supported functions:
+`data_key_template` supports only:
 
 ```text
-lower
-upper
-replace
-truncate
-sha256
-dns1123
+{{ key }}
 ```
 
 Templates are validated at association creation and revalidated during sync.
+Rendered templates that still contain `{{` or `}}` are rejected as
+unsupported.
+
 The backend maintains a reservation index for resolved names so two
 associations do not manage the same remote object for one destination.
 
 Template changes do not silently rename existing remote objects. Operators
-must review the plan and choose the desired cleanup behavior.
+must create a new association, review the plan, and delete the old association
+when changing the remote-name reservation.
 
 ## Payload formats
 

@@ -6,6 +6,11 @@ wildcards to the deployment.
 
 The examples use `apps/team-a/*` as the delegated source prefix.
 
+Source paths can be nested, so the examples use prefix grants such as
+`sources/apps/team-a/*` rather than trying to match route suffixes like
+`*/enable`. Use fixed-depth `+` segments only when your source path layout is
+known and intentionally shallow.
+
 ## Platform operator
 
 Platform operators manage destinations, associations, queue operations,
@@ -13,6 +18,10 @@ restore guard acknowledgement, reconcile, and status. This policy does not
 grant source payload reads.
 
 ```hcl
+path "secret-sync/info" {
+  capabilities = ["read"]
+}
+
 path "secret-sync/config" {
   capabilities = ["read", "update"]
 }
@@ -61,6 +70,10 @@ Grant `sources/<path>/enable` when app writers may mark their own source path
 as syncable.
 
 ```hcl
+path "secret-sync/info" {
+  capabilities = ["read"]
+}
+
 path "secret-sync/data/apps/team-a/*" {
   capabilities = ["create", "read", "update", "delete"]
 }
@@ -69,12 +82,8 @@ path "secret-sync/metadata/apps/team-a/*" {
   capabilities = ["create", "read", "update", "delete", "list"]
 }
 
-path "secret-sync/sources/apps/team-a/*/enable" {
-  capabilities = ["update"]
-}
-
-path "secret-sync/sources/apps/team-a/*/check" {
-  capabilities = ["read"]
+path "secret-sync/sources/apps/team-a/*" {
+  capabilities = ["read", "update"]
 }
 
 path "secret-sync/status/apps/team-a/*" {
@@ -88,6 +97,10 @@ App readers can read source payloads, source metadata, and sync status for
 their own prefix. They cannot create associations or operate the queue.
 
 ```hcl
+path "secret-sync/info" {
+  capabilities = ["read"]
+}
+
 path "secret-sync/data/apps/team-a/*" {
   capabilities = ["read"]
 }
@@ -112,11 +125,15 @@ Constrain the destination itself with `allowed_source_path_prefixes` and
 destination for unrelated source paths or remote names.
 
 ```hcl
+path "secret-sync/info" {
+  capabilities = ["read"]
+}
+
 path "secret-sync/metadata/apps/team-a/*" {
   capabilities = ["read", "list"]
 }
 
-path "secret-sync/sources/apps/team-a/*/check" {
+path "secret-sync/sources/apps/team-a/*" {
   capabilities = ["read"]
 }
 
@@ -128,7 +145,7 @@ path "secret-sync/status/apps/team-a/*" {
   capabilities = ["read"]
 }
 
-path "secret-sync/reconcile/apps/team-a/*/plan" {
+path "secret-sync/reconcile/apps/team-a/*" {
   capabilities = ["read"]
 }
 ```
@@ -142,6 +159,10 @@ Auditors can inspect redacted destination config, associations, queue state,
 and status. This policy does not grant source payload reads or queue mutation.
 
 ```hcl
+path "secret-sync/info" {
+  capabilities = ["read"]
+}
+
 path "secret-sync/config" {
   capabilities = ["read"]
 }
@@ -180,6 +201,15 @@ bao write secret-sync/destinations/PROVIDER_TYPE/NAME \
   PROVIDER_SPECIFIC_FIELDS \
   allowed_source_path_prefixes=apps/team-a \
   allowed_resolved_name_prefixes=openbao-plugin-secrets-sync/team-a/
+```
+
+Delegated association writes should use the compact destination selector:
+
+```sh
+bao write secret-sync/associations/apps/team-a/db \
+  destination=PROVIDER_TYPE/NAME \
+  name_template='openbao-plugin-secrets-sync/team-a/{{ path }}' \
+  granularity=secret-path
 ```
 
 The backend checks these constraints during association plan, association
