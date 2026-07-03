@@ -29,19 +29,7 @@ func TestAssociationCreateUsesSafeDefaults(t *testing.T) {
 	assertResponseValue(t, resp, "format", defaultAssociationFormat)
 	assertResponseValue(t, resp, "delete_mode", deleteModeRetain)
 	assertResponseValue(t, resp, "enabled", true)
-	defaults := resp.Data["defaults"].(map[string]interface{})
-	if got := defaults["granularity"]; got != syncGranularitySecretPath {
-		t.Fatalf("default granularity = %v, want %s", got, syncGranularitySecretPath)
-	}
-	if got := defaults["format"]; got != defaultAssociationFormat {
-		t.Fatalf("default format = %v, want %s", got, defaultAssociationFormat)
-	}
-	if got := defaults["delete_mode"]; got != deleteModeRetain {
-		t.Fatalf("default delete_mode = %v, want %s", got, deleteModeRetain)
-	}
-	if got := defaults["enabled"]; got != true {
-		t.Fatalf("default enabled = %v, want true", got)
-	}
+	assertNoDefaultsInResponse(t, resp)
 	operationIDs := operationIDsFromResponse(t, resp)
 	if len(operationIDs) != 1 {
 		t.Fatalf("sync_operation_ids = %v, want one operation", operationIDs)
@@ -135,6 +123,40 @@ func TestAssociationCreateAndPlanUseDestinationRef(t *testing.T) {
 	assertResponseValue(t, readResp, "destination_ref", "fake/default")
 }
 
+func TestAssociationResponsesOmitStaticDefaults(t *testing.T) {
+	env := newBackendTestEnv(t)
+
+	env.writeAppDBSecret("initial")
+	env.createFakeDestination("default")
+
+	planResp := env.update("associations/app/db/plan", map[string]interface{}{
+		"destination":   destinationRef(providerTypeFake, "default"),
+		"resolved_name": "prod/app/db",
+		"granularity":   syncObjectIDSecretPath,
+		"format":        defaultAssociationFormat,
+	})
+	assertNoDefaultsInResponse(t, planResp)
+
+	createResp := env.update("associations/app/db", map[string]interface{}{
+		"destination":   destinationRef(providerTypeFake, "default"),
+		"resolved_name": "prod/app/db",
+		"granularity":   syncObjectIDSecretPath,
+		"format":        defaultAssociationFormat,
+		"enabled":       false,
+	})
+	assertNoDefaultsInResponse(t, createResp)
+	associationID := associationIDFromResponse(t, createResp)
+
+	readByIDResp := env.read("associations/app/db/" + associationID)
+	assertNoDefaultsInResponse(t, readByIDResp)
+
+	readListResp := env.read("associations/app/db")
+	assertNoDefaultsInResponse(t, readListResp)
+
+	enableResp := env.update("associations/app/db/"+associationID+"/enable", nil)
+	assertNoDefaultsInResponse(t, enableResp)
+}
+
 func TestAssociationRejectsInvalidDestination(t *testing.T) {
 	env := newBackendTestEnv(t)
 
@@ -161,6 +183,33 @@ func TestAssociationRejectsInvalidDestination(t *testing.T) {
 	}
 	if !strings.Contains(malformedResp.Error().Error(), "destination must be in <type>/<name> form") {
 		t.Fatalf("malformed destination error = %q, want form error", malformedResp.Error().Error())
+	}
+}
+
+func assertNoDefaultsInResponse(t *testing.T, resp *logical.Response) {
+	t.Helper()
+	assertNoErrorResponse(t, resp)
+	assertNoDefaultsInValue(t, resp.Data, "response")
+}
+
+func assertNoDefaultsInValue(t *testing.T, value interface{}, path string) { //nolint:forbidigo
+	t.Helper()
+	switch typed := value.(type) {
+	case map[string]interface{}:
+		if _, ok := typed["defaults"]; ok {
+			t.Fatalf("%s contains defaults: %#v", path, typed)
+		}
+		for key, child := range typed {
+			assertNoDefaultsInValue(t, child, path+"."+key)
+		}
+	case []map[string]interface{}:
+		for index, child := range typed {
+			assertNoDefaultsInValue(t, child, fmt.Sprintf("%s[%d]", path, index))
+		}
+	case []interface{}:
+		for index, child := range typed {
+			assertNoDefaultsInValue(t, child, fmt.Sprintf("%s[%d]", path, index))
+		}
 	}
 }
 

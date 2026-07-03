@@ -29,8 +29,14 @@ enqueue, and operators can explicitly drain due work with `queue/drain`.
 
 | Path | Purpose |
 | --- | --- |
+| `info` | Read static plugin version, association defaults, and provider capability flags. |
 | `config` | Read or update mount-wide sync settings for pause, queue capacity, source opt-in, drift work, and event dispatch. |
 | `config/restore-guard/acknowledge` | Acknowledge restore or clone review and resume remote mutation. |
+
+`info` is the stable place for clients and operators to discover static
+association defaults and registered provider capabilities. Association create,
+plan, read, and lifecycle responses return effective association values without
+repeating the static defaults object.
 
 `drift_repair` controls opt-in background drift work:
 
@@ -110,6 +116,8 @@ Updates that resolve exactly one existing association may change non-identity
 fields in place. Changes to `granularity` or the remote-name reservation
 (`resolved_name` for `secret-path`, `name_template` for `secret-key`) require an
 explicit new association plus deletion of the old one.
+Read `info` to discover static association defaults and provider capability
+flags.
 
 ## Queue, status, and reconcile
 

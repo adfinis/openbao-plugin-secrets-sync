@@ -100,9 +100,9 @@ bao write secret-sync/associations/app/db/plan \
   resolved_name=<remote-name>
 ```
 
-`secret-path`, `json`, `retain`, and `enabled=true` are the defaults.
-Association create and plan responses also include a `defaults` object so the
-implicit shape is visible in CLI and API output.
+`secret-path`, `json`, `retain`, and `enabled=true` are the defaults. Read
+`secret-sync/info` to inspect static association defaults and registered
+provider capability flags.
 
 When updating an existing association, omitted optional fields keep the stored
 association values when the source path and destination identify a single

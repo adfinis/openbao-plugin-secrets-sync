@@ -1,6 +1,9 @@
 package providers
 
-import "fmt"
+import (
+	"fmt"
+	"sort"
+)
 
 // Registry resolves provider implementations by stable provider type.
 type Registry struct {
@@ -53,4 +56,22 @@ func (r *Registry) MustGet(providerType string) (Provider, error) {
 		return nil, fmt.Errorf("unsupported destination type %q", providerType)
 	}
 	return provider, nil
+}
+
+// Providers returns registered providers sorted by stable provider type.
+func (r *Registry) Providers() []Provider {
+	if r == nil {
+		return nil
+	}
+	providerTypes := make([]string, 0, len(r.providers))
+	for providerType := range r.providers {
+		providerTypes = append(providerTypes, providerType)
+	}
+	sort.Strings(providerTypes)
+
+	providerList := make([]Provider, 0, len(providerTypes))
+	for _, providerType := range providerTypes {
+		providerList = append(providerList, r.providers[providerType])
+	}
+	return providerList
 }

@@ -15,6 +15,7 @@ servers:
 security:
   - OpenBaoToken: []
 tags:
+  - name: info
   - name: config
   - name: destinations
   - name: sources
@@ -25,6 +26,20 @@ tags:
   - name: status
   - name: reconcile
 paths:
+  /info:
+    get:
+      tags: [info]
+      operationId: readInfo
+      summary: Read static plugin information, defaults, and provider capabilities.
+      x-openbao-operation: read
+      responses:
+        "200":
+          description: Static plugin information.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/InfoResponse"
+
   /config:
     get:
       tags: [config]
@@ -866,6 +881,34 @@ components:
           required: [keys]
       required: [data]
 
+    InfoResponse:
+      type: object
+      properties:
+        data:
+          type: object
+          properties:
+            plugin_version:
+              type: string
+            defaults:
+              type: object
+              properties:
+                association:
+                  $ref: "#/components/schemas/AssociationDefaults"
+              required: [association]
+            providers:
+              type: object
+              additionalProperties:
+                $ref: "#/components/schemas/ProviderInfo"
+          required: [plugin_version, defaults, providers]
+      required: [data]
+
+    ProviderInfo:
+      type: object
+      properties:
+        capabilities:
+          $ref: "#/components/schemas/ProviderCapabilities"
+      required: [capabilities]
+
     ConfigWriteRequest:
       type: object
       properties:
@@ -1500,8 +1543,6 @@ components:
               type: string
             enabled:
               type: boolean
-            defaults:
-              $ref: "#/components/schemas/AssociationDefaults"
             sync_operation_ids:
               type: array
               items:
@@ -1562,8 +1603,6 @@ components:
           type: string
         enabled:
           type: boolean
-        defaults:
-          $ref: "#/components/schemas/AssociationDefaults"
         created_time:
           type: string
         updated_time:
@@ -1624,8 +1663,6 @@ components:
               type: string
             destination_ref:
               type: string
-            defaults:
-              $ref: "#/components/schemas/AssociationDefaults"
             association:
               $ref: "#/components/schemas/Association"
             destination:
