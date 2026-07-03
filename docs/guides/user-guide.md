@@ -193,8 +193,8 @@ The default association shape is `granularity=secret-path`, `format=json`,
 `data_mapping`, `data_key_template`, or `delete_mode` only when the destination
 needs a different remote name, payload shape, data-key mapping, or delete
 behavior.
-Create and plan responses include a `defaults` object beside the effective
-values so these defaults are visible in CLI and API output.
+Read `secret-sync/info` to inspect static association defaults and registered
+provider capability flags.
 
 When updating an existing association, omitted optional fields keep the stored
 values if the source path and destination match exactly one association. A

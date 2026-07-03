@@ -57,7 +57,7 @@ func Backend(_ *logical.BackendConfig) *secretSyncBackend {
 			},
 		},
 		Paths: framework.PathAppend(
-			[]*framework.Path{pathConfig(&b), pathConfigRestoreGuardAcknowledge(&b)},
+			[]*framework.Path{pathInfo(&b), pathConfig(&b), pathConfigRestoreGuardAcknowledge(&b)},
 			pathDestinations(&b),
 			pathAssociations(&b),
 			pathMetadata(&b),

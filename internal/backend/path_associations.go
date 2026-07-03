@@ -862,7 +862,6 @@ func associationSecretKeyPlanResponse(
 		responseField("source_eligible", sourceEligible),
 		responseField("association_id", record.ID),
 		responseField("destination_ref", record.DestinationRef),
-		responseField("defaults", associationDefaultsResponse()),
 		responseField("association", associationResponse(record)),
 		responseField("destination", newResponseData(
 			responseField("type", record.DestinationType),
@@ -887,7 +886,6 @@ func associationPlanResponse(
 		responseField("source_eligible", sourceEligible),
 		responseField("association_id", record.ID),
 		responseField("destination_ref", record.DestinationRef),
-		responseField("defaults", associationDefaultsResponse()),
 		responseField("association", associationResponse(record)),
 		responseField("destination", newResponseData(
 			responseField("type", record.DestinationType),
@@ -914,7 +912,6 @@ func associationSummaryFields(record associationRecord) []responseEntry {
 		responseField("data_key_template", record.DataKeyTemplate),
 		responseField("delete_mode", normalizedDeleteMode(record.DeleteMode)),
 		responseField("enabled", record.Enabled),
-		responseField("defaults", associationDefaultsResponse()),
 	}
 }
 
@@ -1947,7 +1944,6 @@ func associationResponse(record associationRecord) map[string]interface{} { //no
 		responseField("data_key_template", record.DataKeyTemplate),
 		responseField("delete_mode", normalizedDeleteMode(record.DeleteMode)),
 		responseField("enabled", record.Enabled),
-		responseField("defaults", associationDefaultsResponse()),
 		responseField("created_time", record.CreatedTime),
 		responseField("updated_time", record.UpdatedTime),
 	)

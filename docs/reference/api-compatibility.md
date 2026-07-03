@@ -32,6 +32,13 @@ The source API is not a strict client compatibility layer:
 - exact KV-v2 wire compatibility must be proven by golden tests before it is
   claimed.
 
+## Pre-release response shape changes
+
+Association create, plan, read, list, and lifecycle responses do not include the
+static `defaults` object. Clients that need association defaults or provider
+capability flags should read `info`, where defaults are returned under
+`defaults.association`.
+
 ## Implemented source paths
 
 ```text

@@ -29,6 +29,33 @@ func TestRegistryMustGet(t *testing.T) {
 	}
 }
 
+func TestRegistryProvidersReturnsSortedProviders(t *testing.T) {
+	registry, err := NewRegistry(
+		testProvider{providerType: "zeta"},
+		testProvider{providerType: "alpha"},
+		testProvider{providerType: "middle"},
+	)
+	if err != nil {
+		t.Fatalf("new registry: %v", err)
+	}
+
+	providers := registry.Providers()
+	if len(providers) != 3 {
+		t.Fatalf("providers length = %d, want 3", len(providers))
+	}
+	got := []string{
+		providers[0].Type(),
+		providers[1].Type(),
+		providers[2].Type(),
+	}
+	want := []string{"alpha", "middle", "zeta"}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("providers = %v, want %v", got, want)
+		}
+	}
+}
+
 type testProvider struct {
 	providerType string
 }
