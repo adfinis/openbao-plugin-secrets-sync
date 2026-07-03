@@ -256,18 +256,25 @@ to use while the restore guard is active.
 - decide whether the remote object was intentionally taken over;
 - create a new association or remote name instead of forcing overwrite unless
   an operator explicitly accepts that risk.
+- if the remote object was deleted or ownership was otherwise resolved, run the
+  `manual_sync` action returned by `status/<path>` or `reconcile/<path>`.
 
 `VALIDATION_ERROR`:
 
 - check destination config fields;
 - check provider name rules for the rendered remote object name;
 - check payload size and granularity support.
+- use the returned `hint` and `next_actions`; source opt-in failures point to
+  `sources/<path>/enable`, while generic validation failures point to the
+  association plan.
 
 `QUEUE_BLOCKED`:
 
 - read `secret-sync/config` for mount-wide pause or restore guard;
 - check queue capacity;
 - verify the association and destination are enabled.
+- use the returned `next_actions` to inspect `queue`, drain due work where safe,
+  or retry the failed queue operation.
 
 ## Restore or clone review
 

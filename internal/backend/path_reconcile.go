@@ -55,7 +55,7 @@ func (b *secretSyncBackend) pathReconcilePlan(
 	req *logical.Request,
 	data *framework.FieldData,
 ) (*logical.Response, error) {
-	return b.reconcilePath(ctx, req.Storage, data.Get("path").(string), false)
+	return b.reconcilePath(ctx, req.Storage, data.Get("path").(string), false, requestMountPath(req))
 }
 
 func (b *secretSyncBackend) pathReconcileApply(
@@ -63,7 +63,7 @@ func (b *secretSyncBackend) pathReconcileApply(
 	req *logical.Request,
 	data *framework.FieldData,
 ) (*logical.Response, error) {
-	return b.reconcilePath(ctx, req.Storage, data.Get("path").(string), true)
+	return b.reconcilePath(ctx, req.Storage, data.Get("path").(string), true, requestMountPath(req))
 }
 
 func (b *secretSyncBackend) reconcilePath(
@@ -71,6 +71,7 @@ func (b *secretSyncBackend) reconcilePath(
 	storage logical.Storage,
 	rawPath string,
 	apply bool,
+	mount string,
 ) (*logical.Response, error) {
 	path, err := normalizeSourcePath(rawPath)
 	if err != nil {
@@ -110,7 +111,7 @@ func (b *secretSyncBackend) reconcilePath(
 	}
 	objects := make([]map[string]interface{}, 0, len(results)) //nolint:forbidigo
 	for _, result := range results {
-		objects = append(objects, reconcileObjectResponse(result))
+		objects = append(objects, reconcileObjectResponse(mount, result))
 	}
 	return &logical.Response{Data: newResponseData(
 		responseField("path", path),
@@ -513,7 +514,7 @@ func reconcileStaticResults(
 	return results
 }
 
-func reconcileObjectResponse(result reconcileObjectResult) map[string]interface{} { //nolint:forbidigo
+func reconcileObjectResponse(mount string, result reconcileObjectResult) map[string]interface{} { //nolint:forbidigo
 	remoteExists := false
 	remoteOwnershipKnown := false
 	remoteOwned := false
@@ -528,7 +529,8 @@ func reconcileObjectResponse(result reconcileObjectResult) map[string]interface{
 		remoteVersion = result.remoteState.RemoteVersion
 		verification = result.remoteState.Verification
 	}
-	return newResponseData(
+	fields := make([]responseEntry, 0, 17)
+	fields = append(fields,
 		responseField("association_id", result.association.ID),
 		responseField("object_id", result.objectID),
 		responseField("destination_ref", result.association.DestinationRef),
@@ -544,4 +546,6 @@ func reconcileObjectResponse(result reconcileObjectResult) map[string]interface{
 		responseField("error_class", string(result.errorClass)),
 		responseField("message", result.message),
 	)
+	fields = append(fields, diagnosticResponseFields(reconcileDiagnosticForResult(mount, result))...)
+	return newResponseData(fields...)
 }

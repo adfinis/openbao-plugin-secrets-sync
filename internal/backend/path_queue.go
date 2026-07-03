@@ -139,15 +139,15 @@ func (b *secretSyncBackend) pathQueueDrain(
 	}
 	if cfg.Disabled {
 		b.recordRemoteMutationBlocked(ctx, observability.OperationDrain, observability.ReasonDisabled)
-		return logical.ErrorResponse("secret sync is disabled"), nil
+		return errorResponseWithDiagnostic("secret sync is disabled", mountDisabledDiagnostic(requestMountPath(req))), nil
 	}
 	if cfg.RestoreGuard {
 		b.recordRemoteMutationBlocked(ctx, observability.OperationDrain, observability.ReasonRestoreGuard)
-		return logical.ErrorResponse(restoreGuardActiveError), nil
+		return errorResponseWithDiagnostic(restoreGuardActiveError, restoreGuardDiagnostic(requestMountPath(req))), nil
 	}
 	if !b.remoteMutationAllowed() {
 		b.recordRemoteMutationBlocked(ctx, observability.OperationDrain, observability.ReasonReplicationState)
-		return logical.ErrorResponse(remoteMutationUnsafeError), nil
+		return errorResponseWithDiagnostic(remoteMutationUnsafeError, remoteMutationUnsafeDiagnostic()), nil
 	}
 	maxOperations := data.Get("max_operations").(int)
 	if maxOperations < 0 {

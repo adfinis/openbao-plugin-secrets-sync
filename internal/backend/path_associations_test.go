@@ -444,6 +444,31 @@ func assertAssociationCount(t *testing.T, storage logical.Storage, path string, 
 	}
 }
 
+func TestAssociationUpdateEnabledRecordReturnsManualSyncHint(t *testing.T) {
+	env := newBackendTestEnv(t)
+
+	env.writeAppDBSecret("initial")
+	env.createFakeDestination("default")
+	initialResp := env.createDefaultFakeAssociation()
+	assertNoErrorResponse(t, initialResp)
+
+	updateResp := env.update("associations/app/db", map[string]interface{}{
+		"destination": destinationRef(providerTypeFake, "default"),
+		"delete_mode": deleteModeDelete,
+	})
+	assertNoErrorResponse(t, updateResp)
+	if operationIDs := operationIDsFromResponse(t, updateResp); len(operationIDs) != 0 {
+		t.Fatalf("update operation IDs = %v, want none", operationIDs)
+	}
+	assertHintContains(t, updateResp.Data, "did not enqueue sync work")
+	assertNextActionCommand(
+		t,
+		updateResp.Data,
+		"manual_sync",
+		"bao write <mount>/associations/app/db/sync destination=fake/default",
+	)
+}
+
 func TestAssociationUpdateEnqueuesWhenEnablingExistingRecord(t *testing.T) {
 	env := newBackendTestEnv(t)
 
@@ -821,6 +846,13 @@ func TestAssociationDisableEnableAndManualSync(t *testing.T) {
 	if disabledSyncResp == nil || !disabledSyncResp.IsError() {
 		t.Fatalf("sync disabled association response = %#v, want error", disabledSyncResp)
 	}
+	assertHintContains(t, disabledSyncResp.Data, "Association is disabled")
+	assertNextActionCommand(
+		t,
+		disabledSyncResp.Data,
+		"enable_association",
+		"bao write <mount>/associations/app/db/enable destination=fake/default",
+	)
 
 	secondResp := env.writeAppDBSecret("rotated")
 	secondMetadata := secondResp.Data["metadata"].(map[string]interface{})

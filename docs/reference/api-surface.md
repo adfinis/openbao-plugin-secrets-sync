@@ -24,6 +24,10 @@ enqueue, and operators can explicitly drain due work with `queue/drain`.
   active.
 - Provider failures use stable error classes such as `authn`, `authz`,
   `rate_limit`, `unavailable`, `ownership`, `collision`, and `drift`.
+- Operator-facing blocked or terminal states include a human-readable `hint` and
+  may include structured `next_actions`. On successful responses these fields
+  are top-level response data fields. On OpenBao error responses they are nested
+  under `data` so the response remains an OpenBao error.
 
 ## Config and restore guard
 
@@ -116,6 +120,10 @@ Updates that resolve exactly one existing association may change non-identity
 fields in place. Changes to `granularity` or the remote-name reservation
 (`resolved_name` for `secret-path`, `name_template` for `secret-key`) require an
 explicit new association plus deletion of the old one.
+Updating an already-enabled association does not enqueue sync work. The response
+returns `sync_operation_ids=[]` with a `hint` and `next_actions` pointing to
+`associations/<path>/sync` when an operator wants to push or retry the current
+source version.
 Read `info` to discover static association defaults and provider capability
 flags.
 
@@ -141,6 +149,9 @@ Queue operation reads include `trigger`, which is `user` for ordinary writes
 and manual syncs and `drift-repair` for background repair work.
 Status objects can include `verification`, `last_reconcile_time`,
 `last_drift_detected_time`, `last_repair_time`, and `repair_count`.
+Status and reconcile objects include `hint` and `next_actions` for actionable
+states such as `REMOTE_MISSING`, `REMOTE_OWNERSHIP_LOST`, `DRIFTED`,
+`VALIDATION_ERROR`, `QUEUE_BLOCKED`, destination failures, and `DISABLED`.
 
 ## List pagination
 
