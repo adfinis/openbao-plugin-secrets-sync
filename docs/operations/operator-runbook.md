@@ -148,6 +148,11 @@ Successful operations are removed from the queue after object status is
 persisted; use `status/<path>` rather than `queue/<operation-id>` to confirm
 completed sync.
 
+Event-triggered dispatch is enabled by default and wakes a bounded drain after
+enqueue-producing requests. Use `queue/drain` when you need deterministic local
+testing, a controlled catch-up batch, or an explicit operator action after
+temporarily disabling event dispatch.
+
 For deterministic local testing or controlled catch-up, drain due operations:
 
 ```sh

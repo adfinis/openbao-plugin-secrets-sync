@@ -32,6 +32,8 @@ func TestConfigDefaults(t *testing.T) {
 	assertResponseValue(t, resp, "drift_repair", driftRepairOff)
 	assertResponseValue(t, resp, "drift_reconcile_interval", defaultDriftInterval)
 	assertResponseValue(t, resp, "drift_reconcile_batch", defaultDriftBatch)
+	assertResponseValue(t, resp, "event_dispatch_enabled", true)
+	assertResponseValue(t, resp, "event_dispatch_max_operations", defaultEventDispatchMaxOperations)
 	assertResponseValue(t, resp, "storage_schema_version", currentStorageSchema)
 	assertResponseValue(t, resp, "storage_schema_min_compatible_version", minSupportedStorageSchema)
 	if got, ok := resp.Data["plugin_instance_id"].(string); !ok || !strings.HasPrefix(got, "inst-") {
@@ -60,9 +62,11 @@ func TestConfigInitializesDefaultsForExistingStorageWithoutConfig(t *testing.T) 
 	assertResponseValue(t, resp, "drift_repair", driftRepairOff)
 	assertResponseValue(t, resp, "drift_reconcile_interval", defaultDriftInterval)
 	assertResponseValue(t, resp, "drift_reconcile_batch", defaultDriftBatch)
+	assertResponseValue(t, resp, "event_dispatch_enabled", true)
+	assertResponseValue(t, resp, "event_dispatch_max_operations", defaultEventDispatchMaxOperations)
 }
 
-func TestConfigDecodesMissingSourceOptInAsDefault(t *testing.T) {
+func TestConfigDecodesMissingOptionalFieldsAsDefaults(t *testing.T) {
 	env := newBackendTestEnv(t)
 	entry, err := logical.StorageEntryJSON(configPath, map[string]interface{}{
 		"restore_guard":  false,
@@ -83,6 +87,8 @@ func TestConfigDecodesMissingSourceOptInAsDefault(t *testing.T) {
 	assertResponseValue(t, resp, "drift_repair", driftRepairOff)
 	assertResponseValue(t, resp, "drift_reconcile_interval", defaultDriftInterval)
 	assertResponseValue(t, resp, "drift_reconcile_batch", defaultDriftBatch)
+	assertResponseValue(t, resp, "event_dispatch_enabled", true)
+	assertResponseValue(t, resp, "event_dispatch_max_operations", defaultEventDispatchMaxOperations)
 
 	cfg, err := readGlobalConfig(context.Background(), env.storage)
 	if err != nil {
@@ -93,6 +99,16 @@ func TestConfigDecodesMissingSourceOptInAsDefault(t *testing.T) {
 	}
 	if cfg.QueueCapacity != 0 {
 		t.Fatalf("queue_capacity = %d, want 0", cfg.QueueCapacity)
+	}
+	if !cfg.EventDispatchEnabled {
+		t.Fatal("missing event_dispatch_enabled must decode as true")
+	}
+	if cfg.EventDispatchMaxOperations != defaultEventDispatchMaxOperations {
+		t.Fatalf(
+			"event_dispatch_max_operations = %d, want %d",
+			cfg.EventDispatchMaxOperations,
+			defaultEventDispatchMaxOperations,
+		)
 	}
 }
 
@@ -114,6 +130,8 @@ func TestConfigWriteMergesDefaultsAndValidatesQueueCapacity(t *testing.T) {
 	assertResponseValue(t, readResp, "drift_repair", driftRepairOff)
 	assertResponseValue(t, readResp, "drift_reconcile_interval", defaultDriftInterval)
 	assertResponseValue(t, readResp, "drift_reconcile_batch", defaultDriftBatch)
+	assertResponseValue(t, readResp, "event_dispatch_enabled", true)
+	assertResponseValue(t, readResp, "event_dispatch_max_operations", defaultEventDispatchMaxOperations)
 
 	zeroResp := env.update(configPath, map[string]interface{}{
 		"queue_capacity":        0,
@@ -132,6 +150,29 @@ func TestConfigWriteMergesDefaultsAndValidatesQueueCapacity(t *testing.T) {
 	})
 	if negativeResp == nil || !negativeResp.IsError() {
 		t.Fatalf("negative queue_capacity response = %#v, want error", negativeResp)
+	}
+}
+
+func TestConfigWriteValidatesEventDispatch(t *testing.T) {
+	env := newBackendTestEnv(t)
+
+	writeResp := env.update(configPath, map[string]interface{}{
+		"event_dispatch_enabled":        false,
+		"event_dispatch_max_operations": 3,
+	})
+	if writeResp != nil && writeResp.IsError() {
+		t.Fatalf("unexpected event dispatch config write error: %v", writeResp.Error())
+	}
+	readResp := env.read(configPath)
+	assertNoErrorResponse(t, readResp)
+	assertResponseValue(t, readResp, "event_dispatch_enabled", false)
+	assertResponseValue(t, readResp, "event_dispatch_max_operations", 3)
+
+	zeroResp := env.update(configPath, map[string]interface{}{
+		"event_dispatch_max_operations": 0,
+	})
+	if zeroResp == nil || !zeroResp.IsError() {
+		t.Fatalf("zero event_dispatch_max_operations response = %#v, want error", zeroResp)
 	}
 }
 

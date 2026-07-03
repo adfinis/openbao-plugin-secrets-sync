@@ -601,6 +601,28 @@ func listDueOutboxIDs(ctx context.Context, storage logical.Storage, now time.Tim
 	return ids, nil
 }
 
+func nextFutureOutboxDueTime(ctx context.Context, storage logical.Storage, now time.Time) (*time.Time, error) {
+	keys, err := logical.CollectKeysWithPrefix(ctx, storage, outboxByDueStoragePrefix)
+	if err != nil {
+		return nil, err
+	}
+	sort.Strings(keys)
+	nowString := now.Format(timeFormatRFC3339)
+	for _, key := range keys {
+		trimmed := strings.TrimPrefix(key, outboxByDueStoragePrefix)
+		dueTime, _, ok := strings.Cut(trimmed, "/")
+		if !ok || dueTime <= nowString {
+			continue
+		}
+		next, err := time.Parse(timeFormatRFC3339, dueTime)
+		if err != nil {
+			continue
+		}
+		return &next, nil
+	}
+	return nil, nil
+}
+
 func outboxDueIndexTime(record outboxRecord) string {
 	if !isQueuedOutboxState(record.State) {
 		return ""

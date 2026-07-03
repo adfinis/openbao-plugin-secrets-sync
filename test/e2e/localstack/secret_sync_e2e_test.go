@@ -75,7 +75,6 @@ func TestOpenBaoPluginSyncsToLocalStackSecretsManager(t *testing.T) {
 	if ids := stringSlice(t, association.Data["sync_operation_ids"]); len(ids) != 1 {
 		t.Fatalf("sync_operation_ids = %v, want one operation", ids)
 	}
-	drainQueue(t, baoClient, 1)
 	assertRemotePayload(t, ctx, awsClient, remoteName, "initial")
 	assertRemoteTags(t, ctx, awsClient, remoteName, map[string]string{
 		"openbao-sync":        "true",
@@ -102,14 +101,12 @@ func TestOpenBaoPluginSyncsToLocalStackSecretsManager(t *testing.T) {
 	assertReconcileApply(t, baoClient, "SYNCED")
 
 	writeSource(t, baoClient, "updated")
-	drainQueue(t, baoClient, 1)
 	assertRemotePayload(t, ctx, awsClient, remoteName, "updated")
 
 	deleteSecret := deletePath(t, baoClient, mountPath+"/data/app/db")
 	if ids := metadataOperationIDs(t, deleteSecret); len(ids) != 1 {
 		t.Fatalf("delete sync_operation_ids = %v, want one operation", ids)
 	}
-	drainQueue(t, baoClient, 1)
 	assertRemoteDeleteScheduled(t, ctx, awsClient, remoteName)
 	assertStatus(t, baoClient, "REMOTE_MISSING")
 
@@ -121,7 +118,6 @@ func TestOpenBaoPluginSyncsToLocalStackSecretsManager(t *testing.T) {
 	if got := recoveryPlan.Data["message"]; got != "aws-sm secret is scheduled for deletion and will be restored before upsert" {
 		t.Fatalf("recovery plan message = %v, want restore message", got)
 	}
-	drainQueue(t, baoClient, 1)
 	assertRemotePayload(t, ctx, awsClient, remoteName, "recovered")
 	assertStatus(t, baoClient, "SYNCED")
 	assertReconcilePlan(t, baoClient, "SYNCED")

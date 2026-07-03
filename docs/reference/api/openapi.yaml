@@ -802,6 +802,15 @@ components:
         require_source_opt_in:
           type: boolean
           description: Require custom_metadata.syncable=true before enabled associations can enqueue or dispatch remote mutation.
+        event_dispatch_enabled:
+          type: boolean
+          default: true
+          description: Wake a bounded dispatcher after enqueue-producing writes.
+        event_dispatch_max_operations:
+          type: integer
+          minimum: 1
+          default: 16
+          description: Maximum due operations processed by one event-triggered dispatch wakeup.
       additionalProperties: false
 
     ConfigResponse:
@@ -834,6 +843,12 @@ components:
         require_source_opt_in:
           type: boolean
           description: Whether source syncable metadata is required before enabled associations can enqueue or dispatch remote mutation.
+        event_dispatch_enabled:
+          type: boolean
+          description: Whether enqueue-producing writes wake the event-triggered dispatcher.
+        event_dispatch_max_operations:
+          type: integer
+          description: Maximum due operations processed by one event-triggered dispatch wakeup.
 
     DestinationWriteRequest:
       type: object

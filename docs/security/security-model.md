@@ -67,11 +67,12 @@ Destination authority can be proven through:
 - association-level provider constraints;
 - optional required metadata such as team, environment, or owner.
 
+Event-triggered dispatch and `queue/drain` execute remote mutations only through
+the durable queue dispatcher. They honor the global disabled flag and restore
+guard, refuse unsafe OpenBao replication states, recover incomplete enqueue
+intents before dispatch, and do not expose source payload data in responses.
 `queue/drain` is an operator action because it can execute remote mutations for
-all due operations in the durable queue. It is policy-gated like retry and
-cancel operations, honors the global disabled flag and restore guard, refuses
-unsafe OpenBao replication states, recovers incomplete enqueue intents before
-dispatch, and does not expose source payload data in responses.
+all due operations in the queue.
 
 ## Confused-deputy controls
 
@@ -214,8 +215,8 @@ The plugin uses a restore guard:
 
 - fresh mounts start with `restore_guard=false`;
 - operators can set `restore_guard=true` after restore or clone review starts;
-- background and manual-drain remote mutations disabled while the guard is
-  active;
+- background, event-triggered, and manual-drain remote mutations disabled while
+  the guard is active;
 - background drift detection may continue to update local status from provider
   read-state checks while the guard is active, but repair enqueue and dispatch
   remain blocked;

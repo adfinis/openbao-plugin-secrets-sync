@@ -5,12 +5,13 @@ starting a mount whose local Secret Sync state may no longer match remote
 destinations.
 
 Secret Sync uses a restore guard to prevent restored queue work from blindly
-mutating remote secrets. While the guard is active, background processing and
-manual `queue/drain` remote mutations are blocked. Reconcile planning remains
-available so operators can inspect remote state before resuming sync. If
-background drift detection is enabled, it may continue to refresh local status
-from provider read-state checks while the guard is active; it does not mutate
-remote destinations or enqueue repair until the guard is acknowledged.
+mutating remote secrets. While the guard is active, background processing,
+event-triggered dispatch, and manual `queue/drain` remote mutations are blocked.
+Reconcile planning remains available so operators can inspect remote state
+before resuming sync. If background drift detection is enabled, it may continue
+to refresh local status from provider read-state checks while the guard is
+active; it does not mutate remote destinations or enqueue repair until the guard
+is acknowledged.
 
 Mounts default `restore_guard=false`. Operators can set `restore_guard=true`
 before or during restore and clone review.
@@ -124,7 +125,8 @@ If `drift_repair=repair` is configured, acknowledgement also allows the next
 background sweep to enqueue owned drift repair. Review reconcile output before
 acknowledging when restored local source versions may be stale.
 
-After acknowledgement, drain due work in bounded batches:
+After acknowledgement, event-triggered dispatch is allowed to resume. Drain due
+work manually when you need a controlled catch-up batch:
 
 ```sh
 bao write secret-sync/queue/drain max_operations=10

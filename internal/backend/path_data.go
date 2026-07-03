@@ -209,7 +209,13 @@ func (b *secretSyncBackend) commitDataWritePlan(
 	if err := completeEnqueueIntent(ctx, storage, path, plan.nextVersion, plan.operations, plan.now); err != nil {
 		return nil, err
 	}
-	return nil, commitSourceMetadata(ctx, storage, path, plan.metadata, plan.nextVersion, plan.now)
+	if err := commitSourceMetadata(ctx, storage, path, plan.metadata, plan.nextVersion, plan.now); err != nil {
+		return nil, err
+	}
+	if len(plan.operations) > 0 {
+		b.signalEventDispatch()
+	}
+	return nil, nil
 }
 
 func putSourceVersionRecord(
@@ -361,6 +367,9 @@ func (b *secretSyncBackend) pathDataDelete(
 	}
 	if err := putMetadata(ctx, req.Storage, path, *metadata); err != nil {
 		return nil, err
+	}
+	if len(deletePlan.operations) > 0 {
+		b.signalEventDispatch()
 	}
 	return &logical.Response{Data: newResponseData(
 		responseField("metadata", newResponseData(

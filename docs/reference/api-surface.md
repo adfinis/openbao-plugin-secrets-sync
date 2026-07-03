@@ -5,7 +5,8 @@ Examples assume the plugin is mounted at `secret-sync/`.
 
 The API is organized around local source data, destination configuration,
 associations, durable queue work, status, and reconcile. Remote destination
-mutation is asynchronous unless an operator explicitly drains due queue work.
+mutation is asynchronous. Event-triggered dispatch wakes due queue work after
+enqueue, and operators can explicitly drain due work with `queue/drain`.
 
 ## Contract rules
 
@@ -28,7 +29,7 @@ mutation is asynchronous unless an operator explicitly drains due queue work.
 
 | Path | Purpose |
 | --- | --- |
-| `config` | Read or update mount-wide sync settings such as `disabled`, `queue_capacity`, `require_source_opt_in`, `drift_repair`, `drift_reconcile_interval`, and `drift_reconcile_batch`. |
+| `config` | Read or update mount-wide sync settings for pause, queue capacity, source opt-in, drift work, and event dispatch. |
 | `config/restore-guard/acknowledge` | Acknowledge restore or clone review and resume remote mutation. |
 
 `drift_repair` controls opt-in background drift work:
@@ -43,6 +44,12 @@ Background drift sweeps use `drift_reconcile_interval` (`1h` default, minimum
 `1m`) and `drift_reconcile_batch` (`16` default) to limit provider read load.
 Repair never mutates providers directly; it creates queue operations with
 `trigger=drift-repair`.
+
+`event_dispatch_enabled` defaults to `true`. Enqueue-producing requests wake a
+coalesced dispatcher after durable queue commit, bounded by
+`event_dispatch_max_operations` (`16` default). This reduces normal sync latency
+without changing the asynchronous API contract; periodic processing remains the
+fallback for missed wakeups, retries, and restart recovery.
 
 ## Source data and metadata
 
@@ -106,8 +113,11 @@ accepted.
 | `reconcile/<path>/plan` | Read provider remote state and calculate local status without changing status or destination secrets. |
 | `reconcile/<path>` | Apply reconcile by refreshing local status from provider read-state results. |
 
-`queue/drain` can execute remote mutations and is operator-scoped. Reconcile
-reads remote state but does not write destination secrets.
+Event-triggered dispatch normally wakes due queue work after enqueue and when
+retry-wait work becomes due.
+`queue/drain` can execute remote mutations and is operator-scoped for
+deterministic testing or controlled catch-up. Reconcile reads remote state but
+does not write destination secrets.
 Queue operation reads include `trigger`, which is `user` for ordinary writes
 and manual syncs and `drift-repair` for background repair work.
 Status objects can include `verification`, `last_reconcile_time`,
