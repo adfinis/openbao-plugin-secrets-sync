@@ -97,15 +97,22 @@ fields. Reads return redacted sensitive values.
 
 ## Associations
 
+Primary routes:
+
 | Path | Purpose |
 | --- | --- |
 | `associations` with `LIST` | List association source paths. |
 | `associations/<path>` | Create, update, or read associations for a source path. |
 | `associations/<path>/plan` | Plan association behavior without storing the association or mutating the destination. |
-| `associations/<path>/<association-id>` | Read or delete one association. |
 | `associations/<path>/disable` | Disable one association resolved by `destination=<type>/<name>` and cancel eligible queued work. |
 | `associations/<path>/enable` | Enable one association resolved by `destination=<type>/<name>` and enqueue current source work where needed. |
 | `associations/<path>/sync` | Manually enqueue sync work for one association resolved by `destination=<type>/<name>`. |
+
+ID-addressed routes:
+
+| Path | Purpose |
+| --- | --- |
+| `associations/<path>/<association-id>` | Read or delete one association exactly. |
 | `associations/<path>/<association-id>/disable` | Disable one association and cancel eligible queued work. |
 | `associations/<path>/<association-id>/enable` | Enable one association and enqueue current source work where needed. |
 | `associations/<path>/<association-id>/sync` | Manually enqueue sync work for one association. |
@@ -114,8 +121,9 @@ Associations link a source path to one destination and define the remote name,
 granularity, payload format, data mapping, delete mode, and enabled state.
 Association creation and updates validate provider capabilities before they are
 accepted.
-Association create, update, plan, and destination-addressed lifecycle requests
-use `destination=<type>/<name>` to identify the destination.
+Association create, update, plan, and primary lifecycle requests use
+`destination=<type>/<name>` to identify the destination. Association IDs remain
+stable response identifiers and exact-addressing escape hatches.
 Updates that resolve exactly one existing association may change non-identity
 fields in place. Changes to `granularity` or the remote-name reservation
 (`resolved_name` for `secret-path`, `name_template` for `secret-key`) require an
@@ -152,6 +160,10 @@ Status objects can include `verification`, `last_reconcile_time`,
 Status and reconcile objects include `hint` and `next_actions` for actionable
 states such as `REMOTE_MISSING`, `REMOTE_OWNERSHIP_LOST`, `DRIFTED`,
 `VALIDATION_ERROR`, `QUEUE_BLOCKED`, destination failures, and `DISABLED`.
+
+Use [Convergence](../concepts/convergence.md) for queue/status semantics and
+[Reconcile and drift](../concepts/reconcile-and-drift.md) for provider
+read-state and background drift semantics.
 
 ## List pagination
 
