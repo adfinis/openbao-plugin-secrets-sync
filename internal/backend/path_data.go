@@ -4,7 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"sort"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/adfinis/openbao-plugin-secrets-sync/internal/domain"
@@ -29,6 +31,10 @@ func pathData(b *secretSyncBackend) *framework.Path {
 				Type:        framework.TypeMap,
 				Description: "Write options such as CAS.",
 			},
+			"cas": {
+				Type:        framework.TypeInt,
+				Description: "Check-and-set version alias for options.cas.",
+			},
 			"version": {
 				Type:        framework.TypeInt,
 				Description: "Version to read. Defaults to the latest version.",
@@ -52,8 +58,9 @@ func pathData(b *secretSyncBackend) *framework.Path {
 				Summary:  "Soft-delete the latest local source secret version.",
 			},
 		},
-		HelpSynopsis:    "Manage local source secret data.",
-		HelpDescription: "Stores local source secret versions and enqueues pending sync operations.",
+		TakesArbitraryInput: true,
+		HelpSynopsis:        "Manage local source secret data.",
+		HelpDescription:     "Stores local source secret versions and enqueues pending sync operations.",
 	}
 }
 
@@ -457,8 +464,54 @@ func buildSourceDeletePlan(
 }
 
 func payloadFromField(data *framework.FieldData) (secretPayload, error) {
-	raw := data.Get("data")
-	payload, ok := raw.(map[string]interface{}) //nolint:forbidigo // OpenBao framework TypeMap boundary.
+	if rawPayload, ok := data.Raw["data"]; ok {
+		if err := rejectMixedWrappedPayload(data.Raw); err != nil {
+			return nil, err
+		}
+		return secretPayloadFromMap(rawPayload)
+	}
+
+	payload := make(secretPayload)
+	for key, value := range data.Raw {
+		if isDataWriteReservedField(key) {
+			continue
+		}
+		payload[key] = value
+	}
+	if len(payload) == 0 {
+		return nil, fmt.Errorf("data must contain at least one key")
+	}
+	return payload, nil
+}
+
+func rejectMixedWrappedPayload(raw map[string]interface{}) error { //nolint:forbidigo // OpenBao framework boundary.
+	var extra []string
+	for key := range raw {
+		if !isDataWriteReservedField(key) {
+			extra = append(extra, key)
+		}
+	}
+	if len(extra) == 0 {
+		return nil
+	}
+	sort.Strings(extra)
+	return fmt.Errorf(
+		"cannot mix wrapped data with top-level source payload fields %s; put source keys under data or omit data",
+		strings.Join(extra, ", "),
+	)
+}
+
+func isDataWriteReservedField(key string) bool {
+	switch key {
+	case "path", "data", "options", "cas", "version":
+		return true
+	default:
+		return false
+	}
+}
+
+func secretPayloadFromMap(raw interface{}) (secretPayload, error) { //nolint:forbidigo // OpenBao framework boundary.
+	payload, ok := raw.(map[string]interface{})
 	if !ok || len(payload) == 0 {
 		return nil, fmt.Errorf("data must contain at least one key")
 	}
@@ -470,13 +523,24 @@ func payloadFromField(data *framework.FieldData) (secretPayload, error) {
 }
 
 func casFromOptions(data *framework.FieldData) (int, bool, error) {
+	aliasCAS, aliasSet, err := casFromAlias(data)
+	if err != nil {
+		return 0, false, err
+	}
+
 	rawOptions := data.Get("options")
 	options, ok := rawOptions.(map[string]interface{}) //nolint:forbidigo // OpenBao framework TypeMap boundary.
 	if !ok || len(options) == 0 {
+		if aliasSet {
+			return aliasCAS, true, nil
+		}
 		return 0, false, nil
 	}
 	rawCAS, ok := options["cas"]
 	if !ok {
+		if aliasSet {
+			return aliasCAS, true, nil
+		}
 		return 0, false, nil
 	}
 	cas, err := intFromDynamic(rawCAS)
@@ -485,6 +549,24 @@ func casFromOptions(data *framework.FieldData) (int, bool, error) {
 	}
 	if cas < 0 {
 		return 0, false, fmt.Errorf("options.cas must be greater than or equal to zero")
+	}
+	if aliasSet && aliasCAS != cas {
+		return 0, false, fmt.Errorf("cas and options.cas must match when both are set")
+	}
+	return cas, true, nil
+}
+
+func casFromAlias(data *framework.FieldData) (int, bool, error) {
+	rawCAS, ok := data.GetOk("cas")
+	if !ok {
+		return 0, false, nil
+	}
+	cas, err := intFromDynamic(rawCAS)
+	if err != nil {
+		return 0, false, fmt.Errorf("cas must be an integer: %w", err)
+	}
+	if cas < 0 {
+		return 0, false, fmt.Errorf("cas must be greater than or equal to zero")
 	}
 	return cas, true, nil
 }

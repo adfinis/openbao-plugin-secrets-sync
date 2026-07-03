@@ -63,12 +63,18 @@ Source paths are slash-separated OpenBao paths. They cannot contain empty,
 cannot end in reserved route segments such as `plan`, `disable`, `enable`, or
 `sync`.
 
-Write the source secret:
+Write the source secret. In CLI shorthand, top-level fields become source
+payload keys:
 
 ```sh
 bao write secret-sync/data/app/db \
-  @<(printf '%s' '{"data":{"username":"app","password":"initial"}}')
+  username=app \
+  password=initial
 ```
+
+Use `cas=<version>` when you need check-and-set from the CLI. Use the wrapped
+`{"data":{...},"options":{"cas":...}}` body for HTTP clients or when a source
+payload key must be named `data`, `options`, `cas`, or `version`.
 
 Read the latest source version:
 
@@ -140,7 +146,8 @@ Updating the source path enqueues sync for enabled associations:
 
 ```sh
 bao write secret-sync/data/app/db \
-  @<(printf '%s' '{"data":{"username":"app","password":"updated"}}')
+  username=app \
+  password=updated
 ```
 
 Deleting the latest source version enqueues remote delete only for associations

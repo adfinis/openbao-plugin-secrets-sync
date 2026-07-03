@@ -3,6 +3,7 @@ package backend
 import (
 	"context"
 	"fmt"
+	"strings"
 	"sync"
 	"testing"
 
@@ -48,6 +49,29 @@ func TestDataWriteReadAndQueueStatus(t *testing.T) {
 	assertNoErrorResponse(t, statusResp)
 	assertResponseValue(t, statusResp, "state", string(domain.SyncStateNoAssociation))
 	assertResponseValue(t, statusResp, "version", 1)
+}
+
+func TestDataWriteShorthandPayload(t *testing.T) {
+	env := newBackendTestEnv(t)
+
+	writeResp := env.update("data/app/db", map[string]interface{}{
+		"username": "app",
+		"password": "secret",
+	})
+	assertNoErrorResponse(t, writeResp)
+
+	readResp := env.read("data/app/db")
+	assertNoErrorResponse(t, readResp)
+	payload := readResp.Data["data"].(secretPayload)
+	if got := payload["username"]; got != "app" {
+		t.Fatalf("username = %v, want app", got)
+	}
+	if got := payload["password"]; got != "secret" {
+		t.Fatalf("password = %v, want secret", got)
+	}
+	if _, ok := payload["path"]; ok {
+		t.Fatalf("path must not be stored as source payload: %#v", payload)
+	}
 }
 
 func TestDataWriteHonorsStrictSourceOptInBeforeEnqueue(t *testing.T) {
@@ -115,6 +139,94 @@ func TestDataWriteCAS(t *testing.T) {
 	metadata := thirdResp.Data["metadata"].(map[string]interface{})
 	if got := metadata["version"]; got != 2 {
 		t.Fatalf("third write version = %v, want 2", got)
+	}
+}
+
+func TestDataWriteShorthandCAS(t *testing.T) {
+	env := newBackendTestEnv(t)
+
+	firstResp := env.update("data/app/db", map[string]interface{}{
+		"password": "initial",
+		"cas":      0,
+	})
+	assertNoErrorResponse(t, firstResp)
+
+	secondResp := env.update("data/app/db", map[string]interface{}{
+		"password": "blocked",
+		"cas":      0,
+	})
+	if secondResp == nil || !secondResp.IsError() {
+		t.Fatalf("second write with cas=0 response = %#v, want error", secondResp)
+	}
+
+	thirdResp := env.update("data/app/db", map[string]interface{}{
+		"password": "rotated",
+		"cas":      "1",
+	})
+	assertNoErrorResponse(t, thirdResp)
+	metadata := thirdResp.Data["metadata"].(map[string]interface{})
+	if got := metadata["version"]; got != 2 {
+		t.Fatalf("third write version = %v, want 2", got)
+	}
+
+	readResp := env.read("data/app/db")
+	assertNoErrorResponse(t, readResp)
+	payload := readResp.Data["data"].(secretPayload)
+	if _, ok := payload["cas"]; ok {
+		t.Fatalf("cas alias must not be stored as source payload: %#v", payload)
+	}
+	if got := payload["password"]; got != "rotated" {
+		t.Fatalf("password = %v, want rotated", got)
+	}
+}
+
+func TestDataWriteWrappedPayloadAllowsMatchingCASAlias(t *testing.T) {
+	env := newBackendTestEnv(t)
+
+	resp := env.update("data/app/db", map[string]interface{}{
+		"data": map[string]interface{}{
+			"password": "initial",
+		},
+		"options": map[string]interface{}{
+			"cas": 0,
+		},
+		"cas": 0,
+	})
+	assertNoErrorResponse(t, resp)
+}
+
+func TestDataWriteRejectsMixedWrappedAndShorthandPayload(t *testing.T) {
+	env := newBackendTestEnv(t)
+
+	resp := env.update("data/app/db", map[string]interface{}{
+		"data": map[string]interface{}{
+			"password": "wrapped",
+		},
+		"username": "app",
+	})
+	if resp == nil || !resp.IsError() {
+		t.Fatalf("mixed write response = %#v, want error", resp)
+	}
+	if !strings.Contains(resp.Error().Error(), "cannot mix wrapped data with top-level source payload fields username") {
+		t.Fatalf("mixed write error = %q", resp.Error().Error())
+	}
+}
+
+func TestDataWriteRejectsConflictingCASForms(t *testing.T) {
+	env := newBackendTestEnv(t)
+
+	resp := env.update("data/app/db", map[string]interface{}{
+		"password": "initial",
+		"options": map[string]interface{}{
+			"cas": 0,
+		},
+		"cas": 1,
+	})
+	if resp == nil || !resp.IsError() {
+		t.Fatalf("conflicting CAS response = %#v, want error", resp)
+	}
+	if !strings.Contains(resp.Error().Error(), "cas and options.cas must match") {
+		t.Fatalf("conflicting CAS error = %q", resp.Error().Error())
 	}
 }
 

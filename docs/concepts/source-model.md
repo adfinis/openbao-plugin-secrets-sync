@@ -24,6 +24,16 @@ The source API is intentionally familiar:
 - selected versions can be soft-deleted, undeleted, or destroyed;
 - metadata can require CAS and can limit retained versions.
 
+CLI writes can put source payload keys directly at the top level:
+
+```sh
+bao write secret-sync/data/app/db username=app password=initial
+```
+
+HTTP clients can use the KV-v2-like wrapped body with `data` and `options`.
+The wrapped form is also the escape hatch when a source payload key must be
+named `data`, `options`, `cas`, or `version`.
+
 Use [API compatibility](../reference/api-compatibility.md) for the exact
 KV-v2-like contract and intentional differences.
 

@@ -22,7 +22,8 @@ one remote object should contain the whole source payload.
 
 ```sh
 bao write secret-sync/data/app/db \
-  @<(printf '%s' '{"data":{"username":"app","password":"initial"}}')
+  username=app \
+  password=initial
 
 bao write secret-sync/associations/app/db \
   destination=aws-sm/prod
@@ -40,7 +41,8 @@ Secrets where applications read keys such as `username` and `password`.
 
 ```sh
 bao write secret-sync/data/app/db \
-  @<(printf '%s' '{"data":{"username":"app","password":"initial"}}')
+  username=app \
+  password=initial
 
 bao write secret-sync/associations/app/db \
   destination=k8s/apps \
@@ -61,7 +63,8 @@ shape.
 
 ```sh
 bao write secret-sync/data/app/ci \
-  @<(printf '%s' '{"data":{"USERNAME":"app","PASSWORD":"initial"}}')
+  USERNAME=app \
+  PASSWORD=initial
 
 bao write secret-sync/associations/app/ci \
   destination=gitlab/prod \

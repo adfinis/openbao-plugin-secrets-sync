@@ -11,7 +11,8 @@ default association shape works for AWS Secrets Manager:
 
 ```sh
 bao write secret-sync/data/app/db \
-  @<(printf '%s' '{"data":{"username":"app","password":"initial"}}')
+  username=app \
+  password=initial
 
 bao write secret-sync/associations/app/db/plan \
   destination=aws-sm/prod
@@ -25,7 +26,8 @@ from the OpenBao source path:
 
 ```sh
 bao write secret-sync/data/app/db \
-  @<(printf '%s' '{"data":{"username":"app","password":"initial"}}')
+  username=app \
+  password=initial
 
 bao write secret-sync/associations/app/db \
   destination=aws-sm/prod \

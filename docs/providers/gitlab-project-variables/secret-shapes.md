@@ -13,7 +13,8 @@ compatible template:
 
 ```sh
 bao write secret-sync/data/app/ci \
-  @<(printf '%s' '{"data":{"USERNAME":"app","PASSWORD":"initial"}}')
+  USERNAME=app \
+  PASSWORD=initial
 
 bao write secret-sync/associations/app/ci/plan \
   destination=gitlab/prod \
@@ -46,7 +47,8 @@ canonical JSON for that key:
 
 ```sh
 bao write secret-sync/data/app/ci-json \
-  @<(printf '%s' '{"data":{"USERNAME":"app","PASSWORD":"initial"}}')
+  USERNAME=app \
+  PASSWORD=initial
 
 bao write secret-sync/associations/app/ci-json \
   destination=gitlab/prod \
@@ -61,7 +63,8 @@ canonical JSON payload:
 
 ```sh
 bao write secret-sync/data/app/ci-config \
-  @<(printf '%s' '{"data":{"username":"app","password":"initial"}}')
+  username=app \
+  password=initial
 
 bao write secret-sync/associations/app/ci-config \
   destination=gitlab/prod \
