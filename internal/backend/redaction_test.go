@@ -119,12 +119,11 @@ func TestSecurityBoundarySourcePayloadDoesNotLeakThroughOperationalResponses(t *
 	assertDoesNotContainRedactionCanary(t, planResp.Data)
 
 	associationResp := env.update("associations/app/db", map[string]interface{}{
-		"destination_type": providerTypeFake,
-		"destination_name": "default",
-		"resolved_name":    "prod/app/db",
-		"granularity":      syncGranularitySecretPath,
-		"format":           defaultAssociationFormat,
-		"delete_mode":      deleteModeDelete,
+		"destination":   destinationRef(providerTypeFake, "default"),
+		"resolved_name": "prod/app/db",
+		"granularity":   syncGranularitySecretPath,
+		"format":        defaultAssociationFormat,
+		"delete_mode":   deleteModeDelete,
 	})
 	assertNoErrorResponse(t, associationResp)
 	assertDoesNotContainRedactionCanary(t, associationResp.Data)

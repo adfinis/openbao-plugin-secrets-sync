@@ -499,6 +499,21 @@ paths:
                 $ref: "#/components/schemas/AssociationPlanResponse"
 
   /associations/{path}/{association_id}:
+    get:
+      tags: [associations]
+      operationId: readAssociation
+      summary: Read one association.
+      x-openbao-operation: read
+      parameters:
+        - $ref: "#/components/parameters/SourcePath"
+        - $ref: "#/components/parameters/AssociationID"
+      responses:
+        "200":
+          description: Association details.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AssociationResponse"
     delete:
       tags: [associations]
       operationId: deleteAssociation
@@ -510,6 +525,72 @@ paths:
       responses:
         "204":
           description: Association deleted or absent.
+
+  /associations/{path}/disable:
+    post:
+      tags: [associations]
+      operationId: disableAssociationByDestination
+      summary: Disable an association resolved by destination and cancel queued work.
+      x-openbao-operation: update
+      parameters:
+        - $ref: "#/components/parameters/SourcePath"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AssociationDestinationRequest"
+      responses:
+        "200":
+          description: Disabled association and canceled operation ids.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AssociationLifecycleResponse"
+
+  /associations/{path}/enable:
+    post:
+      tags: [associations]
+      operationId: enableAssociationByDestination
+      summary: Enable an association resolved by destination and enqueue the current source version.
+      x-openbao-operation: update
+      parameters:
+        - $ref: "#/components/parameters/SourcePath"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AssociationDestinationRequest"
+      responses:
+        "200":
+          description: Enabled association and queued sync operation ids.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AssociationLifecycleResponse"
+
+  /associations/{path}/sync:
+    post:
+      tags: [associations]
+      operationId: syncAssociationByDestination
+      summary: Manually enqueue sync for one enabled association resolved by destination.
+      x-openbao-operation: update
+      parameters:
+        - $ref: "#/components/parameters/SourcePath"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AssociationDestinationRequest"
+      responses:
+        "200":
+          description: Association and queued sync operation ids.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AssociationLifecycleResponse"
 
   /associations/{path}/{association_id}/disable:
     post:
@@ -724,7 +805,7 @@ components:
       schema:
         type: string
         example: app/db
-      description: Slash-containing OpenBao source path. Clients may need to preserve or encode slashes. Segments must not be empty, `.`, `..`, or `versions`; the path must not end in `plan`.
+      description: Slash-containing OpenBao source path. Clients may need to preserve or encode slashes. Segments must not be empty, `.`, `..`, or `versions`; the path must not end in `plan`, `disable`, `enable`, or `sync`.
     AssociationID:
       name: association_id
       in: path
@@ -1346,11 +1427,10 @@ components:
       type: object
       description: Create defaults apply to new associations. Updates inherit omitted optional fields from the matching stored association when path and destination are unambiguous. Setting enabled=true on an existing disabled association queues the current source version.
       properties:
-        destination_type:
+        destination:
           type: string
-          enum: [fake, aws-sm, k8s, gitlab]
-        destination_name:
-          type: string
+          pattern: ^[^/]+/[^/]+$
+          description: Destination reference in `<type>/<name>` form.
         resolved_name:
           type: string
           description: Explicit remote object name for secret-path granularity.
@@ -1382,7 +1462,18 @@ components:
         enabled:
           type: boolean
           default: true
-      required: [destination_type, destination_name]
+      required: [destination]
+      additionalProperties: false
+
+    AssociationDestinationRequest:
+      type: object
+      description: Destination selector for lifecycle operations.
+      properties:
+        destination:
+          type: string
+          pattern: ^[^/]+/[^/]+$
+          description: Destination reference in `<type>/<name>` form.
+      required: [destination]
       additionalProperties: false
 
     AssociationLifecycleResponse:
@@ -1435,6 +1526,13 @@ components:
               type: array
               items:
                 $ref: "#/components/schemas/Association"
+      required: [data]
+
+    AssociationResponse:
+      type: object
+      properties:
+        data:
+          $ref: "#/components/schemas/Association"
       required: [data]
 
     Association:

@@ -24,11 +24,10 @@ func TestAssociationSecretKeyQueuesAndSyncsPerSourceKey(t *testing.T) {
 	env.markAppDBSyncable()
 
 	planResp := env.update("associations/app/db/plan", map[string]interface{}{
-		"destination_type": providerTypeFake,
-		"destination_name": "default",
-		"name_template":    "prod/{{ path }}/{{ key }}",
-		"granularity":      syncGranularitySecretKey,
-		"format":           defaultAssociationFormat,
+		"destination":   destinationRef(providerTypeFake, "default"),
+		"name_template": "prod/{{ path }}/{{ key }}",
+		"granularity":   syncGranularitySecretKey,
+		"format":        defaultAssociationFormat,
 	})
 	assertNoErrorResponse(t, planResp)
 	assertResponseValue(t, planResp, "action", providers.PlanActionCreate)
@@ -92,11 +91,10 @@ func TestAssociationSecretKeyRawFormat(t *testing.T) {
 	env.markAppDBSyncable()
 
 	resp := env.update("associations/app/db/plan", map[string]interface{}{
-		"destination_type": providerTypeFake,
-		"destination_name": "default",
-		"name_template":    "{{ key }}",
-		"granularity":      syncGranularitySecretKey,
-		"format":           rawAssociationFormat,
+		"destination":   destinationRef(providerTypeFake, "default"),
+		"name_template": "{{ key }}",
+		"granularity":   syncGranularitySecretKey,
+		"format":        rawAssociationFormat,
 	})
 	assertNoErrorResponse(t, resp)
 	objects := objectsByIDFromRaw(t, resp.Data["objects"])
@@ -117,11 +115,10 @@ func TestAssociationRawFormatRequiresSecretKey(t *testing.T) {
 	env.markAppDBSyncable()
 
 	resp := env.update("associations/app/db", map[string]interface{}{
-		"destination_type": providerTypeFake,
-		"destination_name": "default",
-		"resolved_name":    "prod/app/db",
-		"granularity":      syncGranularitySecretPath,
-		"format":           rawAssociationFormat,
+		"destination":   destinationRef(providerTypeFake, "default"),
+		"resolved_name": "prod/app/db",
+		"granularity":   syncGranularitySecretPath,
+		"format":        rawAssociationFormat,
 	})
 	if resp == nil || !resp.IsError() {
 		t.Fatalf("raw secret-path association response = %#v, want error", resp)
@@ -145,12 +142,11 @@ func TestAssociationGitLabSecretKeyRawFormat(t *testing.T) {
 	env.markAppDBSyncable()
 
 	resp := env.update("associations/app/db", map[string]interface{}{
-		"destination_type": gitlab.ProviderType,
-		"destination_name": "prod",
-		"name_template":    "{{ key }}",
-		"granularity":      syncGranularitySecretKey,
-		"format":           rawAssociationFormat,
-		"delete_mode":      deleteModeRetain,
+		"destination":   destinationRef(gitlab.ProviderType, "prod"),
+		"name_template": "{{ key }}",
+		"granularity":   syncGranularitySecretKey,
+		"format":        rawAssociationFormat,
+		"delete_mode":   deleteModeRetain,
 	})
 	assertNoErrorResponse(t, resp)
 	operationIDs := operationIDsFromResponse(t, resp)
@@ -222,12 +218,11 @@ func TestAssociationSecretKeyValidation(t *testing.T) {
 	resolvedNameResp := env.update(
 		"associations/app/db",
 		map[string]interface{}{
-			"destination_type": providerTypeFake,
-			"destination_name": "default",
-			"resolved_name":    "prod/app/db/password",
-			"name_template":    "prod/{{ path }}/{{ key }}",
-			"granularity":      syncGranularitySecretKey,
-			"format":           defaultAssociationFormat,
+			"destination":   destinationRef(providerTypeFake, "default"),
+			"resolved_name": "prod/app/db/password",
+			"name_template": "prod/{{ path }}/{{ key }}",
+			"granularity":   syncGranularitySecretKey,
+			"format":        defaultAssociationFormat,
 		},
 	)
 	if resolvedNameResp == nil || !resolvedNameResp.IsError() {
@@ -235,11 +230,10 @@ func TestAssociationSecretKeyValidation(t *testing.T) {
 	}
 
 	missingKeyResp := env.update("associations/app/db", map[string]interface{}{
-		"destination_type": providerTypeFake,
-		"destination_name": "default",
-		"name_template":    "prod/static",
-		"granularity":      syncGranularitySecretKey,
-		"format":           defaultAssociationFormat,
+		"destination":   destinationRef(providerTypeFake, "default"),
+		"name_template": "prod/static",
+		"granularity":   syncGranularitySecretKey,
+		"format":        defaultAssociationFormat,
 	})
 	if missingKeyResp == nil || !missingKeyResp.IsError() {
 		t.Fatalf("secret-key template without key response = %#v, want error", missingKeyResp)
@@ -258,11 +252,10 @@ func TestAssociationSecretKeyValidation(t *testing.T) {
 		t.Fatalf("unexpected kubernetes destination write error: %v", kubernetesResp.Error())
 	}
 	unsupportedResp := env.update("associations/app/db", map[string]interface{}{
-		"destination_type": kubernetessecrets.ProviderType,
-		"destination_name": "prod",
-		"name_template":    "prod/{{ path }}/{{ key }}",
-		"granularity":      syncGranularitySecretKey,
-		"format":           defaultAssociationFormat,
+		"destination":   destinationRef(kubernetessecrets.ProviderType, "prod"),
+		"name_template": "prod/{{ path }}/{{ key }}",
+		"granularity":   syncGranularitySecretKey,
+		"format":        defaultAssociationFormat,
 	})
 	if unsupportedResp == nil || !unsupportedResp.IsError() {
 		t.Fatalf("secret-key unsupported provider response = %#v, want error", unsupportedResp)
@@ -350,7 +343,7 @@ func TestAssociationSecretKeyDisableMarksPerSourceKeyStatus(t *testing.T) {
 	)
 	assertNoErrorResponse(t, disableResp)
 	assertAssociationEnabled(t, disableResp, false)
-	assertStringSet(t, stringSliceFromResponse(t, disableResp, "canceled_operation_ids"), operationIDs)
+	assertStringSet(t, canceledOperationIDsFromResponse(t, disableResp), operationIDs)
 
 	statusResp := env.read("status/app/db")
 	assertNoErrorResponse(t, statusResp)

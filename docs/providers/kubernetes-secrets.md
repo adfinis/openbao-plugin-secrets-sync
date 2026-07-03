@@ -57,13 +57,11 @@ which is not valid in Kubernetes Secret names:
 
 ```sh
 bao write secret-sync/associations/app/db/plan \
-  destination_type=k8s \
-  destination_name=apps \
+  destination=k8s/apps \
   resolved_name=app-db
 
 bao write secret-sync/associations/app/db \
-  destination_type=k8s \
-  destination_name=apps \
+  destination=k8s/apps \
   resolved_name=app-db
 ```
 
@@ -75,15 +73,13 @@ Secret `.data` entries instead of one `payload` entry:
 
 ```sh
 bao write secret-sync/associations/app/db/plan \
-  destination_type=k8s \
-  destination_name=apps \
+  destination=k8s/apps \
   resolved_name=app-db \
   data_mapping=source-keys \
   data_key_template='{{ key }}'
 
 bao write secret-sync/associations/app/db \
-  destination_type=k8s \
-  destination_name=apps \
+  destination=k8s/apps \
   resolved_name=app-db \
   data_mapping=source-keys \
   data_key_template='{{ key }}'

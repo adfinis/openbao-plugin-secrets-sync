@@ -96,8 +96,7 @@ Plan the association before creating or changing it:
 
 ```sh
 bao write secret-sync/associations/app/db/plan \
-  destination_type=<type> \
-  destination_name=<name> \
+  destination=<type>/<name> \
   resolved_name=<remote-name>
 ```
 
@@ -126,9 +125,9 @@ bao read secret-sync/associations/app/db
 Disable, enable, or manually sync one association:
 
 ```sh
-bao write -force secret-sync/associations/app/db/<association-id>/disable
-bao write -force secret-sync/associations/app/db/<association-id>/enable
-bao write -force secret-sync/associations/app/db/<association-id>/sync
+bao write secret-sync/associations/app/db/disable destination=<type>/<name>
+bao write secret-sync/associations/app/db/enable destination=<type>/<name>
+bao write secret-sync/associations/app/db/sync destination=<type>/<name>
 ```
 
 ## Queue operations

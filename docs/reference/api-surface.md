@@ -69,6 +69,8 @@ queue capacity before accepting the new source version.
 Mounts default `require_source_opt_in=false`. When strict opt-in is enabled,
 `sources/<path>/enable` sets `custom_metadata.syncable=true` and source checks
 report `source_not_syncable` until that metadata is present.
+Source paths cannot end with reserved association route segments such as
+`plan`, `disable`, `enable`, or `sync`.
 
 ## Destinations
 
@@ -90,7 +92,10 @@ fields. Reads return redacted sensitive values.
 | `associations` with `LIST` | List association source paths. |
 | `associations/<path>` | Create, update, or read associations for a source path. |
 | `associations/<path>/plan` | Plan association behavior without storing the association or mutating the destination. |
-| `associations/<path>/<association-id>` | Delete one association. |
+| `associations/<path>/<association-id>` | Read or delete one association. |
+| `associations/<path>/disable` | Disable one association resolved by `destination=<type>/<name>` and cancel eligible queued work. |
+| `associations/<path>/enable` | Enable one association resolved by `destination=<type>/<name>` and enqueue current source work where needed. |
+| `associations/<path>/sync` | Manually enqueue sync work for one association resolved by `destination=<type>/<name>`. |
 | `associations/<path>/<association-id>/disable` | Disable one association and cancel eligible queued work. |
 | `associations/<path>/<association-id>/enable` | Enable one association and enqueue current source work where needed. |
 | `associations/<path>/<association-id>/sync` | Manually enqueue sync work for one association. |
@@ -99,6 +104,8 @@ Associations link a source path to one destination and define the remote name,
 granularity, payload format, data mapping, delete mode, and enabled state.
 Association creation and updates validate provider capabilities before they are
 accepted.
+Association create, update, plan, and destination-addressed lifecycle requests
+use `destination=<type>/<name>` to identify the destination.
 
 ## Queue, status, and reconcile
 

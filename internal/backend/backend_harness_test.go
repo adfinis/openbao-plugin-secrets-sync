@@ -642,8 +642,9 @@ func runDueRetry(
 	return updated
 }
 
-func stringSliceFromResponse(t *testing.T, resp *logical.Response, key string) []string {
+func canceledOperationIDsFromResponse(t *testing.T, resp *logical.Response) []string {
 	t.Helper()
+	const key = "canceled_operation_ids"
 	rawIDs, ok := resp.Data[key].([]string)
 	if !ok {
 		t.Fatalf("%s = %T, want []string", key, resp.Data[key])
@@ -767,11 +768,10 @@ func createDefaultFakeAssociation(t *testing.T, b logical.Backend, storage logic
 	t.Helper()
 	markAppDBSyncable(t, b, storage)
 	return handleRequest(t, b, storage, logical.UpdateOperation, "associations/app/db", map[string]interface{}{
-		"destination_type": providerTypeFake,
-		"destination_name": "default",
-		"resolved_name":    "prod/app/db",
-		"granularity":      syncObjectIDSecretPath,
-		"format":           defaultAssociationFormat,
+		"destination":   destinationRef(providerTypeFake, "default"),
+		"resolved_name": "prod/app/db",
+		"granularity":   syncObjectIDSecretPath,
+		"format":        defaultAssociationFormat,
 	})
 }
 
@@ -790,11 +790,10 @@ func createFakeAssociationForPath(
 	})
 	assertNoErrorResponse(t, resp)
 	resp = handleRequest(t, b, storage, logical.UpdateOperation, "associations/"+path, map[string]interface{}{
-		"destination_type": providerTypeFake,
-		"destination_name": "default",
-		"resolved_name":    "prod/" + path,
-		"granularity":      syncObjectIDSecretPath,
-		"format":           defaultAssociationFormat,
+		"destination":   destinationRef(providerTypeFake, "default"),
+		"resolved_name": "prod/" + path,
+		"granularity":   syncObjectIDSecretPath,
+		"format":        defaultAssociationFormat,
 	})
 	assertNoErrorResponse(t, resp)
 	return resp
@@ -809,12 +808,11 @@ func createFakeSecretKeyAssociation(
 	t.Helper()
 	markAppDBSyncable(t, b, storage)
 	resp := handleRequest(t, b, storage, logical.UpdateOperation, "associations/app/db", map[string]interface{}{
-		"destination_type": providerTypeFake,
-		"destination_name": "default",
-		"name_template":    "prod/{{ path }}/{{ key }}",
-		"granularity":      syncGranularitySecretKey,
-		"format":           defaultAssociationFormat,
-		"delete_mode":      deleteMode,
+		"destination":   destinationRef(providerTypeFake, "default"),
+		"name_template": "prod/{{ path }}/{{ key }}",
+		"granularity":   syncGranularitySecretKey,
+		"format":        defaultAssociationFormat,
+		"delete_mode":   deleteMode,
 	})
 	assertNoErrorResponse(t, resp)
 	return resp
@@ -828,12 +826,11 @@ func createFakeDeleteModeAssociation(
 	t.Helper()
 	markAppDBSyncable(t, b, storage)
 	resp := handleRequest(t, b, storage, logical.UpdateOperation, "associations/app/db", map[string]interface{}{
-		"destination_type": providerTypeFake,
-		"destination_name": "default",
-		"resolved_name":    "prod/app/db",
-		"granularity":      syncObjectIDSecretPath,
-		"format":           defaultAssociationFormat,
-		"delete_mode":      deleteModeDelete,
+		"destination":   destinationRef(providerTypeFake, "default"),
+		"resolved_name": "prod/app/db",
+		"granularity":   syncObjectIDSecretPath,
+		"format":        defaultAssociationFormat,
+		"delete_mode":   deleteModeDelete,
 	})
 	assertNoErrorResponse(t, resp)
 	return resp
@@ -848,11 +845,10 @@ func createFakeAssociationWithResolvedName(
 	t.Helper()
 	markAppDBSyncable(t, b, storage)
 	return handleRequest(t, b, storage, logical.UpdateOperation, "associations/app/db", map[string]interface{}{
-		"destination_type": providerTypeFake,
-		"destination_name": "default",
-		"resolved_name":    resolvedName,
-		"granularity":      syncObjectIDSecretPath,
-		"format":           defaultAssociationFormat,
+		"destination":   destinationRef(providerTypeFake, "default"),
+		"resolved_name": resolvedName,
+		"granularity":   syncObjectIDSecretPath,
+		"format":        defaultAssociationFormat,
 	})
 }
 
@@ -864,11 +860,10 @@ func planDefaultFakeAssociation(
 ) *logical.Response {
 	t.Helper()
 	return handleRequest(t, b, storage, logical.UpdateOperation, "associations/app/db/plan", map[string]interface{}{
-		"destination_type": providerTypeFake,
-		"destination_name": "default",
-		"resolved_name":    resolvedName,
-		"granularity":      syncObjectIDSecretPath,
-		"format":           defaultAssociationFormat,
+		"destination":   destinationRef(providerTypeFake, "default"),
+		"resolved_name": resolvedName,
+		"granularity":   syncObjectIDSecretPath,
+		"format":        defaultAssociationFormat,
 	})
 }
 

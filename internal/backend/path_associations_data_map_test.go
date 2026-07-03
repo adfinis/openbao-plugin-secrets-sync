@@ -22,8 +22,7 @@ func TestAssociationDataMapDispatchesSourceKeys(t *testing.T) {
 	assertNilOrNoErrorResponse(t, resp)
 
 	associationResp := env.update("associations/app/db", map[string]interface{}{
-		"destination_type":  "data-map",
-		"destination_name":  "prod",
+		"destination":       destinationRef("data-map", "prod"),
 		"resolved_name":     "app-db",
 		"data_mapping":      dataMappingSourceKeys,
 		"data_key_template": "APP_{{ key }}",
@@ -71,8 +70,7 @@ func TestAssociationDataMapRequiresProviderCapability(t *testing.T) {
 	env.createFakeDestination("default")
 
 	resp := env.update("associations/app/db", map[string]interface{}{
-		"destination_type":  providerTypeFake,
-		"destination_name":  "default",
+		"destination":       destinationRef(providerTypeFake, "default"),
 		"resolved_name":     "app-db",
 		"data_mapping":      dataMappingSourceKeys,
 		"data_key_template": defaultDataKeyTemplate,
@@ -95,8 +93,7 @@ func TestAssociationDataMapRejectsUnsupportedSourceValues(t *testing.T) {
 	assertNilOrNoErrorResponse(t, resp)
 
 	associationResp := env.update("associations/app/db", map[string]interface{}{
-		"destination_type":  "data-map",
-		"destination_name":  "prod",
+		"destination":       destinationRef("data-map", "prod"),
 		"resolved_name":     "app-db",
 		"data_mapping":      dataMappingSourceKeys,
 		"data_key_template": defaultDataKeyTemplate,

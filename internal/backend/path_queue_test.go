@@ -80,12 +80,11 @@ func TestQueueCapacityRejectsWriteBeforeVersionCommit(t *testing.T) {
 	env.createFakeDestination("default")
 	env.markAppDBSyncable()
 	associationResp := env.update("associations/app/db", map[string]interface{}{
-		"destination_type": providerTypeFake,
-		"destination_name": "default",
-		"resolved_name":    "prod/app/db",
-		"granularity":      syncObjectIDSecretPath,
-		"format":           defaultAssociationFormat,
-		"enabled":          false,
+		"destination":   destinationRef(providerTypeFake, "default"),
+		"resolved_name": "prod/app/db",
+		"granularity":   syncObjectIDSecretPath,
+		"format":        defaultAssociationFormat,
+		"enabled":       false,
 	})
 	assertNoErrorResponse(t, associationResp)
 	now := nowUTC().Format(timeFormatRFC3339)
