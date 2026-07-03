@@ -267,6 +267,9 @@ func (b *secretSyncBackend) pathAssociationEnable(
 		if err != nil {
 			return logical.ErrorResponse(err.Error()), nil
 		}
+		if len(operationIDs) > 0 {
+			b.signalEventDispatch()
+		}
 	}
 	return &logical.Response{Data: associationLifecycleResponse(
 		*record,
@@ -311,6 +314,9 @@ func (b *secretSyncBackend) pathAssociationSync(
 	operationIDs, err := b.enqueueAssociationCurrentVersionAsManualSync(ctx, req.Storage, *record, *metadata, now)
 	if err != nil {
 		return logical.ErrorResponse(err.Error()), nil
+	}
+	if len(operationIDs) > 0 {
+		b.signalEventDispatch()
 	}
 	return &logical.Response{Data: associationLifecycleResponse(
 		*record,
@@ -384,6 +390,9 @@ func (b *secretSyncBackend) associationWritePlan(
 		)
 		if err != nil {
 			return associationWritePlan{}, logical.ErrorResponse(err.Error()), nil
+		}
+		if len(operationIDs) > 0 {
+			b.signalEventDispatch()
 		}
 	}
 	return associationWritePlan{record: record, operationIDs: operationIDs}, nil, nil

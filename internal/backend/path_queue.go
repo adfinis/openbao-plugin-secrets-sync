@@ -83,7 +83,7 @@ func pathQueue(b *secretSyncBackend) []*framework.Path {
 			},
 			Operations: map[logical.Operation]framework.OperationHandler{
 				logical.UpdateOperation: &framework.PathOperation{
-					Callback: pathQueueOperationRetry,
+					Callback: b.pathQueueOperationRetry,
 					Summary:  "Retry one outbox operation.",
 				},
 			},
@@ -287,7 +287,7 @@ func pathQueueOperationRead(
 	return &logical.Response{Data: outboxOperationResponse(*record)}, nil
 }
 
-func pathQueueOperationRetry(
+func (b *secretSyncBackend) pathQueueOperationRetry(
 	ctx context.Context,
 	req *logical.Request,
 	data *framework.FieldData,
@@ -316,6 +316,7 @@ func pathQueueOperationRetry(
 		if err := putOutbox(ctx, req.Storage, *record); err != nil {
 			return nil, err
 		}
+		b.signalEventDispatch()
 		return &logical.Response{Data: outboxOperationResponse(*record)}, nil
 	default:
 		return logical.ErrorResponse("operation is not retryable"), nil

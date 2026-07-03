@@ -122,14 +122,17 @@ func (b *secretSyncBackend) runVersionMutation(
 		return nil, nil
 	}
 	now := nowUTC().Format(timeFormatRFC3339)
+	signalDispatch := false
 	for _, version := range versions {
 		var mutationErr error
 		if version == metadata.CurrentVersion {
 			switch kind {
 			case versionMutationDelete, versionMutationDestroy:
 				mutationErr = b.mutateCurrentVersionDelete(ctx, req.Storage, metadata, path, version, now, mutate)
+				signalDispatch = true
 			case versionMutationUndelete:
 				mutationErr = b.mutateCurrentVersionUndelete(ctx, req.Storage, metadata, path, version, now, mutate)
+				signalDispatch = true
 			default:
 				mutationErr = mutate(ctx, req.Storage, metadata, path, version, now)
 			}
@@ -142,6 +145,9 @@ func (b *secretSyncBackend) runVersionMutation(
 		if err := putMetadata(ctx, req.Storage, path, *metadata); err != nil {
 			return nil, err
 		}
+	}
+	if signalDispatch {
+		b.signalEventDispatch()
 	}
 	return nil, nil
 }

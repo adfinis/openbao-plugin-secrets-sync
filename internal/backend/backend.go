@@ -87,15 +87,30 @@ type secretSyncBackend struct {
 
 	cacheMu          sync.Mutex
 	enqueueMu        sync.Mutex
+	eventDispatchMu  sync.Mutex
 	dispatchWorkerID string
 	writeLocks       []*locksutil.LockEntry
 	providerRegistry *providers.Registry
 	observer         observability.Recorder
 
+	eventDispatchCh     chan eventDispatchSignal
+	eventDispatchCancel context.CancelFunc
+	eventDispatchDone   chan struct{}
+
 	runtimeCache             map[string]destinationRuntimeCacheEntry
 	runtimeBuilds            map[string]*destinationRuntimeBuild
 	runtimeCacheEpoch        uint64
 	runtimeDestinationEpochs map[string]uint64
+}
+
+func (b *secretSyncBackend) Setup(ctx context.Context, conf *logical.BackendConfig) error {
+	if err := b.Backend.Setup(ctx, conf); err != nil {
+		return err
+	}
+	if conf != nil && conf.StorageView != nil {
+		b.startEventDispatcher(conf.StorageView)
+	}
+	return nil
 }
 
 func (b *secretSyncBackend) invalidate(ctx context.Context, key string) {
@@ -111,6 +126,7 @@ func (b *secretSyncBackend) invalidate(ctx context.Context, key string) {
 }
 
 func (b *secretSyncBackend) cleanup(ctx context.Context) {
+	b.stopEventDispatcher(ctx)
 	b.clearDestinationRuntimes(ctx)
 }
 

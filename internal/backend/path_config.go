@@ -45,6 +45,14 @@ func pathConfig(b *secretSyncBackend) *framework.Path {
 				Type:        framework.TypeInt,
 				Description: "Maximum association objects checked by one periodic drift sweep.",
 			},
+			"event_dispatch_enabled": {
+				Type:        framework.TypeBool,
+				Description: "Wake a bounded dispatcher after enqueue-producing writes.",
+			},
+			"event_dispatch_max_operations": {
+				Type:        framework.TypeInt,
+				Description: "Maximum due outbox operations processed by one event-triggered dispatch wakeup.",
+			},
 		},
 		Operations: map[logical.Operation]framework.OperationHandler{
 			logical.ReadOperation: &framework.PathOperation{
@@ -102,6 +110,8 @@ func (b *secretSyncBackend) pathConfigRead(
 		responseField("drift_repair", cfg.DriftRepair),
 		responseField("drift_reconcile_interval", cfg.DriftReconcileInterval),
 		responseField("drift_reconcile_batch", cfg.DriftReconcileBatch),
+		responseField("event_dispatch_enabled", cfg.EventDispatchEnabled),
+		responseField("event_dispatch_max_operations", cfg.EventDispatchMaxOperations),
 	)}, nil
 }
 
@@ -114,11 +124,13 @@ func (b *secretSyncBackend) pathConfigWrite(
 	if err != nil {
 		return nil, err
 	}
+	previousDisabled := cfg.Disabled
+	previousRestoreGuard := cfg.RestoreGuard
+	previousEventDispatchEnabled := cfg.EventDispatchEnabled
 	if value, ok := data.GetOk("disabled"); ok {
 		cfg.Disabled = value.(bool)
 	}
 	if value, ok := data.GetOk("restore_guard"); ok {
-		previousRestoreGuard := cfg.RestoreGuard
 		cfg.RestoreGuard = value.(bool)
 		if cfg.RestoreGuard {
 			cfg.RestoreGuardAcknowledgedTime = ""
@@ -145,11 +157,22 @@ func (b *secretSyncBackend) pathConfigWrite(
 	if err := applyDriftConfigFields(data, &cfg); err != nil {
 		return logical.ErrorResponse(err.Error()), nil
 	}
+	if err := applyEventDispatchConfigFields(data, &cfg); err != nil {
+		return logical.ErrorResponse(err.Error()), nil
+	}
 	cfg.UpdatedTime = nowUTC().Format(timeFormatRFC3339)
 	if err := putGlobalConfig(ctx, req.Storage, cfg); err != nil {
 		return nil, err
 	}
 	b.observer.RestoreGuardActive(ctx, cfg.RestoreGuard)
+	if configWriteResumesEventDispatch(
+		previousDisabled,
+		previousRestoreGuard,
+		previousEventDispatchEnabled,
+		cfg,
+	) {
+		b.signalEventDispatch()
+	}
 	return nil, nil
 }
 
@@ -176,6 +199,32 @@ func applyDriftConfigFields(data *framework.FieldData, cfg *globalConfig) error 
 		cfg.DriftReconcileBatch = batch
 	}
 	return nil
+}
+
+func applyEventDispatchConfigFields(data *framework.FieldData, cfg *globalConfig) error {
+	if value, ok := data.GetOk("event_dispatch_enabled"); ok {
+		cfg.EventDispatchEnabled = value.(bool)
+	}
+	if value, ok := data.GetOk("event_dispatch_max_operations"); ok {
+		maxOperations := value.(int)
+		if maxOperations < 1 {
+			return fmt.Errorf("event_dispatch_max_operations must be greater than or equal to one")
+		}
+		cfg.EventDispatchMaxOperations = maxOperations
+	}
+	return nil
+}
+
+func configWriteResumesEventDispatch(
+	previousDisabled bool,
+	previousRestoreGuard bool,
+	previousEventDispatchEnabled bool,
+	cfg globalConfig,
+) bool {
+	if !cfg.EventDispatchEnabled || cfg.Disabled || cfg.RestoreGuard {
+		return false
+	}
+	return previousDisabled || previousRestoreGuard || !previousEventDispatchEnabled
 }
 
 func (b *secretSyncBackend) pathConfigRestoreGuardAcknowledgeWrite(
@@ -205,6 +254,7 @@ func (b *secretSyncBackend) pathConfigRestoreGuardAcknowledgeWrite(
 		return nil, err
 	}
 	b.observer.RestoreGuardActive(ctx, cfg.RestoreGuard)
+	b.signalEventDispatch()
 	return &logical.Response{Data: newResponseData(
 		responseField("disabled", cfg.Disabled),
 		responseField("restore_guard", cfg.RestoreGuard),
@@ -218,6 +268,8 @@ func (b *secretSyncBackend) pathConfigRestoreGuardAcknowledgeWrite(
 		responseField("drift_repair", cfg.DriftRepair),
 		responseField("drift_reconcile_interval", cfg.DriftReconcileInterval),
 		responseField("drift_reconcile_batch", cfg.DriftReconcileBatch),
+		responseField("event_dispatch_enabled", cfg.EventDispatchEnabled),
+		responseField("event_dispatch_max_operations", cfg.EventDispatchMaxOperations),
 	)}, nil
 }
 
@@ -310,6 +362,18 @@ func decodeGlobalConfigEntry(entry *logical.StorageEntry) (globalConfig, bool, e
 	} else {
 		cfg.DriftReconcileBatch = *stored.DriftReconcileBatch
 	}
+	if stored.EventDispatchEnabled == nil {
+		cfg.EventDispatchEnabled = true
+		changed = true
+	} else {
+		cfg.EventDispatchEnabled = *stored.EventDispatchEnabled
+	}
+	if stored.EventDispatchMaxOperations == nil {
+		cfg.EventDispatchMaxOperations = defaultEventDispatchMaxOperations
+		changed = true
+	} else {
+		cfg.EventDispatchMaxOperations = *stored.EventDispatchMaxOperations
+	}
 	if cfg.QueueCapacity < 0 {
 		return globalConfig{}, false, fmt.Errorf("stored queue_capacity must be greater than or equal to zero")
 	}
@@ -321,6 +385,9 @@ func decodeGlobalConfigEntry(entry *logical.StorageEntry) (globalConfig, bool, e
 	}
 	if cfg.DriftReconcileBatch < 1 {
 		return globalConfig{}, false, fmt.Errorf("stored drift_reconcile_batch must be greater than or equal to one")
+	}
+	if cfg.EventDispatchMaxOperations < 1 {
+		return globalConfig{}, false, fmt.Errorf("stored event_dispatch_max_operations must be greater than or equal to one")
 	}
 	return cfg, changed, nil
 }
@@ -334,12 +401,14 @@ func initialGlobalConfig(now string) globalConfig {
 
 func defaultGlobalConfig() globalConfig {
 	return globalConfig{
-		RestoreGuard:           false,
-		QueueCapacity:          defaultQueueCapacity,
-		RequireSourceOptIn:     false,
-		DriftRepair:            defaultDriftRepair,
-		DriftReconcileInterval: defaultDriftInterval,
-		DriftReconcileBatch:    defaultDriftBatch,
+		RestoreGuard:               false,
+		QueueCapacity:              defaultQueueCapacity,
+		RequireSourceOptIn:         false,
+		DriftRepair:                defaultDriftRepair,
+		DriftReconcileInterval:     defaultDriftInterval,
+		DriftReconcileBatch:        defaultDriftBatch,
+		EventDispatchEnabled:       true,
+		EventDispatchMaxOperations: defaultEventDispatchMaxOperations,
 	}
 }
 
@@ -352,6 +421,8 @@ type storedGlobalConfig struct {
 	DriftRepair                  *string `json:"drift_repair"`
 	DriftReconcileInterval       *string `json:"drift_reconcile_interval"`
 	DriftReconcileBatch          *int    `json:"drift_reconcile_batch"`
+	EventDispatchEnabled         *bool   `json:"event_dispatch_enabled"`
+	EventDispatchMaxOperations   *int    `json:"event_dispatch_max_operations"`
 	UpdatedTime                  string  `json:"updated_time"`
 }
 
@@ -364,6 +435,8 @@ type globalConfig struct {
 	DriftRepair                  string `json:"drift_repair"`
 	DriftReconcileInterval       string `json:"drift_reconcile_interval"`
 	DriftReconcileBatch          int    `json:"drift_reconcile_batch"`
+	EventDispatchEnabled         bool   `json:"event_dispatch_enabled"`
+	EventDispatchMaxOperations   int    `json:"event_dispatch_max_operations"`
 	UpdatedTime                  string `json:"updated_time"`
 }
 
