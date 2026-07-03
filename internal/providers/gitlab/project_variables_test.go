@@ -258,7 +258,6 @@ func TestPlanDetectsConflictAndDrift(t *testing.T) {
 		{
 			name: "newer remote version",
 			variable: ownedVariable(variableMetadata{
-				ManagedBy:     metadataManagedBy,
 				AssociationID: testAssociationID,
 				SourcePath:    testSourcePath,
 				ObjectID:      testObjectID,
@@ -291,7 +290,6 @@ func TestPlanDetectsConflictAndDrift(t *testing.T) {
 
 func TestPlanUpdatesWhenValueDriftsWithMatchingMetadata(t *testing.T) {
 	variable := ownedVariable(variableMetadata{
-		ManagedBy:     metadataManagedBy,
 		AssociationID: testAssociationID,
 		SourcePath:    testSourcePath,
 		ObjectID:      testObjectID,
@@ -453,7 +451,6 @@ func TestUpsertCreatesCompatibleHiddenVariable(t *testing.T) {
 
 func TestUpsertRepairsValueDriftWithMatchingMetadata(t *testing.T) {
 	variable := ownedVariable(variableMetadata{
-		ManagedBy:     metadataManagedBy,
 		AssociationID: testAssociationID,
 		SourcePath:    testSourcePath,
 		ObjectID:      testObjectID,
@@ -481,7 +478,6 @@ func TestUpsertRepairsValueDriftWithMatchingMetadata(t *testing.T) {
 
 func TestReadStateReportsValueDriftDespiteMatchingMetadata(t *testing.T) {
 	variable := ownedVariable(variableMetadata{
-		ManagedBy:     metadataManagedBy,
 		AssociationID: testAssociationID,
 		SourcePath:    testSourcePath,
 		ObjectID:      testObjectID,
@@ -536,7 +532,6 @@ func TestPlanUpdatesWhenAttributesDriftWithMatchingPayload(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			variable := ownedVariable(variableMetadata{
-				ManagedBy:     metadataManagedBy,
 				AssociationID: testAssociationID,
 				SourcePath:    testSourcePath,
 				ObjectID:      testObjectID,
@@ -622,7 +617,6 @@ func TestUpsertRepairsAttributeDriftWithMatchingPayload(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			cfg := destinationConfigWith(tt.overrides)
 			client := gitlabClientWithVariable(ownedVariable(variableMetadata{
-				ManagedBy:     metadataManagedBy,
 				AssociationID: testAssociationID,
 				SourcePath:    testSourcePath,
 				ObjectID:      testObjectID,
@@ -657,7 +651,6 @@ func TestHiddenUpdateIsBlockedForExistingVisibleVariable(t *testing.T) {
 		ConfigKeyHidden: testBoolTrue,
 	})
 	variable := ownedVariable(variableMetadata{
-		ManagedBy:     metadataManagedBy,
 		AssociationID: testAssociationID,
 		SourcePath:    testSourcePath,
 		ObjectID:      testObjectID,
@@ -870,7 +863,6 @@ func gitlabMaturityMatrix() *providertest.MaturityMatrix {
 			Mode: providertest.PartialSuccessAtomic,
 			Case: providertest.MaturityCase{
 				Provider: Provider{client: gitlabClientWithVariable(ownedVariable(variableMetadata{
-					ManagedBy:     metadataManagedBy,
 					AssociationID: testAssociationID,
 					SourcePath:    testSourcePath,
 					ObjectID:      testObjectID,
@@ -885,7 +877,6 @@ func gitlabMaturityMatrix() *providertest.MaturityMatrix {
 		StaleRemoteState: providertest.MaturityCase{
 			Name: "newer-remote-source-version",
 			Provider: Provider{client: gitlabClientWithVariable(ownedVariable(variableMetadata{
-				ManagedBy:     metadataManagedBy,
 				AssociationID: testAssociationID,
 				SourcePath:    testSourcePath,
 				ObjectID:      testObjectID,
@@ -908,7 +899,6 @@ func gitlabMaturityMatrix() *providertest.MaturityMatrix {
 			{
 				Name: "owned-delete-removes-variable",
 				Provider: Provider{client: gitlabClientWithVariable(ownedVariable(variableMetadata{
-					ManagedBy:     metadataManagedBy,
 					AssociationID: testAssociationID,
 					SourcePath:    testSourcePath,
 					ObjectID:      testObjectID,
@@ -1226,6 +1216,77 @@ func TestVariableFormOmitsSecretFromDescription(t *testing.T) {
 	}
 }
 
+func TestVariableMetadataDescriptionIsHumanReadable(t *testing.T) {
+	input := variableInputFromUpsert(defaultOptions(), defaultUpsertRequest(testPayloadSHAOld, []byte("secret"), 1))
+	description := input.Description
+	if !strings.HasPrefix(description, metadataDescriptionPrefix) {
+		t.Fatalf("description = %q, want human-readable prefix %q", description, metadataDescriptionPrefix)
+	}
+	for _, want := range []string{
+		"OpenBao sync: app/db APP_PASSWORD v1",
+		"assoc=assoc-1",
+		"fmt=raw",
+		"inst=inst-test",
+		"epoch=epoch-test",
+	} {
+		if !strings.Contains(description, want) {
+			t.Fatalf("description = %q, missing %q", description, want)
+		}
+	}
+	if strings.Contains(description, `{"m"`) {
+		t.Fatalf("description used JSON metadata: %s", description)
+	}
+}
+
+func TestVariableMetadataDescriptionEscapesReadableFields(t *testing.T) {
+	request := defaultUpsertRequest(testPayloadSHAOld, []byte("secret"), 1)
+	request.SourcePath = `team/a;b\c`
+
+	input := variableInputFromUpsert(defaultOptions(), request)
+	if !strings.Contains(input.Description, `OpenBao sync: team/a\;b\\c APP_PASSWORD v1`) {
+		t.Fatalf("description = %q, want escaped source path", input.Description)
+	}
+	metadata, owned := ownershipMetadata(&gitlabVariable{Description: input.Description})
+	if !ownedByRequest(metadata, owned, ownershipIdentityFromUpsert(request)) {
+		t.Fatalf("metadata does not match request identity: %#v", metadata)
+	}
+	if metadata.SourcePath != request.SourcePath {
+		t.Fatalf("source path = %q, want %q", metadata.SourcePath, request.SourcePath)
+	}
+}
+
+func TestVariableMetadataDescriptionKeepsRealisticRuntimeIdentityReadable(t *testing.T) {
+	description := metadataDescription(variableMetadata{
+		AssociationID:    "assoc-60212b8daa8d1586",
+		SourcePath:       "app/db",
+		ObjectID:         "password",
+		PluginInstanceID: "inst-d6ced37fb32ccbe0e786977505fa6e60",
+		RestoreEpoch:     "epoch-eb4c66139a976a06aac5412f9ba5d467",
+		SourceVersion:    1,
+		PayloadSHA256:    "sha256:ac1b5c0961a7269b6a053ee64276ed0e20a7f48aefb9f67519539d23aaf10149",
+		PayloadFormat:    payload.FormatRaw,
+	})
+	if len(description) > variableDescriptionMaxBytes {
+		t.Fatalf("description length = %d, want <= %d: %s", len(description), variableDescriptionMaxBytes, description)
+	}
+	if !strings.HasPrefix(description, metadataDescriptionPrefix) {
+		t.Fatalf("description = %q, want human-readable prefix %q", description, metadataDescriptionPrefix)
+	}
+	if strings.HasPrefix(description, "{") {
+		t.Fatalf("description used JSON metadata: %s", description)
+	}
+	for _, want := range []string{
+		"OpenBao sync: app/db password v1",
+		"assoc=assoc-60212b8daa8d1586",
+		"inst_hash=",
+		"epoch_hash=",
+	} {
+		if !strings.Contains(description, want) {
+			t.Fatalf("description = %q, missing %q", description, want)
+		}
+	}
+}
+
 func TestVariableFormSendsMaskedAndHiddenOnlyOnCreate(t *testing.T) {
 	input := variableInputFromUpsert(defaultOptions(), defaultUpsertRequest(testPayloadSHAOld, []byte("token_123"), 1))
 	input.Masked = true
@@ -1251,7 +1312,6 @@ func TestVariableFormSendsMaskedAndHiddenOnlyOnCreate(t *testing.T) {
 func TestOwnedByRequestRejectsRuntimeIdentityMismatch(t *testing.T) {
 	request := defaultUpsertRequest(testPayloadSHANew, []byte("secret"), 2)
 	metadata, owned := ownershipMetadata(ownedVariable(variableMetadata{
-		ManagedBy:        metadataManagedBy,
 		AssociationID:    request.AssociationID,
 		SourcePath:       request.SourcePath,
 		ObjectID:         request.ObjectID,
@@ -1320,31 +1380,13 @@ func TestVariableMetadataDescriptionFitsGitLabLimitWithRuntimeIdentity(t *testin
 	}
 
 	metadata, owned := ownershipMetadata(&gitlabVariable{Description: input.Description})
-	if metadata.ObjectIDHash == "" {
-		t.Fatalf("metadata object id was not compacted: %#v", metadata)
+	if metadata.ObjectID != request.ObjectID && metadata.ObjectIDHash == "" {
+		t.Fatalf("metadata object id is neither direct nor compacted: %#v", metadata)
 	}
 	if metadata.PluginInstanceIDHash == "" && metadata.RestoreEpochHash == "" {
 		t.Fatalf("metadata runtime identity was not compacted: %#v", metadata)
 	}
 	if !ownedByRequest(metadata, owned, ownershipIdentityFromUpsert(request)) {
 		t.Fatalf("compacted metadata does not match request identity: %#v", metadata)
-	}
-}
-
-func TestOwnedByRequestAcceptsLegacyHexMetadataHashes(t *testing.T) {
-	request := defaultUpsertRequest(testPayloadSHANew, []byte("secret"), 2)
-	metadata := variableMetadata{
-		ManagedBy:            metadataManagedBy,
-		AssociationID:        request.AssociationID,
-		SourcePathHash:       legacyMetadataIdentityHash(request.SourcePath),
-		ObjectIDHash:         legacyMetadataIdentityHash(request.ObjectID),
-		PluginInstanceIDHash: legacyMetadataIdentityHash(request.Runtime.PluginInstanceID),
-		RestoreEpochHash:     legacyMetadataIdentityHash(request.Runtime.RestoreEpoch),
-		SourceVersion:        request.SourceVersion,
-		PayloadSHA256:        request.PayloadSHA256,
-		PayloadFormat:        request.Format,
-	}
-	if !ownedByRequest(metadata, true, ownershipIdentityFromUpsert(request)) {
-		t.Fatalf("legacy hashed metadata does not match request identity: %#v", metadata)
 	}
 }

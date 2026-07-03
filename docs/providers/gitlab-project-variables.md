@@ -4,7 +4,7 @@
 
 The GitLab provider writes project-level CI/CD variables. Each association
 object maps to one GitLab variable key. The provider stores ownership metadata
-and payload hash metadata in the variable description.
+and payload hash metadata in a human-readable variable description.
 
 ## Supported auth modes
 
@@ -137,11 +137,15 @@ Destination reads can show non-sensitive variable attributes such as
 
 ## Ownership and delete behavior
 
-The provider stores ownership metadata in the GitLab variable description. The
-metadata includes the association ID, source path, source version, object ID,
-payload hash, plugin instance, and restore epoch. Owned update and delete
-operations require matching ownership metadata. If ownership cannot be proven,
-the provider returns an ownership error instead of mutating the variable.
+The provider stores ownership metadata in the GitLab variable description. New
+writes use a labelled single-line description that starts with
+`OpenBao sync:`. The visible summary includes the source path, object ID, and
+source version, followed by association, payload hash, format, plugin instance,
+and restore epoch metadata. Long identity values are replaced with stable
+hashes when needed to stay within GitLab's description limit. Owned update and
+delete operations require matching ownership metadata. If ownership cannot be
+proven, the provider returns an ownership error instead of mutating the
+variable.
 
 Plan, upsert no-op detection, and reconcile compare the GitLab API value
 readback with the desired payload hash. Manual value edits are detected even
