@@ -71,7 +71,6 @@ func TestOpenBaoPluginSyncsToKubernetesSecrets(t *testing.T) {
 	if ids := stringSlice(t, association.Data["sync_operation_ids"]); len(ids) != 1 {
 		t.Fatalf("sync_operation_ids = %v, want one operation", ids)
 	}
-	drainQueue(t, baoClient, 1)
 	assertKubernetesSecret(t, ctx, kubeClient, namespace, remoteName, "initial", "1")
 	assertStatus(t, baoClient, "SYNCED")
 	assertReconcilePlan(t, baoClient, "SYNCED")
@@ -91,14 +90,12 @@ func TestOpenBaoPluginSyncsToKubernetesSecrets(t *testing.T) {
 	assertReconcileApply(t, baoClient, "SYNCED")
 
 	writeSource(t, baoClient, "updated")
-	drainQueue(t, baoClient, 1)
 	assertKubernetesSecret(t, ctx, kubeClient, namespace, remoteName, "updated", "2")
 
 	deleteSecret := deletePath(t, baoClient, mountPath+"/data/app/db")
 	if ids := metadataOperationIDs(t, deleteSecret); len(ids) != 1 {
 		t.Fatalf("delete sync_operation_ids = %v, want one operation", ids)
 	}
-	drainQueue(t, baoClient, 1)
 	assertKubernetesSecretMissing(t, ctx, kubeClient, namespace, remoteName)
 	assertStatus(t, baoClient, "REMOTE_MISSING")
 }
@@ -151,7 +148,6 @@ func TestOpenBaoPluginSyncsSourceKeyDataMapWithTokenAuth(t *testing.T) {
 	if ids := stringSlice(t, association.Data["sync_operation_ids"]); len(ids) != 1 {
 		t.Fatalf("sync_operation_ids = %v, want one operation", ids)
 	}
-	drainQueue(t, baoClient, 1)
 	assertKubernetesDataMapSecret(t, ctx, kubeClient, namespace, remoteName, dataMapExpectation{
 		Managed: map[string]string{
 			"APP_username": "app",
@@ -168,7 +164,6 @@ func TestOpenBaoPluginSyncsSourceKeyDataMapWithTokenAuth(t *testing.T) {
 		"username": "app-v2",
 		"token":    "rotated-token",
 	})
-	drainQueue(t, baoClient, 1)
 	assertKubernetesDataMapSecret(t, ctx, kubeClient, namespace, remoteName, dataMapExpectation{
 		Managed: map[string]string{
 			"APP_username": "app-v2",
@@ -185,7 +180,6 @@ func TestOpenBaoPluginSyncsSourceKeyDataMapWithTokenAuth(t *testing.T) {
 	if ids := metadataOperationIDs(t, deleteSecret); len(ids) != 1 {
 		t.Fatalf("delete sync_operation_ids = %v, want one operation", ids)
 	}
-	drainQueue(t, baoClient, 1)
 	assertKubernetesSecretPreservedAfterDataMapDelete(t, ctx, kubeClient, namespace, remoteName)
 	assertStatus(t, baoClient, "REMOTE_MISSING")
 }
@@ -215,7 +209,6 @@ func TestOpenBaoPluginReportsKubernetesPolicyFailure(t *testing.T) {
 	if ids := stringSlice(t, association.Data["sync_operation_ids"]); len(ids) != 1 {
 		t.Fatalf("sync_operation_ids = %v, want one operation", ids)
 	}
-	drainQueue(t, baoClient, 1)
 	assertStatusDetails(t, baoClient, "DESTINATION_POLICY_ERROR", "authz")
 }
 
@@ -240,7 +233,6 @@ func TestOpenBaoPluginReportsKubernetesOwnershipLoss(t *testing.T) {
 	})
 	writeSource(t, baoClient, "initial")
 	write(t, baoClient, mountPath+"/associations/app/db", associationRequest(remoteName))
-	drainQueue(t, baoClient, 1)
 	assertKubernetesSecret(t, ctx, kubeClient, namespace, remoteName, "initial", "1")
 
 	secret := getKubernetesSecret(t, ctx, kubeClient, namespace, remoteName)
@@ -248,7 +240,6 @@ func TestOpenBaoPluginReportsKubernetesOwnershipLoss(t *testing.T) {
 	updateKubernetesSecret(t, ctx, kubeClient, namespace, secret)
 
 	writeSource(t, baoClient, "updated")
-	drainQueue(t, baoClient, 1)
 	assertStatusDetails(t, baoClient, "REMOTE_OWNERSHIP_LOST", "ownership")
 	assertKubernetesSecretPayload(t, ctx, kubeClient, namespace, remoteName, "initial")
 }
@@ -274,7 +265,6 @@ func TestOpenBaoPluginReportsKubernetesImmutableSecret(t *testing.T) {
 	})
 	writeSource(t, baoClient, "initial")
 	write(t, baoClient, mountPath+"/associations/app/db", associationRequest(remoteName))
-	drainQueue(t, baoClient, 1)
 	assertKubernetesSecret(t, ctx, kubeClient, namespace, remoteName, "initial", "1")
 
 	secret := getKubernetesSecret(t, ctx, kubeClient, namespace, remoteName)
@@ -283,7 +273,6 @@ func TestOpenBaoPluginReportsKubernetesImmutableSecret(t *testing.T) {
 	updateKubernetesSecret(t, ctx, kubeClient, namespace, secret)
 
 	writeSource(t, baoClient, "updated")
-	drainQueue(t, baoClient, 1)
 	assertStatusDetails(t, baoClient, "VALIDATION_ERROR", "validation")
 	assertKubernetesSecretPayload(t, ctx, kubeClient, namespace, remoteName, "initial")
 }
@@ -568,16 +557,6 @@ func deletePath(t *testing.T, client *api.Client, path string) *api.Secret {
 	return secret
 }
 
-func drainQueue(t *testing.T, client *api.Client, expectedProcessed int) {
-	t.Helper()
-	secret := write(t, client, mountPath+"/queue/drain", map[string]interface{}{
-		"max_operations": expectedProcessed,
-	})
-	if got := intFromSecret(t, secret.Data["processed"]); got != expectedProcessed {
-		t.Fatalf("queue drain processed = %d, want %d", got, expectedProcessed)
-	}
-}
-
 func enableBackgroundRepair(t *testing.T, client *api.Client) {
 	t.Helper()
 	write(t, client, mountPath+"/config", map[string]interface{}{
@@ -845,57 +824,72 @@ func createNamespace(
 
 func assertStatus(t *testing.T, client *api.Client, expectedState string) {
 	t.Helper()
-	secret := readStatus(t, client)
-	if got := secret.Data["state"]; got != expectedState {
-		t.Fatalf("status state = %v, want %s", got, expectedState)
-	}
+	waitFor(t, context.Background(), func() error {
+		secret, err := client.Logical().Read(mountPath + "/status/app/db")
+		if err != nil {
+			return err
+		}
+		if secret == nil {
+			return errors.New("status response is nil")
+		}
+		if got := secret.Data["state"]; got != expectedState {
+			return fmt.Errorf("status state = %v, want %s", got, expectedState)
+		}
+		return nil
+	})
 }
 
 func assertStatusDetails(t *testing.T, client *api.Client, expectedState string, expectedErrorClass string) {
 	t.Helper()
-	secret := readStatus(t, client)
-	if got := secret.Data["state"]; got != expectedState {
-		t.Fatalf("status state = %v, want %s", got, expectedState)
-	}
-	if got := secret.Data["last_error_class"]; got != expectedErrorClass {
-		t.Fatalf("status last_error_class = %v, want %s", got, expectedErrorClass)
-	}
+	waitFor(t, context.Background(), func() error {
+		secret, err := client.Logical().Read(mountPath + "/status/app/db")
+		if err != nil {
+			return err
+		}
+		if secret == nil {
+			return errors.New("status response is nil")
+		}
+		if got := secret.Data["state"]; got != expectedState {
+			return fmt.Errorf("status state = %v, want %s", got, expectedState)
+		}
+		if got := secret.Data["last_error_class"]; got != expectedErrorClass {
+			return fmt.Errorf("status last_error_class = %v, want %s", got, expectedErrorClass)
+		}
+		return nil
+	})
 }
 
 func assertBackgroundRepairStatus(t *testing.T, client *api.Client, expectedVerification string) {
 	t.Helper()
-	secret := readStatus(t, client)
-	if got := secret.Data["state"]; got != "SYNCED" {
-		t.Fatalf("status state = %v, want SYNCED", got)
-	}
-	object := objectByID(t, objectsFromSecret(t, secret.Data["objects"]), "secret-path")
-	if got := object["state"]; got != "SYNCED" {
-		t.Fatalf("status object state = %v, want SYNCED", got)
-	}
-	if got := object["verification"]; got != expectedVerification {
-		t.Fatalf("status verification = %v, want %s", got, expectedVerification)
-	}
-	if got := object["last_drift_detected_time"]; got == "" {
-		t.Fatal("last_drift_detected_time must be set after background repair")
-	}
-	if got := object["last_repair_time"]; got == "" {
-		t.Fatal("last_repair_time must be set after background repair")
-	}
-	if got := intFromSecret(t, object["repair_count"]); got < 1 {
-		t.Fatalf("repair_count = %d, want at least 1", got)
-	}
-}
-
-func readStatus(t *testing.T, client *api.Client) *api.Secret {
-	t.Helper()
-	secret, err := client.Logical().Read(mountPath + "/status/app/db")
-	if err != nil {
-		t.Fatalf("read status: %v", err)
-	}
-	if secret == nil {
-		t.Fatal("status response is nil")
-	}
-	return secret
+	waitFor(t, context.Background(), func() error {
+		secret, err := client.Logical().Read(mountPath + "/status/app/db")
+		if err != nil {
+			return err
+		}
+		if secret == nil {
+			return errors.New("status response is nil")
+		}
+		if got := secret.Data["state"]; got != "SYNCED" {
+			return fmt.Errorf("status state = %v, want SYNCED", got)
+		}
+		object := objectByID(t, objectsFromSecret(t, secret.Data["objects"]), "secret-path")
+		if got := object["state"]; got != "SYNCED" {
+			return fmt.Errorf("status object state = %v, want SYNCED", got)
+		}
+		if got := object["verification"]; got != expectedVerification {
+			return fmt.Errorf("status verification = %v, want %s", got, expectedVerification)
+		}
+		if got := object["last_drift_detected_time"]; got == "" {
+			return errors.New("last_drift_detected_time must be set after background repair")
+		}
+		if got := object["last_repair_time"]; got == "" {
+			return errors.New("last_repair_time must be set after background repair")
+		}
+		if got := intFromSecret(t, object["repair_count"]); got < 1 {
+			return fmt.Errorf("repair_count = %d, want at least 1", got)
+		}
+		return nil
+	})
 }
 
 func objectsFromSecret(t *testing.T, raw interface{}) []map[string]interface{} {
