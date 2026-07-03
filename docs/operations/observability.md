@@ -34,9 +34,11 @@ Instrumentation points:
 
 - queue summary reads and drains record queue depth by durable outbox state,
   configured capacity, and capacity utilization;
-- queue drain records a logical drain operation result;
-- blocked periodic runs, background drift repair enqueue attempts, and manual
-  drains record the safety gate that blocked remote mutation;
+- queue drain and event-triggered dispatch record distinct logical operation
+  results; empty event-dispatch wakes are reported as skipped;
+- blocked periodic runs, event-triggered dispatch, background drift repair
+  enqueue attempts, and manual drains record the safety gate that blocked remote
+  mutation;
 - dispatch records logical upsert/delete operation outcomes;
 - destination readiness checks record a low-cardinality source or destination
   check result and primary blocker;

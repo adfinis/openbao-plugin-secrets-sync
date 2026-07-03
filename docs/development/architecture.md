@@ -54,7 +54,8 @@ managed tokens, or network loopback calls between plugins.
 |   Source store              Source metadata store                        |
 |   Destination registry      Association registry                         |
 |   Outbox queue              Sync dispatcher                              |
-|   Reconciler                Status store                                 |
+|   Event dispatch wakeups    Reconciler                                   |
+|   Status store                                                            |
 |   Provider registry         Runtime cache                                |
 |   Capability validation     Redaction and error classification           |
 |   Observability recorder    Runtime identity                             |
@@ -232,16 +233,37 @@ automatically. Authentication, authorization, validation, ownership, collision,
 drift, capacity, and internal failures remain terminal until an operator
 changes configuration or retries the operation manually.
 
+Event-triggered dispatch wakes the same dispatcher after successful
+enqueue-producing requests, such as source writes, association activation,
+manual association sync, queue retry, and config changes that resume remote
+mutation. The wakeup is best-effort, coalesced, and bounded by
+`event_dispatch_max_operations` per pass. If a pass processes the full limit,
+the event dispatcher immediately re-checks mutation gates and runs another pass
+until a pass comes back under the limit. This makes the per-pass limit a
+fairness boundary instead of a throughput ceiling. Retry-wait operations arm a
+timer for the earliest future `not_before` value so retries do not wait for the
+periodic tick.
+
+Event dispatch does not make API responses synchronous: source and association
+responses still report queued operation IDs and the periodic callback remains
+the recovery path for missed wakeups, plugin restarts, and incomplete enqueue
+intents.
+
+The current dispatcher is intentionally sequential. Dispatch claims already
+allow safe concurrency, so a future throughput step can add a bounded worker
+pool partitioned by destination reference to prevent a slow destination from
+serializing unrelated destinations.
+
 ## Enqueue recovery
 
 Source writes and source lifecycle mutations write enqueue intents before they
 write outbox records. Enqueue intents contain the expected operation IDs,
 operation types, association IDs, object IDs, and destination references.
 
-Periodic work and queue drains recover incomplete enqueue intents before
-processing due outbox records. Upsert intents recover only while the source
-version is live. Delete intents recover only when the referenced source version
-is deleted or unavailable.
+Periodic work, queue drains, and event-triggered dispatch recover incomplete
+enqueue intents before processing due outbox records. Upsert intents recover only
+while the source version is live. Delete intents recover only when the
+referenced source version is deleted or unavailable.
 
 ## Ordering
 
@@ -284,9 +306,9 @@ local status from provider read-state results.
 
 ## HA and replication
 
-Secret Sync assumes OpenBao routes writes to an active node. Periodic and
-manual remote mutation paths check OpenBao replication state before writing
-queue or status records or calling providers.
+Secret Sync assumes OpenBao routes writes to an active node. Periodic, manual
+drain, and event-triggered remote mutation paths check OpenBao replication state
+before writing queue or status records or calling providers.
 
 Remote mutation is blocked on unsafe replication states, including performance
 secondary, performance standby, performance bootstrapping, DR secondary, and
@@ -322,6 +344,8 @@ Preserve these invariants:
   support.
 - Restore guard blocks background and manual-drain remote mutation until an
   operator acknowledges it.
+- Event-triggered dispatch is only a low-latency wakeup for durable queued work;
+  periodic processing remains the fallback.
 - Reconcile reads provider state and updates local status only.
 - Older operations cannot overwrite newer per-object status.
 - Provider capability flags must match implemented and tested behavior.

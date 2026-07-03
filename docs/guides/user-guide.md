@@ -12,7 +12,8 @@ The plugin supports:
   `custom_metadata.syncable=true` when `require_source_opt_in=true`;
 - destination config for AWS Secrets Manager, Kubernetes Secrets, and GitLab
   project variables;
-- asynchronous queue processing with manual `queue/drain`;
+- asynchronous queue processing with event-triggered dispatch and manual
+  `queue/drain`;
 - association planning, create, manual sync, disable, enable, and delete;
 - status inspection, background drift detection or repair, and explicit remote
   delete semantics.
@@ -77,6 +78,13 @@ bao write secret-sync/config \
 reconcile remains available. Restore guard keeps remote mutation blocked but
 still allows read-only drift detection so operators can inspect state before
 acknowledgement.
+
+Fresh mounts also default `event_dispatch_enabled=true`. Enqueue-producing
+requests wake a bounded dispatcher immediately after durable queue commit, so
+normal sync usually starts without waiting for the periodic callback. The API
+contract remains asynchronous: writes still return `sync_operation_ids`, and
+periodic processing remains the recovery path for missed wakeups, retries, and
+restart recovery. Tune one wakeup batch with `event_dispatch_max_operations`.
 
 ## Choose a provider
 
@@ -208,7 +216,8 @@ Some providers support `data_mapping=source-keys`, which keeps
 data keys inside one remote object. For Kubernetes Secrets this writes one
 Secret object whose `.data` entries are rendered from `data_key_template`.
 
-The write returns `sync_operation_ids`. Queue processing is asynchronous.
+The write returns `sync_operation_ids`. Queue processing is asynchronous, even
+when event-triggered dispatch starts provider work immediately after enqueue.
 For one-to-one associations, lifecycle responses also include top-level fields
 such as `association_id`, `destination_ref`, `resolved_name`, `enabled`, and
 `delete_mode` so they are easy to read in the default `bao` table output. The
@@ -216,7 +225,9 @@ nested `association` object remains available for scripts.
 
 ## Process and inspect queue work
 
-Drain due operations manually for deterministic testing or controlled catch-up:
+Event-triggered dispatch normally wakes the queue after enqueue and when a
+retry-wait operation becomes due. Drain due operations manually for
+deterministic testing or controlled catch-up:
 
 ```sh
 bao write secret-sync/queue/drain max_operations=10
@@ -325,8 +336,6 @@ Updating the source path enqueues sync for enabled associations:
 ```sh
 bao write secret-sync/data/app/db \
   @<(printf '%s' '{"data":{"password":"updated"}}')
-
-bao write secret-sync/queue/drain max_operations=10
 ```
 
 Deleting the latest source version enqueues remote delete only for associations
@@ -334,7 +343,6 @@ with `delete_mode=delete`:
 
 ```sh
 bao delete secret-sync/data/app/db
-bao write secret-sync/queue/drain max_operations=10
 ```
 
 Use `delete_mode=retain` when remote secrets must remain after local source
