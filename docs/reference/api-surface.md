@@ -106,6 +106,10 @@ Association creation and updates validate provider capabilities before they are
 accepted.
 Association create, update, plan, and destination-addressed lifecycle requests
 use `destination=<type>/<name>` to identify the destination.
+Updates that resolve exactly one existing association may change non-identity
+fields in place. Changes to `granularity` or the remote-name reservation
+(`resolved_name` for `secret-path`, `name_template` for `secret-key`) require an
+explicit new association plus deletion of the old one.
 
 ## Queue, status, and reconcile
 

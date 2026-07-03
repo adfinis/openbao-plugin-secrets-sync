@@ -217,6 +217,184 @@ func TestAssociationUpdateMergesOmittedFieldsFromExistingRecord(t *testing.T) {
 	}
 }
 
+func TestAssociationUpdateRejectsGranularityIdentityChange(t *testing.T) {
+	env := newBackendTestEnv(t)
+
+	env.writeAppDBSecretData(map[string]interface{}{
+		"password": "initial",
+		"username": "appuser",
+	})
+	env.createFakeDestination("default")
+	env.markAppDBSyncable()
+	initialResp := env.update("associations/app/db", map[string]interface{}{
+		"destination":   destinationRef(providerTypeFake, "default"),
+		"resolved_name": "prod/app/db",
+		"granularity":   syncGranularitySecretPath,
+		"format":        defaultAssociationFormat,
+		"enabled":       false,
+	})
+	assertNoErrorResponse(t, initialResp)
+	associationID := associationIDFromResponse(t, initialResp)
+
+	updateResp := env.update("associations/app/db", map[string]interface{}{
+		"destination":   destinationRef(providerTypeFake, "default"),
+		"name_template": "prod/{{ path }}/{{ key }}",
+		"granularity":   syncGranularitySecretKey,
+		"format":        defaultAssociationFormat,
+	})
+	assertAssociationIdentityGuardError(t, updateResp, "granularity", associationID)
+	assertStoredAssociationIdentity(t, env.storage, associationID, syncGranularitySecretPath, "prod/app/db")
+
+	enableResp := env.update("associations/app/db/"+associationID+"/enable", nil)
+	assertNoErrorResponse(t, enableResp)
+	operationID := requireSingleOperationID(t, operationIDsFromResponse(t, enableResp), "enable")
+	operation := assertOutboxOperation(t, env.storage, operationID, 1, outboxStatePending)
+	if operation.AssociationID != associationID {
+		t.Fatalf("operation association ID = %s, want %s", operation.AssociationID, associationID)
+	}
+
+	explicitCreateResp := env.handle(logical.CreateOperation, "associations/app/db", map[string]interface{}{
+		"destination":   destinationRef(providerTypeFake, "default"),
+		"name_template": "prod/{{ path }}/{{ key }}",
+		"granularity":   syncGranularitySecretKey,
+		"format":        defaultAssociationFormat,
+		"enabled":       false,
+	})
+	assertNoErrorResponse(t, explicitCreateResp)
+	explicitAssociationID := associationIDFromResponse(t, explicitCreateResp)
+	if explicitAssociationID == associationID {
+		t.Fatalf("explicit create association ID = %s, want a distinct ID", explicitAssociationID)
+	}
+	assertAssociationCount(t, env.storage, "app/db", 2)
+}
+
+func TestAssociationUpdateRejectsReservationIdentityChange(t *testing.T) {
+	tests := []struct {
+		name            string
+		initialRequest  map[string]interface{}
+		updateRequest   map[string]interface{}
+		field           string
+		granularity     string
+		reservationName string
+	}{
+		{
+			name: "secret path resolved name",
+			initialRequest: map[string]interface{}{
+				"destination":   destinationRef(providerTypeFake, "default"),
+				"resolved_name": "prod/app/db",
+				"granularity":   syncGranularitySecretPath,
+				"format":        defaultAssociationFormat,
+				"enabled":       false,
+			},
+			updateRequest: map[string]interface{}{
+				"destination":   destinationRef(providerTypeFake, "default"),
+				"resolved_name": "prod/app/renamed",
+			},
+			field:           "resolved_name",
+			granularity:     syncGranularitySecretPath,
+			reservationName: "prod/app/db",
+		},
+		{
+			name: "secret key name template",
+			initialRequest: map[string]interface{}{
+				"destination":   destinationRef(providerTypeFake, "default"),
+				"name_template": "prod/{{ path }}/{{ key }}",
+				"granularity":   syncGranularitySecretKey,
+				"format":        defaultAssociationFormat,
+				"enabled":       false,
+			},
+			updateRequest: map[string]interface{}{
+				"destination":   destinationRef(providerTypeFake, "default"),
+				"name_template": "prod/{{ path }}/renamed/{{ key }}",
+			},
+			field:           "name_template",
+			granularity:     syncGranularitySecretKey,
+			reservationName: "prod/{{ path }}/{{ key }}",
+		},
+	}
+
+	for _, testCase := range tests {
+		t.Run(testCase.name, func(t *testing.T) {
+			env := newBackendTestEnv(t)
+			env.writeAppDBSecretData(map[string]interface{}{
+				"password": "initial",
+			})
+			env.createFakeDestination("default")
+			env.markAppDBSyncable()
+			initialResp := env.update("associations/app/db", testCase.initialRequest)
+			assertNoErrorResponse(t, initialResp)
+			associationID := associationIDFromResponse(t, initialResp)
+
+			updateResp := env.update("associations/app/db", testCase.updateRequest)
+			assertAssociationIdentityGuardError(t, updateResp, testCase.field, associationID)
+			assertStoredAssociationIdentity(
+				t,
+				env.storage,
+				associationID,
+				testCase.granularity,
+				testCase.reservationName,
+			)
+		})
+	}
+}
+
+func assertAssociationIdentityGuardError(
+	t *testing.T,
+	resp *logical.Response,
+	field string,
+	associationID string,
+) {
+	t.Helper()
+	if resp == nil || !resp.IsError() {
+		t.Fatalf("identity guard response = %#v, want error", resp)
+	}
+	message := resp.Error().Error()
+	for _, want := range []string{
+		field + " change would create a new association identity",
+		"delete " + associationID + " first",
+		"create the new association and delete the old one explicitly",
+	} {
+		if !strings.Contains(message, want) {
+			t.Fatalf("identity guard error = %q, want substring %q", message, want)
+		}
+	}
+}
+
+func assertStoredAssociationIdentity(
+	t *testing.T,
+	storage logical.Storage,
+	associationID string,
+	granularity string,
+	reservationName string,
+) {
+	t.Helper()
+	assertAssociationCount(t, storage, "app/db", 1)
+	record, err := getAssociation(context.Background(), storage, "app/db", associationID)
+	if err != nil {
+		t.Fatalf("read association: %v", err)
+	}
+	if record == nil {
+		t.Fatalf("association %s must exist", associationID)
+	}
+	if record.Granularity != granularity {
+		t.Fatalf("association granularity = %s, want %s", record.Granularity, granularity)
+	}
+	if got := record.reservationName(); got != reservationName {
+		t.Fatalf("association reservation = %s, want %s", got, reservationName)
+	}
+}
+
+func assertAssociationCount(t *testing.T, storage logical.Storage, path string, want int) {
+	t.Helper()
+	records, err := listAssociationsForPath(context.Background(), storage, path)
+	if err != nil {
+		t.Fatalf("list associations: %v", err)
+	}
+	if len(records) != want {
+		t.Fatalf("association count = %d, want %d", len(records), want)
+	}
+}
+
 func TestAssociationUpdateEnqueuesWhenEnablingExistingRecord(t *testing.T) {
 	env := newBackendTestEnv(t)
 
@@ -288,7 +466,7 @@ func TestAssociationUpdateRejectsAmbiguousDestinationBase(t *testing.T) {
 		"format":        defaultAssociationFormat,
 	})
 	assertNoErrorResponse(t, firstResp)
-	secondResp := env.update("associations/app/db", map[string]interface{}{
+	secondResp := env.handle(logical.CreateOperation, "associations/app/db", map[string]interface{}{
 		"destination":   destinationRef(providerTypeFake, "default"),
 		"name_template": "prod/{{ path }}/{{ key }}",
 		"granularity":   syncGranularitySecretKey,
@@ -703,7 +881,14 @@ func TestAssociationDestinationAddressedLifecycleRejectsAmbiguousDestination(t *
 	})
 	env.createFakeDestination("default")
 	assertNoErrorResponse(t, env.createDefaultFakeAssociation())
-	env.createFakeSecretKeyAssociation(deleteModeRetain)
+	secondResp := env.handle(logical.CreateOperation, "associations/app/db", map[string]interface{}{
+		"destination":   destinationRef(providerTypeFake, "default"),
+		"name_template": "prod/{{ path }}/{{ key }}",
+		"granularity":   syncGranularitySecretKey,
+		"format":        defaultAssociationFormat,
+		"delete_mode":   deleteModeRetain,
+	})
+	assertNoErrorResponse(t, secondResp)
 
 	disableResp := env.update(
 		"associations/app/db/disable",
