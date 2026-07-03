@@ -29,6 +29,8 @@ const (
 	rootToken        = "root"
 	testPollInterval = 500 * time.Millisecond
 	testTimeout      = 90 * time.Second
+
+	gitLabMetadataDescriptionPrefix = "OpenBao sync: "
 )
 
 func TestOpenBaoPluginSyncsToGitLabProjectVariables(t *testing.T) {
@@ -50,6 +52,7 @@ func TestOpenBaoPluginSyncsToGitLabProjectVariables(t *testing.T) {
 	assertDestinationValid(t, baoClient)
 	assertDestinationHealthy(t, baoClient)
 	acknowledgeRestoreGuard(t, baoClient)
+	disableEventDispatch(t, baoClient)
 	write(t, baoClient, mountPath+"/metadata/app/db", map[string]interface{}{
 		"custom_metadata": map[string]interface{}{
 			"syncable": "true",
@@ -223,6 +226,13 @@ func mountPlugin(t *testing.T, client *api.Client) {
 func acknowledgeRestoreGuard(t *testing.T, client *api.Client) {
 	t.Helper()
 	write(t, client, mountPath+"/config/restore-guard/acknowledge", map[string]interface{}{})
+}
+
+func disableEventDispatch(t *testing.T, client *api.Client) {
+	t.Helper()
+	write(t, client, mountPath+"/config", map[string]interface{}{
+		"event_dispatch_enabled": false,
+	})
 }
 
 func assertDestinationValid(t *testing.T, client *api.Client) {
@@ -400,15 +410,14 @@ type gitLabVariable struct {
 }
 
 type variableMetadata struct {
-	ManagedBy      string `json:"m"`
-	AssociationID  string `json:"a"`
-	SourcePath     string `json:"p"`
-	SourcePathHash string `json:"ph"`
-	ObjectID       string `json:"o"`
-	ObjectIDHash   string `json:"oh"`
-	SourceVersion  int    `json:"v"`
-	PayloadSHA256  string `json:"h"`
-	PayloadFormat  string `json:"f"`
+	AssociationID  string
+	SourcePath     string
+	SourcePathHash string
+	ObjectID       string
+	ObjectIDHash   string
+	SourceVersion  int
+	PayloadSHA256  string
+	PayloadFormat  string
 }
 
 func newGitLabClient(t *testing.T) gitLabClient {
@@ -623,14 +632,190 @@ func assertGitLabVariableMissing(t *testing.T, ctx context.Context, client gitLa
 
 func variableMetadataFromDescription(t *testing.T, description string) variableMetadata {
 	t.Helper()
-	var metadata variableMetadata
-	if err := json.Unmarshal([]byte(description), &metadata); err != nil {
-		t.Fatalf("parse variable metadata description: %v", err)
+	payload, ok := strings.CutPrefix(description, gitLabMetadataDescriptionPrefix)
+	if !ok {
+		t.Fatalf("description = %q, want prefix %q", description, gitLabMetadataDescriptionPrefix)
 	}
-	if metadata.ManagedBy != "1" {
-		t.Fatalf("metadata managed_by = %q, want 1", metadata.ManagedBy)
+	summary, payload, ok := cutMetadataDescriptionSummary(payload)
+	if !ok {
+		t.Fatalf("description = %q, want summary and metadata fields", description)
 	}
-	return metadata
+	sourcePath, sourcePathHash, objectID, objectIDHash, sourceVersion := metadataDescriptionSummary(t, summary)
+	fields := metadataDescriptionFields(t, payload)
+	return variableMetadata{
+		AssociationID:  metadataDescriptionFieldValue(fields, "assoc", "a"),
+		SourcePath:     sourcePath,
+		SourcePathHash: sourcePathHash,
+		ObjectID:       objectID,
+		ObjectIDHash:   objectIDHash,
+		SourceVersion:  sourceVersion,
+		PayloadSHA256:  metadataDescriptionFieldValue(fields, "sha", "h"),
+		PayloadFormat:  metadataDescriptionFieldValue(fields, "fmt", "f"),
+	}
+}
+
+func metadataDescriptionSummary(t *testing.T, summary string) (string, string, string, string, int) {
+	t.Helper()
+	parts := splitMetadataDescriptionSummary(summary)
+	if len(parts) != 3 {
+		t.Fatalf("description summary = %q, want source, object, and version", summary)
+	}
+	sourcePath, err := unescapeMetadataDescriptionValue(parts[0])
+	if err != nil {
+		t.Fatalf("decode source path summary: %v", err)
+	}
+	sourcePathHash := ""
+	if hash, ok := strings.CutPrefix(sourcePath, "path#"); ok {
+		sourcePath = ""
+		sourcePathHash = hash
+	}
+	objectID, err := unescapeMetadataDescriptionValue(parts[1])
+	if err != nil {
+		t.Fatalf("decode object id summary: %v", err)
+	}
+	objectIDHash := ""
+	if hash, ok := strings.CutPrefix(objectID, "object#"); ok {
+		objectID = ""
+		objectIDHash = hash
+	}
+	version, ok := strings.CutPrefix(parts[2], "v")
+	if !ok {
+		t.Fatalf("description summary version = %q, want v-prefixed version", parts[2])
+	}
+	return sourcePath, sourcePathHash, objectID, objectIDHash, intFromString(t, version)
+}
+
+func metadataDescriptionFields(t *testing.T, payload string) map[string]string {
+	t.Helper()
+	fields := make(map[string]string)
+	for _, field := range splitMetadataDescriptionFields(payload) {
+		field = strings.TrimLeft(field, " ")
+		key, value, ok := strings.Cut(field, "=")
+		if !ok {
+			t.Fatalf("description field %q is missing value", field)
+		}
+		decoded, err := unescapeMetadataDescriptionValue(value)
+		if err != nil {
+			t.Fatalf("decode description field %q: %v", field, err)
+		}
+		fields[strings.TrimSpace(key)] = decoded
+	}
+	return fields
+}
+
+func cutMetadataDescriptionSummary(payload string) (string, string, bool) {
+	escaped := false
+	for index, char := range payload {
+		if escaped {
+			escaped = false
+			continue
+		}
+		switch char {
+		case '\\':
+			escaped = true
+		case ';':
+			return payload[:index], payload[index+1:], true
+		}
+	}
+	return "", "", false
+}
+
+func metadataDescriptionFieldValue(fields map[string]string, keys ...string) string {
+	for _, key := range keys {
+		if fields[key] != "" {
+			return fields[key]
+		}
+	}
+	return ""
+}
+
+func splitMetadataDescriptionSummary(payload string) []string {
+	fields := make([]string, 0, strings.Count(payload, " ")+1)
+	var builder strings.Builder
+	escaped := false
+	for _, char := range payload {
+		if escaped {
+			builder.WriteRune('\\')
+			builder.WriteRune(char)
+			escaped = false
+			continue
+		}
+		switch char {
+		case '\\':
+			escaped = true
+		case ' ':
+			fields = append(fields, builder.String())
+			builder.Reset()
+		default:
+			builder.WriteRune(char)
+		}
+	}
+	if escaped {
+		builder.WriteRune('\\')
+	}
+	fields = append(fields, builder.String())
+	return fields
+}
+
+func splitMetadataDescriptionFields(payload string) []string {
+	fields := make([]string, 0, strings.Count(payload, ";")+1)
+	var builder strings.Builder
+	escaped := false
+	for _, char := range payload {
+		if escaped {
+			builder.WriteRune('\\')
+			builder.WriteRune(char)
+			escaped = false
+			continue
+		}
+		switch char {
+		case '\\':
+			escaped = true
+		case ';':
+			fields = append(fields, builder.String())
+			builder.Reset()
+		default:
+			builder.WriteRune(char)
+		}
+	}
+	if escaped {
+		builder.WriteRune('\\')
+	}
+	fields = append(fields, builder.String())
+	return fields
+}
+
+func unescapeMetadataDescriptionValue(value string) (string, error) {
+	var builder strings.Builder
+	builder.Grow(len(value))
+	escaped := false
+	for _, char := range value {
+		if escaped {
+			switch char {
+			case '\\', ';':
+				builder.WriteRune(char)
+			case 's':
+				builder.WriteRune(' ')
+			case 'n':
+				builder.WriteRune('\n')
+			case 'r':
+				builder.WriteRune('\r')
+			default:
+				return "", fmt.Errorf("invalid escape sequence")
+			}
+			escaped = false
+			continue
+		}
+		if char == '\\' {
+			escaped = true
+			continue
+		}
+		builder.WriteRune(char)
+	}
+	if escaped {
+		return "", fmt.Errorf("trailing escape character")
+	}
+	return builder.String(), nil
 }
 
 func associationIDFromResponse(t *testing.T, secret *api.Secret) string {

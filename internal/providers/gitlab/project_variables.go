@@ -62,8 +62,10 @@ const (
 	defaultHTTPTimeout          = 30 * time.Second
 	gitlabResponseMaxBytes      = 1024 * 1024
 
-	metadataManagedBy        = "openbao-plugin-secrets-sync"
-	metadataManagedByCompact = "1"
+	metadataDescriptionPrefix           = "OpenBao sync: "
+	metadataDescriptionCompactedPath    = "path#"
+	metadataDescriptionCompactedObject  = "object#"
+	metadataDescriptionCompactedVersion = "v"
 )
 
 type projectVariableClient interface {
@@ -180,7 +182,8 @@ func (r destinationRuntime) Plan(ctx context.Context, req providers.PlanRequest)
 	}
 	if metadata.PayloadSHA256 == req.PayloadSHA256 &&
 		variablePayloadSHA256(variable) == req.PayloadSHA256 &&
-		variableMatchesDestinationOptions(variable, r.options) {
+		variableMatchesDestinationOptions(variable, r.options) &&
+		variable.Description == variableDescriptionFromPlan(req) {
 		return &providers.PlanResult{Action: providers.PlanActionNoop}, nil
 	}
 	return &providers.PlanResult{Action: providers.PlanActionUpdate}, nil
@@ -527,7 +530,8 @@ func variableMatchesInput(variable *gitlabVariable, input gitlabVariableInput) b
 		variable.Protected == input.Protected &&
 		variable.Masked == input.Masked &&
 		variable.VariableRaw == input.VariableRaw &&
-		variable.VariableType == input.VariableType
+		variable.VariableType == input.VariableType &&
+		variable.Description == input.Description
 }
 
 type ownershipIdentity struct {
@@ -579,41 +583,37 @@ func ownershipIdentityFromReadState(req providers.ReadStateRequest) ownershipIde
 }
 
 type variableMetadata struct {
-	ManagedBy            string `json:"managed_by"`
-	AssociationID        string `json:"association_id"`
-	SourcePath           string `json:"source_path"`
-	SourcePathHash       string `json:"-"`
-	ObjectID             string `json:"object_id"`
-	ObjectIDHash         string `json:"-"`
-	PluginInstanceID     string `json:"plugin_instance_id,omitempty"`
-	PluginInstanceIDHash string `json:"-"`
-	RestoreEpoch         string `json:"restore_epoch,omitempty"`
-	RestoreEpochHash     string `json:"-"`
-	SourceVersion        int    `json:"source_version"`
-	PayloadSHA256        string `json:"payload_sha256"`
-	PayloadFormat        string `json:"payload_format"`
-	EnvironmentRef       string `json:"environment_scope"`
+	AssociationID        string
+	SourcePath           string
+	SourcePathHash       string
+	ObjectID             string
+	ObjectIDHash         string
+	PluginInstanceID     string
+	PluginInstanceIDHash string
+	RestoreEpoch         string
+	RestoreEpochHash     string
+	SourceVersion        int
+	PayloadSHA256        string
+	PayloadFormat        string
 }
 
 type variableMetadataWire struct {
-	ManagedBy            string `json:"m"`
-	AssociationID        string `json:"a"`
-	SourcePath           string `json:"p,omitempty"`
-	SourcePathHash       string `json:"ph,omitempty"`
-	ObjectID             string `json:"o,omitempty"`
-	ObjectIDHash         string `json:"oh,omitempty"`
-	PluginInstanceID     string `json:"i,omitempty"`
-	PluginInstanceIDHash string `json:"ih,omitempty"`
-	RestoreEpoch         string `json:"r,omitempty"`
-	RestoreEpochHash     string `json:"rh,omitempty"`
-	SourceVersion        int    `json:"v"`
-	PayloadSHA256        string `json:"h"`
-	PayloadFormat        string `json:"f"`
+	AssociationID        string
+	SourcePath           string
+	SourcePathHash       string
+	ObjectID             string
+	ObjectIDHash         string
+	PluginInstanceID     string
+	PluginInstanceIDHash string
+	RestoreEpoch         string
+	RestoreEpochHash     string
+	SourceVersion        int
+	PayloadSHA256        string
+	PayloadFormat        string
 }
 
 func variableInputFromUpsert(options gitlabDestinationOptions, req providers.UpsertRequest) gitlabVariableInput {
 	metadata := variableMetadata{
-		ManagedBy:        metadataManagedBy,
 		AssociationID:    req.AssociationID,
 		SourcePath:       req.SourcePath,
 		ObjectID:         req.ObjectID,
@@ -622,7 +622,6 @@ func variableInputFromUpsert(options gitlabDestinationOptions, req providers.Ups
 		SourceVersion:    req.SourceVersion,
 		PayloadSHA256:    req.PayloadSHA256,
 		PayloadFormat:    req.Format,
-		EnvironmentRef:   options.environmentScope,
 	}
 	return gitlabVariableInput{
 		Key:              req.ResolvedName,
@@ -637,9 +636,21 @@ func variableInputFromUpsert(options gitlabDestinationOptions, req providers.Ups
 	}
 }
 
+func variableDescriptionFromPlan(req providers.PlanRequest) string {
+	return metadataDescription(variableMetadata{
+		AssociationID:    req.AssociationID,
+		SourcePath:       req.SourcePath,
+		ObjectID:         req.ObjectID,
+		PluginInstanceID: req.Runtime.PluginInstanceID,
+		RestoreEpoch:     req.Runtime.RestoreEpoch,
+		SourceVersion:    req.SourceVersion,
+		PayloadSHA256:    req.PayloadSHA256,
+		PayloadFormat:    req.Format,
+	})
+}
+
 func metadataDescription(metadata variableMetadata) string {
 	wire := variableMetadataWire{
-		ManagedBy:        metadataManagedByCompact,
 		AssociationID:    metadata.AssociationID,
 		SourcePath:       metadata.SourcePath,
 		ObjectID:         metadata.ObjectID,
@@ -649,35 +660,121 @@ func metadataDescription(metadata variableMetadata) string {
 		PayloadSHA256:    metadata.PayloadSHA256,
 		PayloadFormat:    metadata.PayloadFormat,
 	}
-	payload := mustMarshalMetadata(wire)
+	compactWireIdentity(&wire.PluginInstanceID, &wire.PluginInstanceIDHash)
+	compactWireIdentity(&wire.RestoreEpoch, &wire.RestoreEpochHash)
+	payload := humanMetadataDescription(wire, false)
 	if len(payload) <= variableDescriptionMaxBytes {
 		return payload
 	}
 	if compactWireIdentity(&wire.ObjectID, &wire.ObjectIDHash) {
-		payload = mustMarshalMetadata(wire)
+		payload = humanMetadataDescription(wire, false)
 		if len(payload) <= variableDescriptionMaxBytes {
 			return payload
 		}
 	}
 	if compactWireIdentity(&wire.SourcePath, &wire.SourcePathHash) {
-		payload = mustMarshalMetadata(wire)
+		payload = humanMetadataDescription(wire, false)
 		if len(payload) <= variableDescriptionMaxBytes {
 			return payload
 		}
 	}
-	if compactWireIdentity(&wire.PluginInstanceID, &wire.PluginInstanceIDHash) {
-		payload = mustMarshalMetadata(wire)
-		if len(payload) <= variableDescriptionMaxBytes {
-			return payload
+	return humanMetadataDescription(wire, true)
+}
+
+type metadataDescriptionField struct {
+	key   string
+	value string
+}
+
+func humanMetadataDescription(wire variableMetadataWire, compact bool) string {
+	fields := metadataDescriptionFields(wire, compact)
+	parts := make([]string, 0, len(fields))
+	for _, field := range fields {
+		if field.value == "" {
+			continue
+		}
+		parts = append(parts, field.key+"="+escapeMetadataDescriptionValue(field.value))
+	}
+	return metadataDescriptionPrefix + metadataDescriptionSummary(wire) + "; " + strings.Join(parts, "; ")
+}
+
+func metadataDescriptionFields(wire variableMetadataWire, compact bool) []metadataDescriptionField {
+	if compact {
+		return []metadataDescriptionField{
+			{key: "a", value: wire.AssociationID},
+			{key: "h", value: wire.PayloadSHA256},
+			{key: "f", value: wire.PayloadFormat},
+			{key: "i", value: wire.PluginInstanceID},
+			{key: "ih", value: wire.PluginInstanceIDHash},
+			{key: "r", value: wire.RestoreEpoch},
+			{key: "rh", value: wire.RestoreEpochHash},
 		}
 	}
-	if compactWireIdentity(&wire.RestoreEpoch, &wire.RestoreEpochHash) {
-		payload = mustMarshalMetadata(wire)
-		if len(payload) <= variableDescriptionMaxBytes {
-			return payload
+	return []metadataDescriptionField{
+		{key: "assoc", value: wire.AssociationID},
+		{key: "sha", value: wire.PayloadSHA256},
+		{key: "fmt", value: wire.PayloadFormat},
+		{key: "inst", value: wire.PluginInstanceID},
+		{key: "inst_hash", value: wire.PluginInstanceIDHash},
+		{key: "epoch", value: wire.RestoreEpoch},
+		{key: "epoch_hash", value: wire.RestoreEpochHash},
+	}
+}
+
+func metadataDescriptionSummary(wire variableMetadataWire) string {
+	source := wire.SourcePath
+	if source == "" && wire.SourcePathHash != "" {
+		source = metadataDescriptionCompactedPath + wire.SourcePathHash
+	}
+	object := wire.ObjectID
+	if object == "" && wire.ObjectIDHash != "" {
+		object = metadataDescriptionCompactedObject + wire.ObjectIDHash
+	}
+	return escapeMetadataDescriptionSummaryValue(source) + " " +
+		escapeMetadataDescriptionSummaryValue(object) + " " +
+		metadataDescriptionCompactedVersion + strconv.Itoa(wire.SourceVersion)
+}
+
+func escapeMetadataDescriptionValue(value string) string {
+	var builder strings.Builder
+	builder.Grow(len(value))
+	for _, char := range value {
+		switch char {
+		case '\\':
+			builder.WriteString(`\\`)
+		case ';':
+			builder.WriteString(`\;`)
+		case '\n':
+			builder.WriteString(`\n`)
+		case '\r':
+			builder.WriteString(`\r`)
+		default:
+			builder.WriteRune(char)
 		}
 	}
-	return mustMarshalMetadata(wire)
+	return builder.String()
+}
+
+func escapeMetadataDescriptionSummaryValue(value string) string {
+	var builder strings.Builder
+	builder.Grow(len(value))
+	for _, char := range value {
+		switch char {
+		case '\\':
+			builder.WriteString(`\\`)
+		case ';':
+			builder.WriteString(`\;`)
+		case ' ':
+			builder.WriteString(`\s`)
+		case '\n':
+			builder.WriteString(`\n`)
+		case '\r':
+			builder.WriteString(`\r`)
+		default:
+			builder.WriteRune(char)
+		}
+	}
+	return builder.String()
 }
 
 func compactWireIdentity(value *string, hash *string) bool {
@@ -693,42 +790,223 @@ func compactWireIdentity(value *string, hash *string) bool {
 	return true
 }
 
-func mustMarshalMetadata(metadata variableMetadataWire) string {
-	payload, err := json.Marshal(metadata)
-	if err != nil {
-		return ""
-	}
-	return string(payload)
-}
-
 func ownershipMetadata(variable *gitlabVariable) (variableMetadata, bool) {
 	if variable == nil {
 		return variableMetadata{}, false
 	}
-	var wire variableMetadataWire
-	if err := json.Unmarshal([]byte(variable.Description), &wire); err == nil && wire.ManagedBy != "" {
-		metadata := variableMetadata{
-			ManagedBy:            metadataManagedBy,
-			AssociationID:        wire.AssociationID,
-			SourcePath:           wire.SourcePath,
-			SourcePathHash:       wire.SourcePathHash,
-			ObjectID:             wire.ObjectID,
-			ObjectIDHash:         wire.ObjectIDHash,
-			PluginInstanceID:     wire.PluginInstanceID,
-			PluginInstanceIDHash: wire.PluginInstanceIDHash,
-			RestoreEpoch:         wire.RestoreEpoch,
-			RestoreEpochHash:     wire.RestoreEpochHash,
-			SourceVersion:        wire.SourceVersion,
-			PayloadSHA256:        wire.PayloadSHA256,
-			PayloadFormat:        wire.PayloadFormat,
+	if metadata, owned, ok := humanOwnershipMetadata(variable.Description); ok {
+		return metadata, owned
+	}
+	return variableMetadata{}, false
+}
+
+func humanOwnershipMetadata(description string) (variableMetadata, bool, bool) {
+	payload, ok := strings.CutPrefix(description, metadataDescriptionPrefix)
+	if !ok {
+		return variableMetadata{}, false, false
+	}
+	summary, payload, err := parseMetadataDescriptionSummary(payload)
+	if err != nil {
+		return variableMetadata{}, false, true
+	}
+	fields, err := parseMetadataDescriptionFields(payload)
+	if err != nil {
+		return variableMetadata{}, false, true
+	}
+	return variableMetadata{
+		AssociationID:        metadataDescriptionFieldValue(fields, "assoc", "a"),
+		SourcePath:           summary.SourcePath,
+		SourcePathHash:       summary.SourcePathHash,
+		ObjectID:             summary.ObjectID,
+		ObjectIDHash:         summary.ObjectIDHash,
+		PluginInstanceID:     metadataDescriptionFieldValue(fields, "inst", "i"),
+		PluginInstanceIDHash: metadataDescriptionFieldValue(fields, "inst_hash", "ih"),
+		RestoreEpoch:         metadataDescriptionFieldValue(fields, "epoch", "r"),
+		RestoreEpochHash:     metadataDescriptionFieldValue(fields, "epoch_hash", "rh"),
+		SourceVersion:        summary.SourceVersion,
+		PayloadSHA256:        metadataDescriptionFieldValue(fields, "sha", "h"),
+		PayloadFormat:        metadataDescriptionFieldValue(fields, "fmt", "f"),
+	}, true, true
+}
+
+func metadataDescriptionFieldValue(fields map[string]string, keys ...string) string {
+	for _, key := range keys {
+		if fields[key] != "" {
+			return fields[key]
 		}
-		return metadata, wire.ManagedBy == metadataManagedByCompact || wire.ManagedBy == metadataManagedBy
 	}
-	var metadata variableMetadata
-	if err := json.Unmarshal([]byte(variable.Description), &metadata); err != nil {
-		return variableMetadata{}, false
+	return ""
+}
+
+func parseMetadataDescriptionSummary(payload string) (variableMetadataWire, string, error) {
+	summary, rest, ok := cutEscapedDescriptionSummary(payload)
+	if !ok {
+		return variableMetadataWire{}, "", fmt.Errorf("metadata description summary is missing fields")
 	}
-	return metadata, metadata.ManagedBy == metadataManagedBy
+	parts := splitEscapedSummaryFields(summary)
+	if len(parts) != 3 {
+		return variableMetadataWire{}, "", fmt.Errorf("metadata description summary must contain source, object, and version")
+	}
+	sourcePath, err := unescapeMetadataDescriptionValue(parts[0])
+	if err != nil {
+		return variableMetadataWire{}, "", err
+	}
+	sourcePathHash := ""
+	if hash, ok := strings.CutPrefix(sourcePath, metadataDescriptionCompactedPath); ok {
+		sourcePath = ""
+		sourcePathHash = hash
+	}
+	objectID, err := unescapeMetadataDescriptionValue(parts[1])
+	if err != nil {
+		return variableMetadataWire{}, "", err
+	}
+	objectIDHash := ""
+	if hash, ok := strings.CutPrefix(objectID, metadataDescriptionCompactedObject); ok {
+		objectID = ""
+		objectIDHash = hash
+	}
+	version, ok := strings.CutPrefix(parts[2], metadataDescriptionCompactedVersion)
+	if !ok {
+		return variableMetadataWire{}, "", fmt.Errorf("metadata description summary version must start with v")
+	}
+	sourceVersion, err := strconv.Atoi(version)
+	if err != nil {
+		return variableMetadataWire{}, "", err
+	}
+	return variableMetadataWire{
+		SourcePath:     sourcePath,
+		SourcePathHash: sourcePathHash,
+		ObjectID:       objectID,
+		ObjectIDHash:   objectIDHash,
+		SourceVersion:  sourceVersion,
+	}, strings.TrimLeft(rest, " "), nil
+}
+
+func cutEscapedDescriptionSummary(payload string) (string, string, bool) {
+	escaped := false
+	for index, char := range payload {
+		if escaped {
+			escaped = false
+			continue
+		}
+		switch char {
+		case '\\':
+			escaped = true
+		case ';':
+			return payload[:index], payload[index+1:], true
+		}
+	}
+	return "", "", false
+}
+
+func parseMetadataDescriptionFields(payload string) (map[string]string, error) {
+	fields := make(map[string]string)
+	for _, field := range splitEscapedDescriptionFields(payload) {
+		field = strings.TrimLeft(field, " ")
+		key, value, ok := strings.Cut(field, "=")
+		if !ok {
+			return nil, fmt.Errorf("metadata description field %q is missing value", field)
+		}
+		key = strings.TrimSpace(key)
+		if key == "" {
+			return nil, fmt.Errorf("metadata description field is missing key")
+		}
+		decoded, err := unescapeMetadataDescriptionValue(value)
+		if err != nil {
+			return nil, err
+		}
+		fields[key] = decoded
+	}
+	return fields, nil
+}
+
+func splitEscapedSummaryFields(payload string) []string {
+	fields := make([]string, 0, strings.Count(payload, " ")+1)
+	var builder strings.Builder
+	escaped := false
+	for _, char := range payload {
+		if escaped {
+			builder.WriteRune('\\')
+			builder.WriteRune(char)
+			escaped = false
+			continue
+		}
+		switch char {
+		case '\\':
+			escaped = true
+		case ' ':
+			fields = append(fields, builder.String())
+			builder.Reset()
+		default:
+			builder.WriteRune(char)
+		}
+	}
+	if escaped {
+		builder.WriteRune('\\')
+	}
+	fields = append(fields, builder.String())
+	return fields
+}
+
+func splitEscapedDescriptionFields(payload string) []string {
+	fields := make([]string, 0, strings.Count(payload, ";")+1)
+	var builder strings.Builder
+	escaped := false
+	for _, char := range payload {
+		if escaped {
+			builder.WriteRune('\\')
+			builder.WriteRune(char)
+			escaped = false
+			continue
+		}
+		switch char {
+		case '\\':
+			escaped = true
+		case ';':
+			fields = append(fields, builder.String())
+			builder.Reset()
+		default:
+			builder.WriteRune(char)
+		}
+	}
+	if escaped {
+		builder.WriteRune('\\')
+	}
+	fields = append(fields, builder.String())
+	return fields
+}
+
+func unescapeMetadataDescriptionValue(value string) (string, error) {
+	var builder strings.Builder
+	builder.Grow(len(value))
+	escaped := false
+	for _, char := range value {
+		if escaped {
+			switch char {
+			case '\\', ';':
+				builder.WriteRune(char)
+			case 's':
+				builder.WriteRune(' ')
+			case 'n':
+				builder.WriteRune('\n')
+			case 'r':
+				builder.WriteRune('\r')
+			default:
+				return "", fmt.Errorf("metadata description contains invalid escape sequence")
+			}
+			escaped = false
+			continue
+		}
+		if char == '\\' {
+			escaped = true
+			continue
+		}
+		builder.WriteRune(char)
+	}
+	if escaped {
+		return "", fmt.Errorf("metadata description contains trailing escape character")
+	}
+	return builder.String(), nil
 }
 
 func ownedByRequest(metadata variableMetadata, metadataOwned bool, identity ownershipIdentity) bool {
@@ -762,12 +1040,7 @@ func metadataIdentityHash(value string) string {
 }
 
 func metadataIdentityHashMatches(actualHash string, value string) bool {
-	return actualHash == metadataIdentityHash(value) || actualHash == legacyMetadataIdentityHash(value)
-}
-
-func legacyMetadataIdentityHash(value string) string {
-	sum := sha256.Sum256([]byte(value))
-	return hex.EncodeToString(sum[:16])
+	return actualHash == metadataIdentityHash(value)
 }
 
 func remoteSourceVersionNewer(metadata variableMetadata, sourceVersion int) bool {
