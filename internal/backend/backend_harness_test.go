@@ -2,6 +2,7 @@ package backend
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
@@ -397,6 +398,52 @@ func assertResponseValue[T comparable](t *testing.T, resp *logical.Response, key
 	if got := resp.Data[key]; got != want {
 		t.Fatalf("%s = %v, want %v", key, got, want)
 	}
+}
+
+func assertHintContains(t *testing.T, data map[string]interface{}, want string) { //nolint:forbidigo
+	t.Helper()
+	data = diagnosticTestData(data)
+	hint, ok := data["hint"].(string)
+	if !ok {
+		t.Fatalf("hint = %T, want string", data["hint"])
+	}
+	if !strings.Contains(hint, want) {
+		t.Fatalf("hint = %q, want substring %q", hint, want)
+	}
+}
+
+func assertNextActionCommand( //nolint:forbidigo
+	t *testing.T,
+	data map[string]interface{},
+	action string,
+	command string,
+) {
+	t.Helper()
+	data = diagnosticTestData(data)
+	actions, ok := data["next_actions"].([]map[string]interface{})
+	if !ok {
+		t.Fatalf("next_actions = %T, want []map[string]interface{}", data["next_actions"])
+	}
+	for _, candidate := range actions {
+		if candidate["action"] == action {
+			if got := candidate["command"]; got != command {
+				t.Fatalf("%s command = %v, want %s", action, got, command)
+			}
+			return
+		}
+	}
+	t.Fatalf("next_actions = %#v, want action %q", actions, action)
+}
+
+func diagnosticTestData(data map[string]interface{}) map[string]interface{} { //nolint:forbidigo
+	if _, ok := data["hint"]; ok {
+		return data
+	}
+	nested, ok := data["data"].(map[string]interface{})
+	if !ok {
+		return data
+	}
+	return nested
 }
 
 func assertQueueCount(t *testing.T, b logical.Backend, storage logical.Storage, key string, want int) {

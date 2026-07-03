@@ -140,7 +140,7 @@ func (b *secretSyncBackend) runVersionMutation(
 			mutationErr = mutate(ctx, req.Storage, metadata, path, version, now)
 		}
 		if mutationErr != nil {
-			return logical.ErrorResponse(mutationErr.Error()), nil
+			return errorResponseForOperationError(mutationErr, requestMountPath(req)), nil
 		}
 		if err := putMetadata(ctx, req.Storage, path, *metadata); err != nil {
 			return nil, err

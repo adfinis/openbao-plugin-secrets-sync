@@ -77,7 +77,7 @@ func (b *secretSyncBackend) pathDataWrite(
 	if response != nil || err != nil {
 		return response, err
 	}
-	response, err = b.commitDataWritePlan(ctx, req.Storage, path, payload, plan)
+	response, err = b.commitDataWritePlan(ctx, req.Storage, path, payload, plan, requestMountPath(req))
 	if response != nil || err != nil {
 		return response, err
 	}
@@ -165,6 +165,7 @@ func (b *secretSyncBackend) commitDataWritePlan(
 	path string,
 	payload secretPayload,
 	plan dataWritePlan,
+	mount string,
 ) (*logical.Response, error) {
 	if len(plan.operations) > 0 {
 		b.enqueueMu.Lock()
@@ -184,7 +185,7 @@ func (b *secretSyncBackend) commitDataWritePlan(
 		additionalOperations,
 		len(staleUpsertIDs),
 	); err != nil {
-		return logical.ErrorResponse(err.Error()), nil
+		return errorResponseForOperationError(err, mount), nil
 	}
 	if err := putPendingEnqueueIntent(
 		ctx,
@@ -327,7 +328,7 @@ func (b *secretSyncBackend) pathDataDelete(
 		deletePlan.additionalOperations,
 		len(deletePlan.staleUpsertIDs),
 	); err != nil {
-		return logical.ErrorResponse(err.Error()), nil
+		return errorResponseForOperationError(err, requestMountPath(req)), nil
 	}
 	if err := ensureQueuedOutboxIDsUnclaimed(ctx, req.Storage, deletePlan.staleUpsertIDs); err != nil {
 		if isQueuedOperationClaimedError(err) {

@@ -861,7 +861,45 @@ components:
           type: array
           items:
             type: string
+        data:
+          $ref: "#/components/schemas/OperatorDiagnostic"
       required: [errors]
+
+    OperatorDiagnostic:
+      type: object
+      properties:
+        hint:
+          type: string
+          description: Human-readable recovery hint for blocked or terminal states.
+        next_actions:
+          type: array
+          description: Structured operator actions that can be shown by clients or used by automation.
+          items:
+            $ref: "#/components/schemas/DiagnosticAction"
+
+    DiagnosticAction:
+      type: object
+      properties:
+        action:
+          type: string
+          description: Stable action identifier.
+        operation:
+          type: string
+          enum: [read, write]
+        path:
+          type: string
+          description: Plugin-relative path for the action.
+        parameters:
+          type: object
+          additionalProperties:
+            type: string
+        force:
+          type: boolean
+        mutates_remote:
+          type: boolean
+        command:
+          type: string
+          description: Example bao CLI command for the action.
 
     EmptyOpenBaoResponse:
       type: object
@@ -1553,6 +1591,12 @@ components:
                 type: string
             association:
               $ref: "#/components/schemas/Association"
+            hint:
+              type: string
+            next_actions:
+              type: array
+              items:
+                $ref: "#/components/schemas/DiagnosticAction"
       required: [data]
 
     AssociationsResponse:
@@ -1740,6 +1784,12 @@ components:
               $ref: "#/components/schemas/ProviderErrorClass"
             last_error:
               type: string
+            hint:
+              type: string
+            next_actions:
+              type: array
+              items:
+                $ref: "#/components/schemas/DiagnosticAction"
             objects:
               type: array
               items:
@@ -1771,6 +1821,12 @@ components:
           $ref: "#/components/schemas/ProviderErrorClass"
         last_error:
           type: string
+        hint:
+          type: string
+        next_actions:
+          type: array
+          items:
+            $ref: "#/components/schemas/DiagnosticAction"
 
     QueueSummaryResponse:
       type: object
@@ -1932,6 +1988,12 @@ components:
           $ref: "#/components/schemas/ProviderErrorClass"
         message:
           type: string
+        hint:
+          type: string
+        next_actions:
+          type: array
+          items:
+            $ref: "#/components/schemas/DiagnosticAction"
 
     ProviderErrorClass:
       type: string

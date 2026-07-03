@@ -154,6 +154,8 @@ func TestQueueCapacityZeroBlocksEnqueues(t *testing.T) {
 	if blockedResp == nil || !blockedResp.IsError() {
 		t.Fatalf("write with zero queue capacity response = %#v, want error", blockedResp)
 	}
+	assertHintContains(t, blockedResp.Data, "Queue capacity is exhausted")
+	assertNextActionCommand(t, blockedResp.Data, "read_queue", "bao read <mount>/queue")
 	readResp := env.read("data/app/db")
 	assertNoErrorResponse(t, readResp)
 	readMetadata := readResp.Data["metadata"].(map[string]interface{})
@@ -337,6 +339,13 @@ func TestQueueDrainHonorsRestoreGuard(t *testing.T) {
 	if drainResp == nil || !drainResp.IsError() {
 		t.Fatalf("drain restore guard response = %#v, want error", drainResp)
 	}
+	assertHintContains(t, drainResp.Data, "Restore guard is active")
+	assertNextActionCommand(
+		t,
+		drainResp.Data,
+		"acknowledge_restore_guard",
+		"bao write -force <mount>/config/restore-guard/acknowledge",
+	)
 	assertOutboxOperation(t, env.storage, operationID, 1, outboxStatePending)
 
 	env.acknowledgeRestoreGuard()

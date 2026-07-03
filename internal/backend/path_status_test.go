@@ -131,3 +131,46 @@ func TestStatusWritePreservesDriftBookkeeping(t *testing.T) {
 		t.Fatalf("last_operation_id = %s, want op-success", got)
 	}
 }
+
+func TestStatusReadIncludesActionableHintForRemoteOwnershipLost(t *testing.T) {
+	env := newBackendTestEnv(t)
+
+	env.writeAppDBSecret("initial")
+	if err := putStatus(context.Background(), env.storage, statusRecord{
+		Path:            "app/db",
+		Version:         1,
+		AssociationID:   "assoc-test",
+		ObjectID:        syncObjectIDSecretPath,
+		DestinationRef:  "fake/default",
+		ResolvedName:    "prod/app/db",
+		State:           string(domain.SyncStateRemoteOwnershipLost),
+		LastOperationID: "op-test",
+		LastErrorClass:  string(providers.ErrorClassOwnership),
+		LastError:       "dispatch failed: remote object is not owned by this association",
+		UpdatedTime:     nowUTC().Format(timeFormatRFC3339),
+	}); err != nil {
+		t.Fatalf("write status: %v", err)
+	}
+
+	resp := env.read("status/app/db")
+	assertNoErrorResponse(t, resp)
+	assertResponseValue(t, resp, "state", string(domain.SyncStateRemoteOwnershipLost))
+	assertHintContains(t, resp.Data, "Inspect or remove the remote object first")
+	assertNextActionCommand(
+		t,
+		resp.Data,
+		"manual_sync",
+		"bao write <mount>/associations/app/db/sync destination=fake/default",
+	)
+	objects := resp.Data["objects"].([]map[string]interface{})
+	if len(objects) != 1 {
+		t.Fatalf("status objects = %d, want 1", len(objects))
+	}
+	assertHintContains(t, objects[0], "Inspect or remove the remote object first")
+	assertNextActionCommand(
+		t,
+		objects[0],
+		"manual_sync",
+		"bao write <mount>/associations/app/db/sync destination=fake/default",
+	)
+}

@@ -106,6 +106,15 @@ func TestReconcileApplyMapsReadStateToStatus(t *testing.T) {
 			if got := objects[0]["error_class"]; got != string(testCase.errorClass) {
 				t.Fatalf("reconcile error class = %v, want %s", got, testCase.errorClass)
 			}
+			if testCase.state == domain.SyncStateRemoteOwnershipLost {
+				assertHintContains(t, objects[0], "Inspect or remove the remote object first")
+				assertNextActionCommand(
+					t,
+					objects[0],
+					"manual_sync",
+					"bao write <mount>/associations/app/db/sync destination=fake/default",
+				)
+			}
 			if strings.Contains(fmt.Sprint(resp.Data), "secret-canary") {
 				t.Fatalf("reconcile response contains secret value: %#v", resp.Data)
 			}

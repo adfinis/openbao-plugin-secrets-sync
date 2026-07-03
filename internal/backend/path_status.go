@@ -54,6 +54,7 @@ func pathStatusRead(ctx context.Context, req *logical.Request, data *framework.F
 	if err != nil {
 		return nil, err
 	}
+	mount := requestMountPath(req)
 
 	state := domain.SyncStateNoAssociation
 	if len(operationIDs) > 0 {
@@ -69,9 +70,9 @@ func pathStatusRead(ctx context.Context, req *logical.Request, data *framework.F
 	}
 	objects := []map[string]interface{}{} //nolint:forbidigo // OpenBao response boundary.
 	for _, record := range statusRecords {
-		objects = append(objects, statusResponseObject(record))
+		objects = append(objects, statusResponseObject(mount, record))
 	}
-	summaryFields := statusSummaryFields(statusRecords)
+	summaryFields := statusSummaryFields(mount, statusRecords)
 	fields := make([]responseEntry, 0, 5+len(summaryFields))
 	fields = append(fields,
 		responseField("path", path),
@@ -84,8 +85,12 @@ func pathStatusRead(ctx context.Context, req *logical.Request, data *framework.F
 	return &logical.Response{Data: newResponseData(fields...)}, nil
 }
 
-func statusResponseObject(record statusRecord) map[string]interface{} { //nolint:forbidigo // OpenBao response boundary.
-	return newResponseData(
+func statusResponseObject( //nolint:forbidigo // OpenBao response boundary.
+	mount string,
+	record statusRecord,
+) map[string]interface{} {
+	fields := make([]responseEntry, 0, 18)
+	fields = append(fields,
 		responseField("association_id", record.AssociationID),
 		responseField("object_id", record.ObjectID),
 		responseField("destination_ref", record.DestinationRef),
@@ -103,14 +108,17 @@ func statusResponseObject(record statusRecord) map[string]interface{} { //nolint
 		responseField("last_error_class", record.LastErrorClass),
 		responseField("last_error", record.LastError),
 	)
+	fields = append(fields, diagnosticResponseFields(statusDiagnosticForRecord(mount, record))...)
+	return newResponseData(fields...)
 }
 
-func statusSummaryFields(statusRecords []statusRecord) []responseEntry {
+func statusSummaryFields(mount string, statusRecords []statusRecord) []responseEntry {
 	if len(statusRecords) != 1 {
 		return nil
 	}
 	record := statusRecords[0]
-	return []responseEntry{
+	fields := make([]responseEntry, 0, 16)
+	fields = append(fields,
 		responseField("association_id", record.AssociationID),
 		responseField("object_id", record.ObjectID),
 		responseField("destination_ref", record.DestinationRef),
@@ -125,5 +133,7 @@ func statusSummaryFields(statusRecords []statusRecord) []responseEntry {
 		responseField("repair_count", record.RepairCount),
 		responseField("last_error_class", record.LastErrorClass),
 		responseField("last_error", record.LastError),
-	}
+	)
+	fields = append(fields, diagnosticResponseFields(statusDiagnosticForRecord(mount, record))...)
+	return fields
 }

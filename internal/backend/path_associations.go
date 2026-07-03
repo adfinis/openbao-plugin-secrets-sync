@@ -270,6 +270,7 @@ func (b *secretSyncBackend) pathAssociationEnable(
 	req *logical.Request,
 	data *framework.FieldData,
 ) (*logical.Response, error) {
+	mount := requestMountPath(req)
 	record, unlock, response, err := b.associationFromLifecycleRequest(ctx, req, data)
 	if unlock != nil {
 		defer unlock()
@@ -289,10 +290,10 @@ func (b *secretSyncBackend) pathAssociationEnable(
 		return nil, err
 	}
 	if err := validateSourceEligibility(metadata, cfg); err != nil {
-		return logical.ErrorResponse(err.Error()), nil
+		return errorResponseWithDiagnostic(err.Error(), validationDiagnosticForAssociation(mount, *record, err.Error())), nil
 	}
 	if err := validateAssociationDestination(ctx, req.Storage, *record); err != nil {
-		return logical.ErrorResponse(err.Error()), nil
+		return errorResponseWithDiagnostic(err.Error(), validationDiagnosticForAssociation(mount, *record, err.Error())), nil
 	}
 
 	wasEnabled := record.Enabled
@@ -306,7 +307,7 @@ func (b *secretSyncBackend) pathAssociationEnable(
 	if !wasEnabled {
 		operationIDs, err = b.enqueueAssociationCurrentVersion(ctx, req.Storage, *record, *metadata, now)
 		if err != nil {
-			return logical.ErrorResponse(err.Error()), nil
+			return errorResponseForOperationError(err, mount), nil
 		}
 		if len(operationIDs) > 0 {
 			b.signalEventDispatch()
@@ -314,8 +315,7 @@ func (b *secretSyncBackend) pathAssociationEnable(
 	}
 	return &logical.Response{Data: associationLifecycleResponse(
 		*record,
-		responseField("association", associationResponse(*record)),
-		responseField("sync_operation_ids", operationIDs),
+		associationSyncLifecycleFields(mount, *record, operationIDs, wasEnabled && len(operationIDs) == 0)...,
 	)}, nil
 }
 
@@ -324,6 +324,7 @@ func (b *secretSyncBackend) pathAssociationSync(
 	req *logical.Request,
 	data *framework.FieldData,
 ) (*logical.Response, error) {
+	mount := requestMountPath(req)
 	record, unlock, response, err := b.associationFromLifecycleRequest(ctx, req, data)
 	if unlock != nil {
 		defer unlock()
@@ -335,7 +336,7 @@ func (b *secretSyncBackend) pathAssociationSync(
 		return nil, nil
 	}
 	if !record.Enabled {
-		return logical.ErrorResponse("association is disabled"), nil
+		return errorResponseWithDiagnostic("association is disabled", associationDisabledDiagnostic(mount, *record)), nil
 	}
 	metadata, response, err := metadataForAssociationActivation(ctx, req.Storage, *record)
 	if response != nil || err != nil {
@@ -346,15 +347,15 @@ func (b *secretSyncBackend) pathAssociationSync(
 		return nil, err
 	}
 	if err := validateAssociationActivation(*record, metadata, cfg); err != nil {
-		return logical.ErrorResponse(err.Error()), nil
+		return errorResponseWithDiagnostic(err.Error(), validationDiagnosticForAssociation(mount, *record, err.Error())), nil
 	}
 	if err := validateAssociationDestination(ctx, req.Storage, *record); err != nil {
-		return logical.ErrorResponse(err.Error()), nil
+		return errorResponseWithDiagnostic(err.Error(), validationDiagnosticForAssociation(mount, *record, err.Error())), nil
 	}
 	now := nowUTC().Format(timeFormatRFC3339)
 	operationIDs, err := b.enqueueAssociationCurrentVersionAsManualSync(ctx, req.Storage, *record, *metadata, now)
 	if err != nil {
-		return logical.ErrorResponse(err.Error()), nil
+		return errorResponseForOperationError(err, mount), nil
 	}
 	if len(operationIDs) > 0 {
 		b.signalEventDispatch()
@@ -389,21 +390,27 @@ func (b *secretSyncBackend) pathAssociationWrite(
 	unlock := b.lockSourcePathAssociationNameAndDestination(path, record.DestinationRef, record.reservationName())
 	defer unlock()
 
-	plan, response, err := b.associationWritePlan(ctx, req.Storage, path, record)
+	mount := requestMountPath(req)
+	plan, response, err := b.associationWritePlan(ctx, req.Storage, path, record, mount)
 	if response != nil || err != nil {
 		return response, err
 	}
 
 	return &logical.Response{Data: associationLifecycleResponse(
 		plan.record,
-		responseField("association", associationResponse(plan.record)),
-		responseField("sync_operation_ids", plan.operationIDs),
+		associationSyncLifecycleFields(
+			mount,
+			plan.record,
+			plan.operationIDs,
+			plan.existingWasEnabled && plan.record.Enabled && len(plan.operationIDs) == 0,
+		)...,
 	)}, nil
 }
 
 type associationWritePlan struct {
-	record       associationRecord
-	operationIDs []string
+	record             associationRecord
+	operationIDs       []string
+	existingWasEnabled bool
 }
 
 func (b *secretSyncBackend) associationWritePlan(
@@ -411,11 +418,13 @@ func (b *secretSyncBackend) associationWritePlan(
 	storage logical.Storage,
 	path string,
 	record associationRecord,
+	mount string,
 ) (associationWritePlan, *logical.Response, error) {
-	metadata, existing, response, err := associationWritePreflight(ctx, storage, path, record)
+	metadata, existing, response, err := associationWritePreflight(ctx, storage, path, record, mount)
 	if response != nil || err != nil {
 		return associationWritePlan{}, response, err
 	}
+	existingWasEnabled := existing != nil && existing.Enabled
 	if existing != nil {
 		record.CreatedTime = existing.CreatedTime
 	}
@@ -433,13 +442,17 @@ func (b *secretSyncBackend) associationWritePlan(
 			nowUTC().Format(timeFormatRFC3339),
 		)
 		if err != nil {
-			return associationWritePlan{}, logical.ErrorResponse(err.Error()), nil
+			return associationWritePlan{}, errorResponseForOperationError(err, mount), nil
 		}
 		if len(operationIDs) > 0 {
 			b.signalEventDispatch()
 		}
 	}
-	return associationWritePlan{record: record, operationIDs: operationIDs}, nil, nil
+	return associationWritePlan{
+		record:             record,
+		operationIDs:       operationIDs,
+		existingWasEnabled: existingWasEnabled,
+	}, nil, nil
 }
 
 func associationWritePreflight(
@@ -447,6 +460,7 @@ func associationWritePreflight(
 	storage logical.Storage,
 	path string,
 	record associationRecord,
+	mount string,
 ) (*metadataRecord, *associationRecord, *logical.Response, error) {
 	if err := validateAssociationNameReservation(
 		ctx,
@@ -469,10 +483,16 @@ func associationWritePreflight(
 		return nil, nil, nil, err
 	}
 	if err := validateAssociationActivation(record, metadata, cfg); err != nil {
-		return nil, nil, logical.ErrorResponse(err.Error()), nil
+		return nil, nil, errorResponseWithDiagnostic(
+			err.Error(),
+			validationDiagnosticForAssociation(mount, record, err.Error()),
+		), nil
 	}
 	if err := validateAssociationDestination(ctx, storage, record); err != nil {
-		return nil, nil, logical.ErrorResponse(err.Error()), nil
+		return nil, nil, errorResponseWithDiagnostic(
+			err.Error(),
+			validationDiagnosticForAssociation(mount, record, err.Error()),
+		), nil
 	}
 	existing, err := getAssociation(ctx, storage, path, record.ID)
 	if err != nil {
@@ -917,6 +937,22 @@ func associationSummaryFields(record associationRecord) []responseEntry {
 
 func associationLifecycleResponse(record associationRecord, fields ...responseEntry) map[string]interface{} {
 	return newResponseData(append(associationSummaryFields(record), fields...)...)
+}
+
+func associationSyncLifecycleFields(
+	mount string,
+	record associationRecord,
+	operationIDs []string,
+	includeManualSyncHint bool,
+) []responseEntry {
+	fields := []responseEntry{
+		responseField("association", associationResponse(record)),
+		responseField("sync_operation_ids", operationIDs),
+	}
+	if includeManualSyncHint {
+		fields = append(fields, diagnosticResponseFields(associationAlreadyEnabledDiagnostic(mount, record))...)
+	}
+	return fields
 }
 
 func pathAssociationRead(
