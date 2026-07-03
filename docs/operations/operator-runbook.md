@@ -1,8 +1,19 @@
 # Operator runbook
 
-This runbook covers operational workflows for the OpenBao Secret Sync plugin.
-It assumes the plugin is mounted at `secret-sync/`; adjust paths if the mount
-name differs.
+This runbook covers day-2 operational workflows for the OpenBao Secret Sync
+plugin: blocked sync, restore guard, queue recovery, reconcile, drift, and
+incident evidence. It assumes the plugin is mounted at `secret-sync/`; adjust
+paths if the mount name differs.
+
+Use the [user guide](../guides/user-guide.md) for the normal first-sync
+workflow. Use the [sync model](../concepts/sync-model.md) for the shared model
+behind source paths, associations, and provider objects. Use
+[Convergence](../concepts/convergence.md) for queue, status, manual sync,
+retry, cancel, and drain behavior. Use
+[Reconcile and drift](../concepts/reconcile-and-drift.md) for provider
+read-state and background drift behavior. Use
+[Ownership and safety](../concepts/ownership-and-safety.md) before repairing
+stale, drifted, missing, or ownership-lost remote objects.
 
 ## First checks
 
@@ -31,6 +42,28 @@ Pause or resume remote mutation:
 bao write secret-sync/config disabled=true
 bao write secret-sync/config disabled=false
 ```
+
+## Response diagnostics
+
+Blocked or terminal responses can include a human-readable `hint` and structured
+`next_actions`. Treat `next_actions` as the first recovery path. They name the
+operation, plugin-relative path, parameters, whether the action can mutate
+remote state, and an example `bao` command.
+
+On successful responses, `hint` and `next_actions` are top-level response data
+fields. On OpenBao error responses, they are nested under the error `data` field
+so clients still recognize the response as an error.
+
+Examples:
+
+- `manual_sync`: run after resolving `REMOTE_MISSING`, `DRIFTED`, or
+  `REMOTE_OWNERSHIP_LOST` remote state.
+- `enable_source`: run when strict source opt-in blocks association activation
+  or dispatch.
+- `acknowledge_restore_guard`: run only after restore or clone review is
+  complete.
+- `read_queue`, `drain_queue`, or `retry_operation`: use when queue or provider
+  capacity blocks sync.
 
 ## Destination checks
 
@@ -109,6 +142,11 @@ association values when the source path and destination identify a single
 existing association. This prevents partial updates from changing granularity,
 name template, delete mode, or enabled state by accident. Use the read output
 above when you need to make the update shape explicit.
+
+Use `destination=<type>/<name>` for normal association disable, enable, and
+manual sync operations. Association IDs remain available for exact reads,
+deletes, and ambiguity escape hatches, but they are not the default lifecycle
+selector.
 
 Current-version source lifecycle endpoints participate in sync. `DELETE
 data/<path>`, `delete/<path>`, and `destroy/<path>` cancel stale queued upserts
