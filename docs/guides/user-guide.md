@@ -200,6 +200,11 @@ When updating an existing association, omitted optional fields keep the stored
 values if the source path and destination match exactly one association. A
 partial update such as changing only `delete_mode` will not change granularity,
 name template, format, or enabled state.
+Association identity includes its granularity and remote-name reservation. To
+change `granularity`, `resolved_name`, or the `name_template` that reserves
+remote objects, create the new association explicitly and delete the old one;
+the update path rejects these changes to avoid silently leaving two active
+associations.
 Changing an existing association from `enabled=false` to `enabled=true`
 through the same write path queues the current source version, matching the
 explicit lifecycle enable endpoint.

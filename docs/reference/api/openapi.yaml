@@ -1425,7 +1425,7 @@ components:
 
     AssociationWriteRequest:
       type: object
-      description: Create defaults apply to new associations. Updates inherit omitted optional fields from the matching stored association when path and destination are unambiguous. Setting enabled=true on an existing disabled association queues the current source version.
+      description: Create defaults apply to new associations. Updates inherit omitted optional fields from the matching stored association when path and destination are unambiguous. Updating an existing association cannot change granularity or the remote-name reservation; create the new association explicitly and delete the old one. Setting enabled=true on an existing disabled association queues the current source version.
       properties:
         destination:
           type: string

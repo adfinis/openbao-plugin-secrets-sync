@@ -383,6 +383,9 @@ func (b *secretSyncBackend) pathAssociationWrite(
 	if err != nil {
 		return logical.ErrorResponse(err.Error()), nil
 	}
+	if err := validateAssociationIdentityUpdate(baseRecord, record); err != nil {
+		return logical.ErrorResponse(err.Error()), nil
+	}
 	unlock := b.lockSourcePathAssociationNameAndDestination(path, record.DestinationRef, record.reservationName())
 	defer unlock()
 
@@ -1518,6 +1521,35 @@ func (b *secretSyncBackend) associationRecordFromFieldData(
 		CreatedTime:     now,
 		UpdatedTime:     now,
 	}, nil
+}
+
+func validateAssociationIdentityUpdate(base *associationRecord, record associationRecord) error {
+	if base == nil {
+		return nil
+	}
+	if record.Granularity != base.Granularity {
+		return associationIdentityChangeError("granularity", base.ID)
+	}
+	if record.reservationName() != base.reservationName() {
+		return associationIdentityChangeError(associationReservationIdentityField(*base), base.ID)
+	}
+	return nil
+}
+
+func associationReservationIdentityField(record associationRecord) string {
+	if record.Granularity == syncGranularitySecretKey {
+		return "name_template"
+	}
+	return "resolved_name"
+}
+
+func associationIdentityChangeError(field string, associationID string) error {
+	return fmt.Errorf(
+		"%s change would create a new association identity; delete %s first, "+
+			"or create the new association and delete the old one explicitly",
+		field,
+		associationID,
+	)
 }
 
 func associationUpdateBase(
