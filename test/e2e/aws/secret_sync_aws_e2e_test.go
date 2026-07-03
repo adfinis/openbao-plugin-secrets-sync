@@ -231,12 +231,11 @@ func newAssumedSecretsManagerClient(t *testing.T, ctx context.Context) *secretsm
 
 func associationRequest(remoteName string) map[string]interface{} {
 	return map[string]interface{}{
-		"destination_type": "aws-sm",
-		"destination_name": "prod",
-		"resolved_name":    remoteName,
-		"granularity":      "secret-path",
-		"format":           "json",
-		"delete_mode":      "delete",
+		"destination":   "aws-sm/prod",
+		"resolved_name": remoteName,
+		"granularity":   "secret-path",
+		"format":        "json",
+		"delete_mode":   "delete",
 	}
 }
 

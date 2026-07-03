@@ -130,16 +130,14 @@ Plan and create the association:
 export E2E_AWS_REMOTE_NAME="${E2E_AWS_SECRET_PREFIX}manual-$(date +%s)"
 
 bao write secret-sync/associations/app/db/plan \
-  destination_type=aws-sm \
-  destination_name=prod \
+  destination=aws-sm/prod \
   resolved_name="${E2E_AWS_REMOTE_NAME}" \
   granularity=secret-path \
   format=json \
   delete_mode=delete
 
 bao write secret-sync/associations/app/db \
-  destination_type=aws-sm \
-  destination_name=prod \
+  destination=aws-sm/prod \
   resolved_name="${E2E_AWS_REMOTE_NAME}" \
   granularity=secret-path \
   format=json \
