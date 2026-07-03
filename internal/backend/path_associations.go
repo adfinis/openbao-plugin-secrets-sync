@@ -77,6 +77,43 @@ func pathAssociations(b *secretSyncBackend) []*framework.Path {
 			HelpDescription: "Enqueues the current source version for one enabled association.",
 		},
 		{
+			Pattern: "associations/(?P<path>.+)/disable",
+			Fields:  associationLifecycleFields(),
+			Operations: map[logical.Operation]framework.OperationHandler{
+				logical.UpdateOperation: &framework.PathOperation{
+					Callback: b.pathAssociationDisable,
+					Summary:  "Disable an association by destination.",
+				},
+			},
+			HelpSynopsis:    "Disable an association.",
+			HelpDescription: "Disables future enqueue and cancels queued work for one association resolved by destination.",
+		},
+		{
+			Pattern: "associations/(?P<path>.+)/enable",
+			Fields:  associationLifecycleFields(),
+			Operations: map[logical.Operation]framework.OperationHandler{
+				logical.UpdateOperation: &framework.PathOperation{
+					Callback: b.pathAssociationEnable,
+					Summary:  "Enable an association by destination.",
+				},
+			},
+			HelpSynopsis: "Enable an association.",
+			HelpDescription: "Enables an association resolved by destination and enqueues the current source version " +
+				"when transitioning from disabled.",
+		},
+		{
+			Pattern: "associations/(?P<path>.+)/sync",
+			Fields:  associationLifecycleFields(),
+			Operations: map[logical.Operation]framework.OperationHandler{
+				logical.UpdateOperation: &framework.PathOperation{
+					Callback: b.pathAssociationSync,
+					Summary:  "Manually enqueue association sync by destination.",
+				},
+			},
+			HelpSynopsis:    "Sync an association.",
+			HelpDescription: "Enqueues the current source version for one enabled association resolved by destination.",
+		},
+		{
 			Pattern: "associations/(?P<path>.+)/(?P<association_id>assoc-[0-9a-f]+)",
 			Fields: map[string]*framework.FieldSchema{
 				"path": {
@@ -89,13 +126,17 @@ func pathAssociations(b *secretSyncBackend) []*framework.Path {
 				},
 			},
 			Operations: map[logical.Operation]framework.OperationHandler{
+				logical.ReadOperation: &framework.PathOperation{
+					Callback: pathAssociationReadByID,
+					Summary:  "Read one association.",
+				},
 				logical.DeleteOperation: &framework.PathOperation{
 					Callback: b.pathAssociationDelete,
 					Summary:  "Delete an association.",
 				},
 			},
-			HelpSynopsis:    "Delete associations.",
-			HelpDescription: "Deletes one source-to-destination association.",
+			HelpSynopsis:    "Manage one association.",
+			HelpDescription: "Reads or deletes one source-to-destination association.",
 		},
 		{
 			Pattern: "associations/" + framework.MatchAllRegex("path"),
@@ -130,6 +171,10 @@ func associationLifecycleFields() map[string]*framework.FieldSchema {
 			Type:        framework.TypeString,
 			Description: "Association identifier.",
 		},
+		"destination": {
+			Type:        framework.TypeString,
+			Description: "Destination reference in <type>/<name> form.",
+		},
 	}
 }
 
@@ -139,13 +184,9 @@ func associationRequestFields() map[string]*framework.FieldSchema {
 			Type:        framework.TypeString,
 			Description: "Source secret path.",
 		},
-		"destination_type": {
+		"destination": {
 			Type:        framework.TypeString,
-			Description: "Destination provider type.",
-		},
-		"destination_name": {
-			Type:        framework.TypeString,
-			Description: "Destination name.",
+			Description: "Destination reference in <type>/<name> form.",
 		},
 		"name_template": {
 			Type:        framework.TypeString,
@@ -901,6 +942,25 @@ func pathAssociationRead(
 	)}, nil
 }
 
+func pathAssociationReadByID(
+	ctx context.Context,
+	req *logical.Request,
+	data *framework.FieldData,
+) (*logical.Response, error) {
+	path, err := normalizeSourcePath(data.Get("path").(string))
+	if err != nil {
+		return logical.ErrorResponse(err.Error()), nil
+	}
+	record, err := getAssociation(ctx, req.Storage, path, data.Get("association_id").(string))
+	if err != nil {
+		return nil, err
+	}
+	if record == nil {
+		return nil, nil
+	}
+	return &logical.Response{Data: associationResponse(*record)}, nil
+}
+
 func pathAssociationList(
 	ctx context.Context,
 	req *logical.Request,
@@ -965,7 +1025,21 @@ func (b *secretSyncBackend) associationFromLifecycleRequest(
 		return nil, nil, logical.ErrorResponse(err.Error()), nil
 	}
 	unlock := b.lockSourcePath(path)
-	record, err := getAssociation(ctx, req.Storage, path, data.Get("association_id").(string))
+	associationID := strings.TrimSpace(data.Get("association_id").(string))
+	if associationID == "" {
+		destinationType, destinationName, err := associationDestinationFromFieldData(data, true)
+		if err != nil {
+			unlock()
+			return nil, nil, logical.ErrorResponse(err.Error()), nil
+		}
+		record, response, err := associationForDestination(ctx, req.Storage, path, destinationType, destinationName)
+		if response != nil || err != nil {
+			unlock()
+			return nil, nil, response, err
+		}
+		return record, unlock, nil, nil
+	}
+	record, err := getAssociation(ctx, req.Storage, path, associationID)
 	if err != nil {
 		unlock()
 		return nil, nil, nil, err
@@ -975,6 +1049,42 @@ func (b *secretSyncBackend) associationFromLifecycleRequest(
 		return nil, nil, nil, nil
 	}
 	return record, unlock, nil, nil
+}
+
+func associationForDestination(
+	ctx context.Context,
+	storage logical.Storage,
+	path string,
+	destinationType string,
+	destinationName string,
+) (*associationRecord, *logical.Response, error) {
+	records, err := listAssociationsForPath(ctx, storage, path)
+	if err != nil {
+		return nil, nil, err
+	}
+	var match *associationRecord
+	for i := range records {
+		if records[i].DestinationType != destinationType || records[i].DestinationName != destinationName {
+			continue
+		}
+		if match != nil {
+			return nil, logical.ErrorResponse(
+				"association request is ambiguous for destination %s/%s; use the association_id path",
+				destinationType,
+				destinationName,
+			), nil
+		}
+		match = &records[i]
+	}
+	if match == nil {
+		return nil, logical.ErrorResponse(
+			"association for destination %s/%s does not exist at source path %q",
+			destinationType,
+			destinationName,
+			path,
+		), nil
+	}
+	return match, nil, nil
 }
 
 func metadataForAssociationActivation(
@@ -1331,8 +1441,10 @@ func (b *secretSyncBackend) associationRecordFromFieldData(
 	data *framework.FieldData,
 	base *associationRecord,
 ) (associationRecord, error) {
-	destinationType := data.Get("destination_type").(string)
-	destinationName := data.Get("destination_name").(string)
+	destinationType, destinationName, err := associationDestinationFromFieldData(data, true)
+	if err != nil {
+		return associationRecord{}, err
+	}
 	provider, err := b.associationProvider(ctx, storage, destinationType, destinationName)
 	if err != nil {
 		return associationRecord{}, err
@@ -1417,8 +1529,10 @@ func associationUpdateBase(
 	if req.Operation != logical.UpdateOperation {
 		return nil, nil, nil
 	}
-	destinationType := strings.TrimSpace(data.Get("destination_type").(string))
-	destinationName := strings.TrimSpace(data.Get("destination_name").(string))
+	destinationType, destinationName, err := associationDestinationFromFieldData(data, false)
+	if err != nil {
+		return nil, logical.ErrorResponse(err.Error()), nil
+	}
 	if destinationType == "" || destinationName == "" {
 		return nil, nil, nil
 	}
@@ -1441,6 +1555,28 @@ func associationUpdateBase(
 		match = &records[i]
 	}
 	return match, nil, nil
+}
+
+func associationDestinationFromFieldData(
+	data *framework.FieldData,
+	required bool,
+) (string, string, error) {
+	destination := strings.TrimSpace(data.Get("destination").(string))
+	if destination == "" {
+		if required {
+			return "", "", fmt.Errorf("destination is required")
+		}
+		return "", "", nil
+	}
+	return parseDestinationRef(destination)
+}
+
+func parseDestinationRef(destination string) (string, string, error) {
+	parts := strings.Split(destination, "/")
+	if len(parts) != 2 || strings.TrimSpace(parts[0]) == "" || strings.TrimSpace(parts[1]) == "" {
+		return "", "", fmt.Errorf("destination must be in <type>/<name> form")
+	}
+	return strings.TrimSpace(parts[0]), strings.TrimSpace(parts[1]), nil
 }
 
 func associationGranularityDefault(base *associationRecord) string {

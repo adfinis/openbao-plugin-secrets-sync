@@ -56,11 +56,10 @@ func TestDataWriteHonorsStrictSourceOptInBeforeEnqueue(t *testing.T) {
 	env.writeAppDBSecret("initial")
 	env.createFakeDestination("default")
 	associationResp := env.update("associations/app/db", map[string]interface{}{
-		"destination_type": providerTypeFake,
-		"destination_name": "default",
-		"resolved_name":    "prod/app/db",
-		"granularity":      syncObjectIDSecretPath,
-		"format":           defaultAssociationFormat,
+		"destination":   destinationRef(providerTypeFake, "default"),
+		"resolved_name": "prod/app/db",
+		"granularity":   syncObjectIDSecretPath,
+		"format":        defaultAssociationFormat,
 	})
 	assertNoErrorResponse(t, associationResp)
 	assertOperationIDs(t, associationResp.Data, 1)

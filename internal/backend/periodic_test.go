@@ -227,11 +227,10 @@ func TestPeriodicRejectsPayloadOverAWSProviderLimit(t *testing.T) {
 	}
 	env.markAppDBSyncable()
 	associationResp := env.update("associations/app/db", map[string]interface{}{
-		"destination_type": awssecretsmanager.ProviderType,
-		"destination_name": "prod",
-		"resolved_name":    "openbao-plugin-secrets-sync/app/db",
-		"granularity":      syncObjectIDSecretPath,
-		"format":           defaultAssociationFormat,
+		"destination":   destinationRef(awssecretsmanager.ProviderType, "prod"),
+		"resolved_name": "openbao-plugin-secrets-sync/app/db",
+		"granularity":   syncObjectIDSecretPath,
+		"format":        defaultAssociationFormat,
 	})
 	operationID := operationIDsFromResponse(t, associationResp)[0]
 
@@ -350,11 +349,10 @@ func TestPeriodicLeavesClaimedOperationWhenCanceledProviderRedactsCause(t *testi
 	}
 	markAppDBSyncable(t, b, storage)
 	associationResp := handleRequest(t, b, storage, logical.UpdateOperation, "associations/app/db", map[string]interface{}{
-		"destination_type": "ctxcancel",
-		"destination_name": "default",
-		"resolved_name":    "prod/app/db",
-		"granularity":      syncObjectIDSecretPath,
-		"format":           defaultAssociationFormat,
+		"destination":   destinationRef("ctxcancel", "default"),
+		"resolved_name": "prod/app/db",
+		"granularity":   syncObjectIDSecretPath,
+		"format":        defaultAssociationFormat,
 	})
 	assertNoErrorResponse(t, associationResp)
 	operationID := operationIDsFromResponse(t, associationResp)[0]

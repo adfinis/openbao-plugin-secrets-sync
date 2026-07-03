@@ -64,6 +64,9 @@ func TestNormalizeSourcePathRejectsReservedSegments(t *testing.T) {
 		"app/versions/5/x",
 		"versions",
 		"team/plan",
+		"team/disable",
+		"team/enable",
+		"team/sync",
 	} {
 		t.Run(input, func(t *testing.T) {
 			if _, err := normalizeSourcePath(input); err == nil {
@@ -74,7 +77,11 @@ func TestNormalizeSourcePathRejectsReservedSegments(t *testing.T) {
 	for _, input := range []string{
 		"app/versions2/5/x",
 		"plan/team",
+		"disable/team",
+		"enable/team",
+		"sync/team",
 		"team/plans",
+		"team/disabled",
 	} {
 		t.Run(input, func(t *testing.T) {
 			if _, err := normalizeSourcePath(input); err != nil {

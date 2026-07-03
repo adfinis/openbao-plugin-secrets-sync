@@ -28,11 +28,10 @@ func TestDispatchHonorsTightenedDestinationPolicy(t *testing.T) {
 		t.Fatalf("unexpected destination write error: %v", writeResp.Error())
 	}
 	associationResp := env.update("associations/app/db", map[string]interface{}{
-		"destination_type": providerTypeFake,
-		"destination_name": "restricted",
-		"resolved_name":    "prod/app/db",
-		"granularity":      syncObjectIDSecretPath,
-		"format":           defaultAssociationFormat,
+		"destination":   destinationRef(providerTypeFake, "restricted"),
+		"resolved_name": "prod/app/db",
+		"granularity":   syncObjectIDSecretPath,
+		"format":        defaultAssociationFormat,
 	})
 	operationID := operationIDsFromResponse(t, associationResp)[0]
 
@@ -58,11 +57,10 @@ func TestDispatchHonorsTightenedSourceOptInPolicy(t *testing.T) {
 	env.writeAppDBSecret("initial")
 	env.createFakeDestination("default")
 	associationResp := env.update("associations/app/db", map[string]interface{}{
-		"destination_type": providerTypeFake,
-		"destination_name": "default",
-		"resolved_name":    "prod/app/db",
-		"granularity":      syncObjectIDSecretPath,
-		"format":           defaultAssociationFormat,
+		"destination":   destinationRef(providerTypeFake, "default"),
+		"resolved_name": "prod/app/db",
+		"granularity":   syncObjectIDSecretPath,
+		"format":        defaultAssociationFormat,
 	})
 	operationID := operationIDsFromResponse(t, associationResp)[0]
 

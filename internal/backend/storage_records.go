@@ -229,8 +229,9 @@ func normalizeSourcePath(input string) (string, error) {
 			return "", fmt.Errorf("path contains reserved segment %q", part)
 		}
 	}
-	if parts[len(parts)-1] == "plan" {
-		return "", fmt.Errorf("path must not end with reserved segment %q", "plan")
+	switch parts[len(parts)-1] {
+	case "plan", "disable", "enable", "sync":
+		return "", fmt.Errorf("path must not end with reserved segment %q", parts[len(parts)-1])
 	}
 	return strings.Join(parts, "/"), nil
 }

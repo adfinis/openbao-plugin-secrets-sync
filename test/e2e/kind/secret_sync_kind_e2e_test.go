@@ -318,12 +318,11 @@ func associationRequest(remoteName string) map[string]interface{} {
 
 func associationRequestForDestination(remoteName string, destinationName string) map[string]interface{} {
 	return map[string]interface{}{
-		"destination_type": "k8s",
-		"destination_name": destinationName,
-		"resolved_name":    remoteName,
-		"granularity":      "secret-path",
-		"format":           "json",
-		"delete_mode":      "delete",
+		"destination":   "k8s/" + destinationName,
+		"resolved_name": remoteName,
+		"granularity":   "secret-path",
+		"format":        "json",
+		"delete_mode":   "delete",
 	}
 }
 

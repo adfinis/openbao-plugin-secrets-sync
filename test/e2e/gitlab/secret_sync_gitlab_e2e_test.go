@@ -142,12 +142,11 @@ func writeGitLabDestination(t *testing.T, client *api.Client, overrides map[stri
 
 func associationRequest() map[string]interface{} {
 	return map[string]interface{}{
-		"destination_type": "gitlab",
-		"destination_name": "local",
-		"name_template":    "{{ key }}",
-		"granularity":      "secret-key",
-		"format":           "raw",
-		"delete_mode":      "delete",
+		"destination":   "gitlab/local",
+		"name_template": "{{ key }}",
+		"granularity":   "secret-key",
+		"format":        "raw",
+		"delete_mode":   "delete",
 	}
 }
 

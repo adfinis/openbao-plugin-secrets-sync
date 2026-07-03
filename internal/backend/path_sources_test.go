@@ -57,8 +57,7 @@ func TestSourceCheckReportsReadiness(t *testing.T) {
 	enableResp := env.update("sources/app/db/enable")
 	assertNoErrorResponse(t, enableResp)
 	associationResp := env.update("associations/app/db", map[string]interface{}{
-		"destination_type": providerTypeFake,
-		"destination_name": "default",
+		"destination": destinationRef(providerTypeFake, "default"),
 	})
 	assertNoErrorResponse(t, associationResp)
 

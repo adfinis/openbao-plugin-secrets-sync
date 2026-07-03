@@ -54,12 +54,11 @@ func TestCoreStateModelSourceAssociationQueueLifecycle(t *testing.T) {
 			run: func(t *testing.T) {
 				env.markAppDBSyncable()
 				resp := env.update("associations/app/db", map[string]interface{}{
-					"destination_type": providerTypeFake,
-					"destination_name": "default",
-					"resolved_name":    modelResolvedName,
-					"granularity":      syncGranularitySecretPath,
-					"format":           defaultAssociationFormat,
-					"delete_mode":      deleteModeDelete,
+					"destination":   destinationRef(providerTypeFake, "default"),
+					"resolved_name": modelResolvedName,
+					"granularity":   syncGranularitySecretPath,
+					"format":        defaultAssociationFormat,
+					"delete_mode":   deleteModeDelete,
 				})
 				associationID = associationIDFromResponse(t, resp)
 				if ids := operationIDsFromResponse(t, resp); len(ids) != 1 {
@@ -106,7 +105,7 @@ func TestCoreStateModelSourceAssociationQueueLifecycle(t *testing.T) {
 					nil,
 				)
 				assertNoErrorResponse(t, resp)
-				if ids := stringSliceFromResponse(t, resp, "canceled_operation_ids"); len(ids) != 1 {
+				if ids := canceledOperationIDsFromResponse(t, resp); len(ids) != 1 {
 					t.Fatalf("canceled operation IDs = %v, want one", ids)
 				}
 			},

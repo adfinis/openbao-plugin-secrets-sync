@@ -21,8 +21,7 @@ func TestAssociationCreateUsesSafeDefaults(t *testing.T) {
 	assertNoErrorResponse(t, enableResp)
 
 	resp := env.update("associations/app/db", map[string]interface{}{
-		"destination_type": providerTypeFake,
-		"destination_name": "default",
+		"destination": destinationRef(providerTypeFake, "default"),
 	})
 	assertNoErrorResponse(t, resp)
 	assertResponseValue(t, resp, "resolved_name", "app/db")
@@ -105,6 +104,66 @@ func TestAssociationCreateQueuesCurrentVersion(t *testing.T) {
 	}
 }
 
+func TestAssociationCreateAndPlanUseDestinationRef(t *testing.T) {
+	env := newBackendTestEnv(t)
+
+	env.writeAppDBSecret("initial")
+	env.createFakeDestination("default")
+
+	planResp := env.update("associations/app/db/plan", map[string]interface{}{
+		"destination":   "fake/default",
+		"resolved_name": "prod/app/db",
+		"granularity":   syncObjectIDSecretPath,
+		"format":        defaultAssociationFormat,
+	})
+	assertNoErrorResponse(t, planResp)
+	assertResponseValue(t, planResp, "destination_ref", "fake/default")
+
+	createResp := env.update("associations/app/db", map[string]interface{}{
+		"destination":   "fake/default",
+		"resolved_name": "prod/app/db",
+		"granularity":   syncObjectIDSecretPath,
+		"format":        defaultAssociationFormat,
+	})
+	assertNoErrorResponse(t, createResp)
+	assertResponseValue(t, createResp, "destination_ref", "fake/default")
+	associationID := associationIDFromResponse(t, createResp)
+
+	readResp := env.read("associations/app/db/" + associationID)
+	assertNoErrorResponse(t, readResp)
+	assertResponseValue(t, readResp, "id", associationID)
+	assertResponseValue(t, readResp, "destination_ref", "fake/default")
+}
+
+func TestAssociationRejectsInvalidDestination(t *testing.T) {
+	env := newBackendTestEnv(t)
+
+	missingResp := env.update("associations/app/db", map[string]interface{}{
+		"resolved_name": "prod/app/db",
+		"granularity":   syncObjectIDSecretPath,
+		"format":        defaultAssociationFormat,
+	})
+	if missingResp == nil || !missingResp.IsError() {
+		t.Fatalf("missing destination response = %#v, want error", missingResp)
+	}
+	if !strings.Contains(missingResp.Error().Error(), "destination is required") {
+		t.Fatalf("missing destination error = %q, want required", missingResp.Error().Error())
+	}
+
+	malformedResp := env.update("associations/app/db", map[string]interface{}{
+		"destination":   "fake",
+		"resolved_name": "prod/app/db",
+		"granularity":   syncObjectIDSecretPath,
+		"format":        defaultAssociationFormat,
+	})
+	if malformedResp == nil || !malformedResp.IsError() {
+		t.Fatalf("malformed destination response = %#v, want error", malformedResp)
+	}
+	if !strings.Contains(malformedResp.Error().Error(), "destination must be in <type>/<name> form") {
+		t.Fatalf("malformed destination error = %q, want form error", malformedResp.Error().Error())
+	}
+}
+
 func TestAssociationUpdateMergesOmittedFieldsFromExistingRecord(t *testing.T) {
 	env := newBackendTestEnv(t)
 
@@ -114,20 +173,18 @@ func TestAssociationUpdateMergesOmittedFieldsFromExistingRecord(t *testing.T) {
 	env.createFakeDestination("default")
 	env.markAppDBSyncable()
 	initialResp := env.update("associations/app/db", map[string]interface{}{
-		"destination_type": providerTypeFake,
-		"destination_name": "default",
-		"name_template":    "prod/{{ path }}/{{ key }}",
-		"granularity":      syncGranularitySecretKey,
-		"format":           defaultAssociationFormat,
-		"enabled":          false,
+		"destination":   destinationRef(providerTypeFake, "default"),
+		"name_template": "prod/{{ path }}/{{ key }}",
+		"granularity":   syncGranularitySecretKey,
+		"format":        defaultAssociationFormat,
+		"enabled":       false,
 	})
 	assertNoErrorResponse(t, initialResp)
 	associationID := associationIDFromResponse(t, initialResp)
 
 	updateResp := env.update("associations/app/db", map[string]interface{}{
-		"destination_type": providerTypeFake,
-		"destination_name": "default",
-		"delete_mode":      deleteModeDelete,
+		"destination": destinationRef(providerTypeFake, "default"),
+		"delete_mode": deleteModeDelete,
 	})
 	assertNoErrorResponse(t, updateResp)
 	updateAssociationID := associationIDFromResponse(t, updateResp)
@@ -167,12 +224,11 @@ func TestAssociationUpdateEnqueuesWhenEnablingExistingRecord(t *testing.T) {
 	env.createFakeDestination("default")
 	env.markAppDBSyncable()
 	initialResp := env.update("associations/app/db", map[string]interface{}{
-		"destination_type": providerTypeFake,
-		"destination_name": "default",
-		"resolved_name":    "prod/app/db",
-		"granularity":      syncGranularitySecretPath,
-		"format":           defaultAssociationFormat,
-		"enabled":          false,
+		"destination":   destinationRef(providerTypeFake, "default"),
+		"resolved_name": "prod/app/db",
+		"granularity":   syncGranularitySecretPath,
+		"format":        defaultAssociationFormat,
+		"enabled":       false,
 	})
 	assertNoErrorResponse(t, initialResp)
 	if operationIDs := operationIDsFromResponse(t, initialResp); len(operationIDs) != 0 {
@@ -180,9 +236,8 @@ func TestAssociationUpdateEnqueuesWhenEnablingExistingRecord(t *testing.T) {
 	}
 
 	enableResp := env.update("associations/app/db", map[string]interface{}{
-		"destination_type": providerTypeFake,
-		"destination_name": "default",
-		"enabled":          true,
+		"destination": destinationRef(providerTypeFake, "default"),
+		"enabled":     true,
 	})
 	assertNoErrorResponse(t, enableResp)
 	operationID := requireSingleOperationID(t, operationIDsFromResponse(t, enableResp), "enable through write")
@@ -198,18 +253,16 @@ func TestAssociationPlanMergesOmittedFieldsFromExistingRecord(t *testing.T) {
 	env.createFakeDestination("default")
 	env.markAppDBSyncable()
 	initialResp := env.update("associations/app/db", map[string]interface{}{
-		"destination_type": providerTypeFake,
-		"destination_name": "default",
-		"name_template":    "prod/{{ path }}/{{ key }}",
-		"granularity":      syncGranularitySecretKey,
-		"format":           defaultAssociationFormat,
+		"destination":   destinationRef(providerTypeFake, "default"),
+		"name_template": "prod/{{ path }}/{{ key }}",
+		"granularity":   syncGranularitySecretKey,
+		"format":        defaultAssociationFormat,
 	})
 	assertNoErrorResponse(t, initialResp)
 
 	planResp := env.update("associations/app/db/plan", map[string]interface{}{
-		"destination_type": providerTypeFake,
-		"destination_name": "default",
-		"delete_mode":      deleteModeDelete,
+		"destination": destinationRef(providerTypeFake, "default"),
+		"delete_mode": deleteModeDelete,
 	})
 	assertNoErrorResponse(t, planResp)
 	assertResponseValue(t, planResp, "association_id", associationIDFromResponse(t, initialResp))
@@ -229,26 +282,23 @@ func TestAssociationUpdateRejectsAmbiguousDestinationBase(t *testing.T) {
 	env.createFakeDestination("default")
 	env.markAppDBSyncable()
 	firstResp := env.update("associations/app/db", map[string]interface{}{
-		"destination_type": providerTypeFake,
-		"destination_name": "default",
-		"resolved_name":    "prod/app/db",
-		"granularity":      syncGranularitySecretPath,
-		"format":           defaultAssociationFormat,
+		"destination":   destinationRef(providerTypeFake, "default"),
+		"resolved_name": "prod/app/db",
+		"granularity":   syncGranularitySecretPath,
+		"format":        defaultAssociationFormat,
 	})
 	assertNoErrorResponse(t, firstResp)
 	secondResp := env.update("associations/app/db", map[string]interface{}{
-		"destination_type": providerTypeFake,
-		"destination_name": "default",
-		"name_template":    "prod/{{ path }}/{{ key }}",
-		"granularity":      syncGranularitySecretKey,
-		"format":           defaultAssociationFormat,
+		"destination":   destinationRef(providerTypeFake, "default"),
+		"name_template": "prod/{{ path }}/{{ key }}",
+		"granularity":   syncGranularitySecretKey,
+		"format":        defaultAssociationFormat,
 	})
 	assertNoErrorResponse(t, secondResp)
 
 	updateResp := env.update("associations/app/db", map[string]interface{}{
-		"destination_type": providerTypeFake,
-		"destination_name": "default",
-		"delete_mode":      deleteModeDelete,
+		"destination": destinationRef(providerTypeFake, "default"),
+		"delete_mode": deleteModeDelete,
 	})
 	if updateResp == nil || !updateResp.IsError() {
 		t.Fatalf("ambiguous update response = %#v, want error", updateResp)
@@ -365,11 +415,10 @@ func TestAssociationRequiresSyncableMetadata(t *testing.T) {
 	env.createFakeDestination("default")
 
 	blockedResp := env.update("associations/app/db", map[string]interface{}{
-		"destination_type": providerTypeFake,
-		"destination_name": "default",
-		"resolved_name":    "prod/app/db",
-		"granularity":      syncObjectIDSecretPath,
-		"format":           defaultAssociationFormat,
+		"destination":   destinationRef(providerTypeFake, "default"),
+		"resolved_name": "prod/app/db",
+		"granularity":   syncObjectIDSecretPath,
+		"format":        defaultAssociationFormat,
 	})
 	if blockedResp == nil || !blockedResp.IsError() {
 		t.Fatalf("association without syncable metadata response = %#v, want error", blockedResp)
@@ -377,11 +426,10 @@ func TestAssociationRequiresSyncableMetadata(t *testing.T) {
 
 	env.markAppDBSyncable()
 	allowedResp := env.update("associations/app/db", map[string]interface{}{
-		"destination_type": providerTypeFake,
-		"destination_name": "default",
-		"resolved_name":    "prod/app/db",
-		"granularity":      syncObjectIDSecretPath,
-		"format":           defaultAssociationFormat,
+		"destination":   destinationRef(providerTypeFake, "default"),
+		"resolved_name": "prod/app/db",
+		"granularity":   syncObjectIDSecretPath,
+		"format":        defaultAssociationFormat,
 	})
 	assertNoErrorResponse(t, allowedResp)
 }
@@ -393,11 +441,10 @@ func TestAssociationAllowsNonSyncableSourceByDefault(t *testing.T) {
 	env.createFakeDestination("default")
 
 	resp := env.update("associations/app/db", map[string]interface{}{
-		"destination_type": providerTypeFake,
-		"destination_name": "default",
-		"resolved_name":    "prod/app/db",
-		"granularity":      syncObjectIDSecretPath,
-		"format":           defaultAssociationFormat,
+		"destination":   destinationRef(providerTypeFake, "default"),
+		"resolved_name": "prod/app/db",
+		"granularity":   syncObjectIDSecretPath,
+		"format":        defaultAssociationFormat,
 	})
 	assertNoErrorResponse(t, resp)
 	assertOperationIDs(t, resp.Data, 1)
@@ -422,11 +469,10 @@ func TestAssociationDestinationPolicyConstraints(t *testing.T) {
 	sourceBlockedResp := env.update(
 		"associations/app/db",
 		map[string]interface{}{
-			"destination_type": providerTypeFake,
-			"destination_name": "restricted",
-			"resolved_name":    "prod/app/db",
-			"granularity":      syncObjectIDSecretPath,
-			"format":           defaultAssociationFormat,
+			"destination":   destinationRef(providerTypeFake, "restricted"),
+			"resolved_name": "prod/app/db",
+			"granularity":   syncObjectIDSecretPath,
+			"format":        defaultAssociationFormat,
 		},
 	)
 	if sourceBlockedResp == nil || !sourceBlockedResp.IsError() {
@@ -449,11 +495,10 @@ func TestAssociationDestinationPolicyConstraints(t *testing.T) {
 	nameBlockedPlan := env.update(
 		"associations/app/db/plan",
 		map[string]interface{}{
-			"destination_type": providerTypeFake,
-			"destination_name": "restricted",
-			"resolved_name":    "prod/other/db",
-			"granularity":      syncObjectIDSecretPath,
-			"format":           defaultAssociationFormat,
+			"destination":   destinationRef(providerTypeFake, "restricted"),
+			"resolved_name": "prod/other/db",
+			"granularity":   syncObjectIDSecretPath,
+			"format":        defaultAssociationFormat,
 		},
 	)
 	assertNoErrorResponse(t, nameBlockedPlan)
@@ -467,11 +512,10 @@ func TestAssociationDestinationPolicyConstraints(t *testing.T) {
 	nameBlockedWrite := env.update(
 		"associations/app/db",
 		map[string]interface{}{
-			"destination_type": providerTypeFake,
-			"destination_name": "restricted",
-			"resolved_name":    "prod/other/db",
-			"granularity":      syncObjectIDSecretPath,
-			"format":           defaultAssociationFormat,
+			"destination":   destinationRef(providerTypeFake, "restricted"),
+			"resolved_name": "prod/other/db",
+			"granularity":   syncObjectIDSecretPath,
+			"format":        defaultAssociationFormat,
 		},
 	)
 	if nameBlockedWrite == nil || !nameBlockedWrite.IsError() {
@@ -479,11 +523,10 @@ func TestAssociationDestinationPolicyConstraints(t *testing.T) {
 	}
 
 	allowedResp := env.update("associations/app/db", map[string]interface{}{
-		"destination_type": providerTypeFake,
-		"destination_name": "restricted",
-		"resolved_name":    "prod/app/db",
-		"granularity":      syncObjectIDSecretPath,
-		"format":           defaultAssociationFormat,
+		"destination":   destinationRef(providerTypeFake, "restricted"),
+		"resolved_name": "prod/app/db",
+		"granularity":   syncObjectIDSecretPath,
+		"format":        defaultAssociationFormat,
 	})
 	assertNoErrorResponse(t, allowedResp)
 }
@@ -540,7 +583,7 @@ func TestAssociationDisableEnableAndManualSync(t *testing.T) {
 	)
 	assertNoErrorResponse(t, disableResp)
 	assertAssociationEnabled(t, disableResp, false)
-	assertStringSlice(t, stringSliceFromResponse(t, disableResp, "canceled_operation_ids"), []string{operationID})
+	assertStringSlice(t, canceledOperationIDsFromResponse(t, disableResp), []string{operationID})
 	assertOutboxMissing(t, env.storage, operationID)
 	assertDisabledStatusObject(t, env.b, env.storage, 1)
 
@@ -585,6 +628,97 @@ func TestAssociationDisableEnableAndManualSync(t *testing.T) {
 	}
 }
 
+func TestAssociationDestinationAddressedLifecycle(t *testing.T) {
+	env := newBackendTestEnv(t)
+
+	env.writeAppDBSecret("initial")
+	env.createFakeDestination("default")
+	associationResp := env.createDefaultFakeAssociation()
+	operationID := operationIDsFromResponse(t, associationResp)[0]
+
+	disableResp := env.update(
+		"associations/app/db/disable",
+		map[string]interface{}{
+			"destination": "fake/default",
+		},
+	)
+	assertNoErrorResponse(t, disableResp)
+	assertAssociationEnabled(t, disableResp, false)
+	assertStringSlice(t, canceledOperationIDsFromResponse(t, disableResp), []string{operationID})
+	assertOutboxMissing(t, env.storage, operationID)
+	assertDisabledStatusObject(t, env.b, env.storage, 1)
+
+	disabledSyncResp := env.update(
+		"associations/app/db/sync",
+		map[string]interface{}{
+			"destination": destinationRef(providerTypeFake, "default"),
+		},
+	)
+	if disabledSyncResp == nil || !disabledSyncResp.IsError() {
+		t.Fatalf("sync disabled association response = %#v, want error", disabledSyncResp)
+	}
+
+	secondResp := env.writeAppDBSecret("rotated")
+	secondMetadata := secondResp.Data["metadata"].(map[string]interface{})
+	assertOperationIDs(t, secondMetadata, 0)
+
+	enableResp := env.update(
+		"associations/app/db/enable",
+		map[string]interface{}{
+			"destination": destinationRef(providerTypeFake, "default"),
+		},
+	)
+	assertNoErrorResponse(t, enableResp)
+	assertAssociationEnabled(t, enableResp, true)
+	enableOperationID := requireSingleOperationID(t, operationIDsFromResponse(t, enableResp), "enable")
+	enableOperation := assertOutboxOperation(t, env.storage, enableOperationID, 2, outboxStatePending)
+	enableIdempotencyKey := enableOperation.IdempotencyKey
+	env.runPeriodicAllowed("periodic")
+
+	syncResp := env.update(
+		"associations/app/db/sync",
+		map[string]interface{}{
+			"destination": "fake/default",
+		},
+	)
+	assertNoErrorResponse(t, syncResp)
+	syncOperationID := requireSingleOperationID(t, operationIDsFromResponse(t, syncResp), "manual sync")
+	if syncOperationID == enableOperationID {
+		t.Fatalf("manual sync operation ID reused previous operation %s", syncOperationID)
+	}
+	manualSyncOperation := assertOutboxOperation(t, env.storage, syncOperationID, 2, outboxStatePending)
+	if manualSyncOperation.IdempotencyKey == "" {
+		t.Fatal("manual sync idempotency key must be set")
+	}
+	if manualSyncOperation.IdempotencyKey == enableIdempotencyKey {
+		t.Fatal("manual sync idempotency key must not reuse the previous operation")
+	}
+}
+
+func TestAssociationDestinationAddressedLifecycleRejectsAmbiguousDestination(t *testing.T) {
+	env := newBackendTestEnv(t)
+
+	env.writeAppDBSecretData(map[string]interface{}{
+		"password": "initial",
+	})
+	env.createFakeDestination("default")
+	assertNoErrorResponse(t, env.createDefaultFakeAssociation())
+	env.createFakeSecretKeyAssociation(deleteModeRetain)
+
+	disableResp := env.update(
+		"associations/app/db/disable",
+		map[string]interface{}{
+			"destination": "fake/default",
+		},
+	)
+	if disableResp == nil || !disableResp.IsError() {
+		t.Fatalf("ambiguous lifecycle response = %#v, want error", disableResp)
+	}
+	if !strings.Contains(disableResp.Error().Error(), "ambiguous") {
+		t.Fatalf("ambiguous lifecycle error = %q, want ambiguity", disableResp.Error().Error())
+	}
+}
+
 func TestAssociationEnableRequiresSyncableMetadata(t *testing.T) {
 	env := newBackendTestEnv(t)
 
@@ -597,12 +731,11 @@ func TestAssociationEnableRequiresSyncableMetadata(t *testing.T) {
 	env.writeAppDBSecret("initial")
 	env.createFakeDestination("default")
 	resp := env.update("associations/app/db", map[string]interface{}{
-		"destination_type": providerTypeFake,
-		"destination_name": "default",
-		"resolved_name":    "prod/app/db",
-		"granularity":      syncObjectIDSecretPath,
-		"format":           defaultAssociationFormat,
-		"enabled":          false,
+		"destination":   destinationRef(providerTypeFake, "default"),
+		"resolved_name": "prod/app/db",
+		"granularity":   syncObjectIDSecretPath,
+		"format":        defaultAssociationFormat,
+		"enabled":       false,
 	})
 	assertNoErrorResponse(t, resp)
 	associationID := associationIDFromResponse(t, resp)
@@ -648,11 +781,10 @@ func TestConcurrentAssociationWritesReserveResolvedNameOnce(t *testing.T) {
 				Path:      "associations/" + path,
 				Storage:   env.storage,
 				Data: map[string]interface{}{
-					"destination_type": providerTypeFake,
-					"destination_name": "default",
-					"resolved_name":    "prod/shared",
-					"granularity":      syncObjectIDSecretPath,
-					"format":           defaultAssociationFormat,
+					"destination":   destinationRef(providerTypeFake, "default"),
+					"resolved_name": "prod/shared",
+					"granularity":   syncObjectIDSecretPath,
+					"format":        defaultAssociationFormat,
 				},
 			})
 			if err != nil {

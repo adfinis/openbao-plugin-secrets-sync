@@ -140,7 +140,8 @@ Non-empty fields from another provider type are rejected.
 
 Source paths are slash-separated OpenBao paths. They cannot contain empty,
 `.` or `..` segments, cannot contain the reserved `versions` segment, and
-cannot end in the reserved `plan` segment.
+cannot end in reserved route segments such as `plan`, `disable`, `enable`, or
+`sync`.
 
 Mark a source path as syncable when `require_source_opt_in=true`:
 
@@ -174,17 +175,17 @@ does not mutate remote state:
 
 ```sh
 bao write secret-sync/associations/app/db/plan \
-  destination_type=aws-sm \
-  destination_name=prod
+  destination=aws-sm/prod
 ```
 
 Create the association:
 
 ```sh
 bao write secret-sync/associations/app/db \
-  destination_type=aws-sm \
-  destination_name=prod
+  destination=aws-sm/prod
 ```
+
+Association requests identify the destination with `destination=<type>/<name>`.
 
 The default association shape is `granularity=secret-path`, `format=json`,
 `data_mapping=payload`, `delete_mode=retain`, `enabled=true`, and
@@ -354,9 +355,19 @@ Read associations for a source path:
 
 ```sh
 bao read secret-sync/associations/app/db
+bao read secret-sync/associations/app/db/<association-id>
 ```
 
 Disable, enable, or manually sync an association:
+
+```sh
+bao write secret-sync/associations/app/db/disable destination=aws-sm/prod
+bao write secret-sync/associations/app/db/enable destination=aws-sm/prod
+bao write secret-sync/associations/app/db/sync destination=aws-sm/prod
+```
+
+The ID-addressed lifecycle paths remain available when a source path has more
+than one association for the same destination:
 
 ```sh
 bao write -force secret-sync/associations/app/db/<association-id>/disable

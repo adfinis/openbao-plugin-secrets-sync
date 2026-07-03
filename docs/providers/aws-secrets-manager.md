@@ -81,12 +81,10 @@ default association shape works for AWS Secrets Manager:
 
 ```sh
 bao write secret-sync/associations/app/db/plan \
-  destination_type=aws-sm \
-  destination_name=prod
+  destination=aws-sm/prod
 
 bao write secret-sync/associations/app/db \
-  destination_type=aws-sm \
-  destination_name=prod
+  destination=aws-sm/prod
 ```
 
 Use `resolved_name` or `name_template` when the remote secret name must differ
@@ -94,8 +92,7 @@ from the OpenBao source path:
 
 ```sh
 bao write secret-sync/associations/app/db \
-  destination_type=aws-sm \
-  destination_name=prod \
+  destination=aws-sm/prod \
   resolved_name=openbao-plugin-secrets-sync/team-a/app-db
 ```
 

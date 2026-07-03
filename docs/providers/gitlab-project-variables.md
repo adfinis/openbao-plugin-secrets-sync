@@ -82,16 +82,14 @@ compatible template:
 
 ```sh
 bao write secret-sync/associations/app/db/plan \
-  destination_type=gitlab \
-  destination_name=prod \
+  destination=gitlab/prod \
   name_template='APP_{{ key }}' \
   granularity=secret-key \
   format=raw \
   delete_mode=delete
 
 bao write secret-sync/associations/app/db \
-  destination_type=gitlab \
-  destination_name=prod \
+  destination=gitlab/prod \
   name_template='APP_{{ key }}' \
   granularity=secret-key \
   format=raw \
@@ -160,14 +158,13 @@ trigger a manual sync:
 
 ```sh
 bao write secret-sync/associations/app/db/plan \
-  destination_type=gitlab \
-  destination_name=prod \
+  destination=gitlab/prod \
   name_template='APP_{{ key }}' \
   granularity=secret-key \
   format=raw \
   delete_mode=delete
 
-bao write -force secret-sync/associations/app/db/<association-id>/sync
+bao write secret-sync/associations/app/db/sync destination=gitlab/prod
 bao write secret-sync/queue/drain max_operations=10
 ```
 
