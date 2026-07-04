@@ -16,6 +16,8 @@ Preserve these invariants:
   config.
 - Association activation requires destination authority and source eligibility
   when strict source opt-in is enabled.
+- Association activation rolls back persisted enabled state when initial enqueue
+  fails, so an error response does not leave a newly active association behind.
 - Queue capacity errors occur before a new source version is accepted.
 - Remote deletes require `delete_mode=delete` and provider-owned delete
   support.
@@ -52,9 +54,10 @@ remote mutation. Periodic work returns before drift detection or dispatch, and
 event dispatch does not process queue work.
 
 Manual reconcile remains available because it does not write destination
-secrets. Manual sync can still enqueue durable work when the association is
-valid, but queue drain and dispatch provider mutation remain blocked until the
-mount is enabled again.
+secrets. Destination source and remote-name constraints still apply before
+provider read-state. Manual sync can still enqueue durable work when the
+association is valid, but queue drain and dispatch provider mutation remain
+blocked until the mount is enabled again.
 
 ## Replication Safety
 

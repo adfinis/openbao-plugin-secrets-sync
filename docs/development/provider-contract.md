@@ -285,8 +285,8 @@ Templates are validated at association creation and revalidated during sync.
 Rendered templates that still contain `{{` or `}}` are rejected as
 unsupported.
 
-The backend maintains a reservation index for resolved names so two
-associations do not manage the same remote object for one destination.
+The backend maintains a reservation index for resolved or rendered remote names
+so two associations do not manage the same remote object for one destination.
 
 Template changes do not silently rename existing remote objects. Operators
 must create a new association, review the plan, and delete the old association

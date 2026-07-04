@@ -213,4 +213,5 @@ bao write secret-sync/associations/apps/team-a/db \
 ```
 
 The backend checks these constraints during association plan, association
-activation, manual sync, enable, and queued dispatch.
+activation, manual sync, enable, manual reconcile, background drift read-state,
+and queued dispatch.

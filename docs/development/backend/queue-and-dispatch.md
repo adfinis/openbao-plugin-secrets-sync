@@ -50,7 +50,9 @@ operation it:
 
 Dispatch claims are stored on the outbox record with a claim owner, expiry
 time, and attempt number. Unexpired claims are skipped. Expired claims are
-reclaimable.
+reclaimable. Dispatcher claim, queue retry, and queue cancel paths serialize
+their read-check-write/delete sections so an operator action cannot overwrite
+or delete an operation while dispatch is claiming it.
 
 The current dispatcher is intentionally sequential. Dispatch claims already
 allow safe concurrency, so a future throughput step can add a bounded worker
@@ -67,6 +69,10 @@ Authentication, authorization, validation, ownership, collision, drift,
 capacity, and internal failures remain terminal until an operator changes
 configuration, retries the queue operation, or runs manual sync for the current
 source version.
+
+Direct retry and cancel reject operations with an active claim. Operators should
+wait for the claim to finish or expire before retrying or canceling that
+operation.
 
 ## Event Dispatch
 

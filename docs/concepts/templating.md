@@ -79,8 +79,16 @@ by an association. This prevents two associations from managing the same remote
 object in the same destination.
 
 For `secret-path` associations, the reservation is the resolved remote name.
-For `secret-key` associations, the reservation is the `name_template`, and each
-object renders from that template during sync.
+For `secret-key` associations, the backend reserves both the rendered name
+pattern and the concrete rendered names for the current source keys. The
+pattern substitutes source path and destination placeholders, keeps a stable
+key placeholder, and applies the same slash trimming as normal object-name
+rendering.
+
+Source writes refresh concrete `secret-key` reservations before committing a
+new source version. If a new or changed source key would make one association
+render the same remote object name as another association for the same
+destination, the write is rejected before the new version is accepted.
 
 Changing `granularity`, `resolved_name`, or the remote-name reservation
 requires creating a new association and deleting the old one. Updating an
