@@ -61,6 +61,7 @@ func TestOpenBaoLifecyclePreservesSecretSyncState(t *testing.T) {
 	})
 
 	assertConfig(t, baoClient, false, false, false)
+	disableEventDispatch(t, baoClient)
 	write(t, baoClient, mountPath+"/config", map[string]interface{}{
 		"disabled": true,
 	})
@@ -455,6 +456,13 @@ func drainQueue(t *testing.T, client *api.Client, expectedProcessed int) {
 	if got := intFromSecret(t, secret.Data["processed"]); got != expectedProcessed {
 		t.Fatalf("queue drain processed = %d, want %d", got, expectedProcessed)
 	}
+}
+
+func disableEventDispatch(t *testing.T, client *api.Client) {
+	t.Helper()
+	write(t, client, mountPath+"/config", map[string]interface{}{
+		"event_dispatch_enabled": false,
+	})
 }
 
 func assertConfig(
