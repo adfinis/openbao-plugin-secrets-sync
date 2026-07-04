@@ -106,11 +106,22 @@ API and storage changes need:
 
 - path tests that lock request fields, response fields, defaults, and error
   classes;
+- candidate API golden snapshots for broad response-shape drift detection;
 - pagination tests for public `LIST` endpoints when listing behavior changes;
 - storage compatibility tests when schema handling changes;
 - OpenAPI inspection artifact updates when path shape or field names change;
 - updates to API surface and compatibility docs when user-visible behavior
   changes.
+
+Update candidate snapshots explicitly with:
+
+```sh
+UPDATE_API_GOLDEN=1 go test ./internal/backend -run TestAPIGoldenResponses
+```
+
+Review the fixture diff before committing. During the pre-release phase, these
+snapshots are an early-warning guardrail, not a final stable compatibility
+promise.
 
 ### Release and artifact changes
 

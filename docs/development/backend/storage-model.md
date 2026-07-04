@@ -60,6 +60,17 @@ Current schema compatibility constants live in `storage_records.go`:
 Schema changes must include migration or compatibility handling before the
 backend accepts storage records written by another version.
 
+Pre-release schema policy:
+
+- the current schema is v1;
+- request paths do not run automatic storage migrations;
+- a future stored schema may be read only when its `min_compatible_version` is
+  less than or equal to the running binary's `currentStorageSchema`;
+- incompatible schemas fail closed before path handlers, queue drain, periodic
+  dispatch, or event dispatch can mutate source or remote state;
+- the first schema bump must add explicit migration or compatibility handling,
+  tests, and release notes before the schema version is increased.
+
 ## Runtime Identity
 
 `identity/plugin-instance` is generated once per mount. Provider requests carry
