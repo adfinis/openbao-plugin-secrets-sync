@@ -1417,6 +1417,11 @@ components:
 
     SourceDataWriteRequest:
       type: object
+      description: >
+        Source writes accept either a wrapped body with data/options or CLI
+        shorthand where additional top-level fields become source payload keys.
+        In shorthand mode, data, options, cas, and version are reserved field
+        names.
       properties:
         data:
           type: object
@@ -1427,8 +1432,11 @@ components:
             cas:
               type: integer
               minimum: 0
-      required: [data]
-      additionalProperties: false
+        cas:
+          type: integer
+          minimum: 0
+          description: Alias for options.cas.
+      additionalProperties: true
 
     SourceDataResponse:
       type: object

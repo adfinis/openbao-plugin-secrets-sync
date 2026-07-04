@@ -12,7 +12,8 @@ which is not valid in Kubernetes Secret names:
 
 ```sh
 bao write secret-sync/data/app/db \
-  @<(printf '%s' '{"data":{"username":"app","password":"initial"}}')
+  username=app \
+  password=initial
 
 bao write secret-sync/associations/app/db/plan \
   destination=k8s/apps \
@@ -31,7 +32,8 @@ Secret `.data` entries instead of one `payload` entry:
 
 ```sh
 bao write secret-sync/data/app/db \
-  @<(printf '%s' '{"data":{"username":"app","password":"initial"}}')
+  username=app \
+  password=initial
 
 bao write secret-sync/associations/app/db/plan \
   destination=k8s/apps \

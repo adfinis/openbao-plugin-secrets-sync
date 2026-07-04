@@ -15,7 +15,7 @@ The source API is compatible with KV-v2 at the concept and workflow level:
 - source secrets are addressed under `data/<path>`;
 - each write creates a new version;
 - reads return `data` and version `metadata`;
-- writes support `options.cas`;
+- wrapped writes support `options.cas`;
 - `metadata/<path>` owns version policy and custom metadata;
 - `delete/<path>`, `undelete/<path>`, and `destroy/<path>` mutate selected
   versions;
@@ -24,6 +24,8 @@ The source API is compatible with KV-v2 at the concept and workflow level:
 
 The source API is not a strict client compatibility layer:
 
+- source writes also accept a CLI shorthand where top-level request fields
+  become source payload keys;
 - responses may contain sync-specific fields such as queued operation IDs and
   sync state;
 - metadata deletion is blocked while associations exist;
@@ -70,6 +72,36 @@ This applies to `metadata`, `metadata/<path>`, `destinations/<type>`, and
 `associations`.
 
 `PATCH data/<path>` is not part of the source API.
+
+## Source write forms
+
+For CLI use, write source payload keys directly:
+
+```sh
+bao write secret-sync/data/app/db username=app password=initial cas=1
+```
+
+The top-level `cas` field is an alias for `options.cas` and is not stored as a
+source payload key.
+
+For HTTP clients, automation, or source payload keys that collide with reserved
+field names, use the wrapped body:
+
+```json
+{
+  "data": {
+    "username": "app",
+    "password": "initial"
+  },
+  "options": {
+    "cas": 1
+  }
+}
+```
+
+In shorthand mode, `data`, `options`, `cas`, and `version` are reserved field
+names. Wrapped `data` writes reject extra top-level source payload fields so
+mixed request bodies do not silently discard input.
 
 ## Metadata policy
 

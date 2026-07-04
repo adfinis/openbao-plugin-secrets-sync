@@ -76,6 +76,29 @@ fallback for missed wakeups, retries, and restart recovery.
 
 Each source write creates a new version. Writes that produce sync work reserve
 queue capacity before accepting the new source version.
+Source writes accept either a KV-v2-like wrapped body:
+
+```json
+{
+  "data": {
+    "username": "app",
+    "password": "initial"
+  },
+  "options": {
+    "cas": 1
+  }
+}
+```
+
+or CLI shorthand where top-level fields become source payload keys:
+
+```sh
+bao write secret-sync/data/app/db username=app password=initial cas=1
+```
+
+In shorthand mode, `data`, `options`, `cas`, and `version` are reserved field
+names. Use the wrapped body when the source payload needs one of those literal
+top-level keys.
 Mounts default `require_source_opt_in=false`. When strict opt-in is enabled,
 `sources/<path>/enable` sets `custom_metadata.syncable=true` and source checks
 report `source_not_syncable` until that metadata is present.

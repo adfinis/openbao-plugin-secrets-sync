@@ -8,13 +8,15 @@ import (
 	"github.com/adfinis/openbao-plugin-secrets-sync/internal/providers"
 )
 
+const testAppUsername = "app"
+
 func TestAssociationDataMapDispatchesSourceKeys(t *testing.T) {
 	env := newBackendTestEnv(t)
 	provider := &capturingDataMapProvider{}
 	env.b.providerRegistry = providers.MustNewRegistry(provider)
 
 	env.writeAppDBSecretData(map[string]interface{}{
-		"username": "app",
+		"username": testAppUsername,
 		"password": "secret",
 	})
 	env.markAppDBSyncable()
@@ -44,8 +46,8 @@ func TestAssociationDataMapDispatchesSourceKeys(t *testing.T) {
 	if request.Format != payloadpkg.FormatDataMap {
 		t.Fatalf("format = %s, want %s", request.Format, payloadpkg.FormatDataMap)
 	}
-	if got := string(request.DataMap["APP_username"]); got != "app" {
-		t.Fatalf("APP_username = %q, want app", got)
+	if got := string(request.DataMap["APP_username"]); got != testAppUsername {
+		t.Fatalf("APP_username = %q, want %s", got, testAppUsername)
 	}
 	if got := string(request.DataMap["APP_password"]); got != "secret" {
 		t.Fatalf("APP_password = %q, want secret", got)
@@ -65,7 +67,7 @@ func TestAssociationDataMapDispatchesSourceKeys(t *testing.T) {
 
 func TestAssociationDataMapRequiresProviderCapability(t *testing.T) {
 	env := newBackendTestEnv(t)
-	env.writeAppDBSecretData(map[string]interface{}{"username": "app"})
+	env.writeAppDBSecretData(map[string]interface{}{"username": testAppUsername})
 	env.markAppDBSyncable()
 	env.createFakeDestination("default")
 
