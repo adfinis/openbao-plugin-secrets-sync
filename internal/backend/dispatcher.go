@@ -42,22 +42,7 @@ func (b *secretSyncBackend) processDueOutboxLimit(
 	}
 	processed := 0
 	for _, id := range ids {
-		record, err := getOutbox(ctx, storage, id)
-		if err != nil {
-			return processed, err
-		}
-		if record == nil || !isDispatchableOutboxState(record.State) {
-			continue
-		}
-		if !isSupportedOperation(*record) {
-			if err := discardUnsupportedOutboxOperation(ctx, storage, *record); err != nil {
-				return processed, err
-			}
-			continue
-		}
-		b.enqueueMu.Lock()
-		claimed, ok, err := claimOutboxRecord(ctx, storage, *record, claimOwner, now)
-		b.enqueueMu.Unlock()
+		claimed, ok, err := b.claimDispatchableOutboxRecord(ctx, storage, id, claimOwner, now)
 		if err != nil {
 			return processed, err
 		}
@@ -73,6 +58,32 @@ func (b *secretSyncBackend) processDueOutboxLimit(
 		}
 	}
 	return processed, nil
+}
+
+func (b *secretSyncBackend) claimDispatchableOutboxRecord(
+	ctx context.Context,
+	storage logical.Storage,
+	id string,
+	claimOwner string,
+	now time.Time,
+) (*outboxRecord, bool, error) {
+	b.enqueueMu.Lock()
+	defer b.enqueueMu.Unlock()
+
+	record, err := getOutbox(ctx, storage, id)
+	if err != nil {
+		return nil, false, err
+	}
+	if record == nil || !isDispatchableOutboxState(record.State) {
+		return nil, false, nil
+	}
+	if !isSupportedOperation(*record) {
+		if err := discardUnsupportedOutboxOperation(ctx, storage, *record); err != nil {
+			return nil, false, err
+		}
+		return nil, false, nil
+	}
+	return claimOutboxRecord(ctx, storage, *record, claimOwner, now)
 }
 
 func (b *secretSyncBackend) outboxClaimOwner(ctx context.Context, storage logical.Storage) (string, error) {
