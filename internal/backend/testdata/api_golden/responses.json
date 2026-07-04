@@ -1,0 +1,569 @@
+{
+  "associations.list": {
+    "data": {
+      "keys": [
+        "app/"
+      ]
+    }
+  },
+  "associations.plan.create": {
+    "data": {
+      "action": "create",
+      "association": {
+        "created_time": "<timestamp>",
+        "data_key_template": "",
+        "data_mapping": "payload",
+        "delete_mode": "retain",
+        "destination": {
+          "name": "default",
+          "type": "fake"
+        },
+        "destination_ref": "fake/default",
+        "enabled": true,
+        "format": "json",
+        "granularity": "secret-path",
+        "id": "<association-id>",
+        "name_template": "{{ path }}",
+        "path": "app/db",
+        "resolved_name": "prod/app/db",
+        "updated_time": "<timestamp>"
+      },
+      "association_id": "<association-id>",
+      "data_key_template": "",
+      "data_mapping": "payload",
+      "destination": {
+        "name": "default",
+        "type": "fake"
+      },
+      "destination_ref": "fake/default",
+      "error_class": "",
+      "format": "json",
+      "message": "",
+      "path": "app/db",
+      "payload_bytes": 38,
+      "resolved_name": "prod/app/db",
+      "source_eligible": true,
+      "version": 1
+    }
+  },
+  "associations.read.path": {
+    "data": {
+      "associations": [
+        {
+          "created_time": "<timestamp>",
+          "data_key_template": "",
+          "data_mapping": "payload",
+          "delete_mode": "retain",
+          "destination": {
+            "name": "default",
+            "type": "fake"
+          },
+          "destination_ref": "fake/default",
+          "enabled": true,
+          "format": "json",
+          "granularity": "secret-path",
+          "id": "<association-id>",
+          "name_template": "{{ path }}",
+          "path": "app/db",
+          "resolved_name": "prod/app/db",
+          "updated_time": "<timestamp>"
+        }
+      ],
+      "path": "app/db"
+    }
+  },
+  "associations.write.create": {
+    "data": {
+      "association": {
+        "created_time": "<timestamp>",
+        "data_key_template": "",
+        "data_mapping": "payload",
+        "delete_mode": "retain",
+        "destination": {
+          "name": "default",
+          "type": "fake"
+        },
+        "destination_ref": "fake/default",
+        "enabled": true,
+        "format": "json",
+        "granularity": "secret-path",
+        "id": "<association-id>",
+        "name_template": "{{ path }}",
+        "path": "app/db",
+        "resolved_name": "prod/app/db",
+        "updated_time": "<timestamp>"
+      },
+      "association_id": "<association-id>",
+      "data_key_template": "",
+      "data_mapping": "payload",
+      "delete_mode": "retain",
+      "destination_ref": "fake/default",
+      "enabled": true,
+      "format": "json",
+      "granularity": "secret-path",
+      "resolved_name": "prod/app/db",
+      "sync_operation_ids": [
+        "<operation-id>"
+      ]
+    }
+  },
+  "config.read.initial": {
+    "data": {
+      "disabled": false,
+      "drift_reconcile_batch": 16,
+      "drift_reconcile_interval": "1h",
+      "drift_repair": "off",
+      "event_dispatch_enabled": true,
+      "event_dispatch_max_operations": 16,
+      "plugin_instance_id": "<plugin-instance-id>",
+      "queue_capacity": 1000,
+      "require_source_opt_in": false,
+      "restore_epoch": "<restore-epoch>",
+      "restore_guard": false,
+      "restore_guard_acknowledged_time": "<timestamp>",
+      "storage_schema_min_compatible_version": 1,
+      "storage_schema_version": 1
+    }
+  },
+  "config.update": null,
+  "data.read.latest": {
+    "data": {
+      "data": {
+        "setting": "enabled",
+        "username": "app"
+      },
+      "metadata": {
+        "created_time": "<timestamp>",
+        "deletion_time": "",
+        "destroyed": false,
+        "version": 1
+      }
+    }
+  },
+  "data.write.initial": {
+    "data": {
+      "metadata": {
+        "created_time": "<timestamp>",
+        "sync_operation_ids": [],
+        "sync_state": "NO_ASSOCIATION",
+        "version": 1
+      }
+    }
+  },
+  "destinations.check": {
+    "data": {
+      "blockers": [],
+      "capabilities": {
+        "max_payload_bytes": 1048576,
+        "supports_data_map": false,
+        "supports_delete_if_owned": true,
+        "supports_metadata_readback": true,
+        "supports_payload_hash_metadata": true,
+        "supports_secret_key": true,
+        "supports_secret_path": true,
+        "supports_update_if_owned": true,
+        "supports_value_readback": true
+      },
+      "destination": {
+        "name": "default",
+        "type": "fake"
+      },
+      "disabled": false,
+      "health_checked": true,
+      "health_error_class": "",
+      "health_message": "",
+      "healthy": true,
+      "ready": true,
+      "valid": true,
+      "validation_error_class": "",
+      "validation_message": ""
+    }
+  },
+  "destinations.health": {
+    "data": {
+      "destination": {
+        "name": "default",
+        "type": "fake"
+      },
+      "disabled": false,
+      "error_class": "",
+      "healthy": true,
+      "message": ""
+    }
+  },
+  "destinations.list": {
+    "data": {
+      "keys": [
+        "default"
+      ]
+    }
+  },
+  "destinations.read": {
+    "data": {
+      "allowed_resolved_name_prefixes": null,
+      "allowed_source_path_prefixes": null,
+      "capabilities": {
+        "max_payload_bytes": 1048576,
+        "supports_data_map": false,
+        "supports_delete_if_owned": true,
+        "supports_metadata_readback": true,
+        "supports_payload_hash_metadata": true,
+        "supports_secret_key": true,
+        "supports_secret_path": true,
+        "supports_update_if_owned": true,
+        "supports_value_readback": true
+      },
+      "config": {},
+      "created_time": "<timestamp>",
+      "description": "test destination",
+      "disabled": false,
+      "name": "default",
+      "sensitive_config": {
+        "configured": false,
+        "keys": [],
+        "redacted": true
+      },
+      "type": "fake",
+      "updated_time": "<timestamp>"
+    }
+  },
+  "destinations.validate": {
+    "data": {
+      "capabilities": {
+        "max_payload_bytes": 1048576,
+        "supports_data_map": false,
+        "supports_delete_if_owned": true,
+        "supports_metadata_readback": true,
+        "supports_payload_hash_metadata": true,
+        "supports_secret_key": true,
+        "supports_secret_path": true,
+        "supports_update_if_owned": true,
+        "supports_value_readback": true
+      },
+      "destination": {
+        "name": "default",
+        "type": "fake"
+      },
+      "valid": true
+    }
+  },
+  "destinations.write.empty": null,
+  "info.read": {
+    "data": {
+      "defaults": {
+        "association": {
+          "data_key_template": "",
+          "data_mapping": "payload",
+          "delete_mode": "retain",
+          "enabled": true,
+          "format": "json",
+          "granularity": "secret-path",
+          "secret_key_name_template": "{{ path }}/{{ key }}",
+          "secret_path_name_template": "{{ path }}"
+        }
+      },
+      "plugin_version": "0.0.0-dev",
+      "providers": {
+        "aws-sm": {
+          "capabilities": {
+            "max_payload_bytes": 65536,
+            "supports_data_map": false,
+            "supports_delete_if_owned": true,
+            "supports_metadata_readback": true,
+            "supports_payload_hash_metadata": true,
+            "supports_secret_key": false,
+            "supports_secret_path": true,
+            "supports_update_if_owned": true,
+            "supports_value_readback": true
+          }
+        },
+        "fake": {
+          "capabilities": {
+            "max_payload_bytes": 1048576,
+            "supports_data_map": false,
+            "supports_delete_if_owned": true,
+            "supports_metadata_readback": true,
+            "supports_payload_hash_metadata": true,
+            "supports_secret_key": true,
+            "supports_secret_path": true,
+            "supports_update_if_owned": true,
+            "supports_value_readback": true
+          }
+        },
+        "gitlab": {
+          "capabilities": {
+            "max_payload_bytes": 10000,
+            "supports_data_map": false,
+            "supports_delete_if_owned": true,
+            "supports_metadata_readback": true,
+            "supports_payload_hash_metadata": true,
+            "supports_secret_key": true,
+            "supports_secret_path": true,
+            "supports_update_if_owned": true,
+            "supports_value_readback": true
+          }
+        },
+        "k8s": {
+          "capabilities": {
+            "max_payload_bytes": 1048576,
+            "supports_data_map": true,
+            "supports_delete_if_owned": true,
+            "supports_metadata_readback": true,
+            "supports_payload_hash_metadata": true,
+            "supports_secret_key": false,
+            "supports_secret_path": true,
+            "supports_update_if_owned": true,
+            "supports_value_readback": true
+          }
+        }
+      }
+    }
+  },
+  "metadata.read": {
+    "data": {
+      "cas_required": false,
+      "current_version": 1,
+      "custom_metadata": {
+        "owner": "platform",
+        "syncable": "true"
+      },
+      "delete_version_after": "0s",
+      "max_versions": 5,
+      "oldest_version": 1,
+      "sync": {
+        "objects": 0,
+        "queued_operations": 0
+      },
+      "updated_time": "<timestamp>",
+      "versions": {
+        "1": {
+          "created_time": "<timestamp>",
+          "deletion_time": "",
+          "destroyed": false
+        }
+      }
+    }
+  },
+  "metadata.write": {
+    "data": {
+      "cas_required": false,
+      "current_version": 0,
+      "custom_metadata": {
+        "owner": "platform",
+        "syncable": "true"
+      },
+      "delete_version_after": "0s",
+      "max_versions": 5,
+      "oldest_version": 0,
+      "sync": {
+        "objects": 0,
+        "queued_operations": 0
+      },
+      "updated_time": "<timestamp>",
+      "versions": {}
+    }
+  },
+  "queue.drain": {
+    "data": {
+      "max_operations": 1,
+      "processed": 1,
+      "queue": {
+        "capacity": 10,
+        "claimed": 0,
+        "oldest_age_seconds": 0,
+        "pending": 0,
+        "retry_wait": 0,
+        "terminal": 0,
+        "utilization": 0
+      },
+      "queue_capacity": 10,
+      "queue_claimed": 0,
+      "queue_oldest_age_seconds": 0,
+      "queue_pending": 0,
+      "queue_retry_wait": 0,
+      "queue_terminal": 0,
+      "queue_utilization": 0
+    }
+  },
+  "queue.operation.read": {
+    "data": {
+      "association_id": "<association-id>",
+      "attempts": 0,
+      "claim_attempt": 0,
+      "claim_expires_time": "",
+      "claim_owner": "",
+      "claimed": false,
+      "created_time": "<timestamp>",
+      "destination_ref": "fake/default",
+      "id": "<operation-id>",
+      "idempotency_key": "<operation-id>",
+      "not_before": "<timestamp>",
+      "object_id": "secret-path",
+      "path": "app/db",
+      "state": "pending",
+      "trigger": "user",
+      "type": "upsert",
+      "updated_time": "<timestamp>",
+      "version": 1
+    }
+  },
+  "queue.read.pending": {
+    "data": {
+      "capacity": 10,
+      "claimed": 0,
+      "oldest_age_seconds": 0,
+      "pending": 1,
+      "retry_wait": 0,
+      "terminal": 0,
+      "utilization": 0.1
+    }
+  },
+  "queue.read.synced": {
+    "data": {
+      "capacity": 10,
+      "claimed": 0,
+      "oldest_age_seconds": 0,
+      "pending": 0,
+      "retry_wait": 0,
+      "terminal": 0,
+      "utilization": 0
+    }
+  },
+  "reconcile.apply.synced": {
+    "data": {
+      "applied": true,
+      "objects": [
+        {
+          "association_id": "<association-id>",
+          "destination_ref": "fake/default",
+          "error_class": "",
+          "message": "",
+          "object_id": "secret-path",
+          "remote_exists": true,
+          "remote_owned": true,
+          "remote_ownership_known": true,
+          "remote_source_version": 1,
+          "remote_version": "fake",
+          "resolved_name": "prod/app/db",
+          "state": "SYNCED",
+          "verification": "value",
+          "version": 1
+        }
+      ],
+      "path": "app/db",
+      "state": "SYNCED",
+      "version": 1
+    }
+  },
+  "reconcile.plan.synced": {
+    "data": {
+      "applied": false,
+      "objects": [
+        {
+          "association_id": "<association-id>",
+          "destination_ref": "fake/default",
+          "error_class": "",
+          "message": "",
+          "object_id": "secret-path",
+          "remote_exists": true,
+          "remote_owned": true,
+          "remote_ownership_known": true,
+          "remote_source_version": 1,
+          "remote_version": "fake",
+          "resolved_name": "prod/app/db",
+          "state": "SYNCED",
+          "verification": "value",
+          "version": 1
+        }
+      ],
+      "path": "app/db",
+      "state": "SYNCED",
+      "version": 1
+    }
+  },
+  "sources.check.empty": {
+    "data": {
+      "association_count": 0,
+      "blockers": [
+        "source_missing"
+      ],
+      "current_version": 0,
+      "current_version_available": false,
+      "enabled_association_count": 0,
+      "path": "app/db",
+      "queued_operations": 0,
+      "ready": false,
+      "source_opt_in_required": false,
+      "status_objects": 0,
+      "syncable": false
+    }
+  },
+  "sources.check.ready": {
+    "data": {
+      "association_count": 0,
+      "blockers": [],
+      "current_version": 1,
+      "current_version_available": true,
+      "enabled_association_count": 0,
+      "path": "app/db",
+      "queued_operations": 0,
+      "ready": true,
+      "source_opt_in_required": false,
+      "status_objects": 0,
+      "syncable": true
+    }
+  },
+  "status.read.pending": {
+    "data": {
+      "objects": [],
+      "operation_ids": [
+        "<operation-id>"
+      ],
+      "path": "app/db",
+      "state": "PENDING",
+      "version": 1
+    }
+  },
+  "status.read.synced": {
+    "data": {
+      "association_id": "<association-id>",
+      "destination_ref": "fake/default",
+      "last_drift_detected_time": "",
+      "last_error": "",
+      "last_error_class": "",
+      "last_operation_id": "<operation-id>",
+      "last_reconcile_time": "",
+      "last_repair_time": "",
+      "last_success_time": "<timestamp>",
+      "object_id": "secret-path",
+      "objects": [
+        {
+          "association_id": "<association-id>",
+          "destination_ref": "fake/default",
+          "last_drift_detected_time": "",
+          "last_error": "",
+          "last_error_class": "",
+          "last_operation_id": "<operation-id>",
+          "last_reconcile_time": "",
+          "last_repair_time": "",
+          "last_success_time": "<timestamp>",
+          "object_id": "secret-path",
+          "remote_version": "fake",
+          "repair_count": 0,
+          "resolved_name": "prod/app/db",
+          "state": "SYNCED",
+          "verification": "",
+          "version": 1
+        }
+      ],
+      "operation_ids": [],
+      "path": "app/db",
+      "remote_version": "fake",
+      "repair_count": 0,
+      "resolved_name": "prod/app/db",
+      "state": "SYNCED",
+      "verification": "",
+      "version": 1
+    }
+  }
+}
