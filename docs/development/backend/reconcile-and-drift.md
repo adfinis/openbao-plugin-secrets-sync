@@ -19,8 +19,8 @@ Manual reconcile does not write destination secrets and does not enqueue repair
 work. It remains available when `disabled=true` because it is not a remote
 mutation path.
 
-Manual reconcile still calls providers, so response redaction and provider
-error classification rules apply.
+Manual reconcile still calls providers, so destination source and remote-name
+constraints, response redaction, and provider error classification rules apply.
 
 ## Reconcile Result Mapping
 
@@ -104,6 +104,11 @@ Restore guard has narrower semantics. Periodic drift detection can still run
 while restore guard is active so operators can inspect remote state. Restore
 guard blocks periodic repair enqueue, event dispatch, queue drain, and queued
 remote mutation until acknowledged.
+
+Manual reconcile and periodic drift detection validate destination constraints
+before provider read-state. Tightening `allowed_source_path_prefixes` or
+`allowed_resolved_name_prefixes` therefore blocks both future mutation and
+future remote-state reads for disallowed association objects.
 
 `drift_repair=detect` and active restore guard can inspect objects that already
 have queued upserts. `drift_repair=repair` avoids selecting objects that

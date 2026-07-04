@@ -95,8 +95,9 @@ Implemented controls:
 Delegated app owners must not be able to use a broad platform destination to
 write arbitrary remote names. Destination records can constrain source paths and
 resolved remote-name prefixes. These constraints are checked during association
-plan, association activation, manual sync, enable, and queued dispatch, so a
-destination policy tightened after enqueue still blocks remote mutation.
+plan, association activation, manual sync, enable, manual reconcile, background
+drift read-state, and queued dispatch, so a destination policy tightened after
+enqueue still blocks remote mutation and provider read-state.
 
 ## Source secret protection
 

@@ -6,13 +6,14 @@ OpenBao configuration in `config/node0.hcl`, `config/node1.hcl`, and
 `config/node2.hcl`, three-node Raft storage, and a static seal key generated
 under `dist/e2e/resilience`.
 
-The test initializes OpenBao once, registers and mounts the plugin, pauses
-dispatch, enqueues AWS Secrets Manager sync work, stops the primary OpenBao
-node, verifies the plugin state through a remaining HA node, starts the primary
-node again, resumes dispatch, and verifies the remote secret and status state.
-It then restarts OpenBao nodes, queues an update, seals OpenBao through the
-system API, restarts into static-seal self-unseal, and verifies the plugin
-mount can drain the queued update.
+The test initializes OpenBao once, registers and mounts the plugin, disables
+event-triggered dispatch for deterministic manual drain assertions, pauses
+remote mutation, enqueues AWS Secrets Manager sync work, stops the primary
+OpenBao node, verifies the plugin state through a remaining HA node, starts the
+primary node again, resumes remote mutation, and verifies the remote secret and
+status state. It then restarts OpenBao nodes, queues an update, seals OpenBao
+through the system API, restarts into static-seal self-unseal, and verifies the
+plugin mount can drain the queued update.
 
 Run it with:
 

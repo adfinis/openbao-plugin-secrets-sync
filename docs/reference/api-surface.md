@@ -149,12 +149,15 @@ Association create, update, plan, and primary lifecycle requests use
 stable response identifiers and exact-addressing escape hatches.
 Updates that resolve exactly one existing association may change non-identity
 fields in place. Changes to `granularity` or the remote-name reservation
-(`resolved_name` for `secret-path`, `name_template` for `secret-key`) require an
-explicit new association plus deletion of the old one.
+(`resolved_name` for `secret-path`; rendered name pattern and current concrete
+rendered names for `secret-key`) require an explicit new association plus
+deletion of the old one.
 Updating an already-enabled association does not enqueue sync work. The response
 returns `sync_operation_ids=[]` with a `hint` and `next_actions` pointing to
 `associations/<path>/sync` when an operator wants to push or retry the current
 source version.
+Association activation and source writes reject secret-key configurations whose
+rendered names would overlap another association for the same destination.
 Read `info` to discover static association defaults and provider capability
 flags.
 

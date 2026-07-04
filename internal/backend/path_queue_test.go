@@ -252,6 +252,27 @@ func TestQueueDrainSkipsUnexpiredClaim(t *testing.T) {
 	}
 }
 
+func TestQueueOperationRetryRejectsClaimedOperation(t *testing.T) {
+	env := newBackendTestEnv(t)
+
+	env.writeAppDBSecret("initial")
+	env.createFakeDestination("default")
+	associationResp := env.createFakeAssociationWithResolvedName("prod/rate-limit/app/db")
+	operationID := operationIDsFromResponse(t, associationResp)[0]
+
+	env.runPeriodicAllowed("periodic")
+	claimOperationFixture(t, env.storage, operationID)
+
+	retryResp := env.update("queue/" + operationID + "/retry")
+	if retryResp == nil || !retryResp.IsError() {
+		t.Fatalf("retry claimed operation response = %#v, want error", retryResp)
+	}
+	operation := assertOutboxOperation(t, env.storage, operationID, 1, outboxStateRetryWait)
+	if operation.ClaimOwner == "" {
+		t.Fatal("operation claim must remain active")
+	}
+}
+
 func TestQueueDrainReclaimsExpiredClaimAndClearsIt(t *testing.T) {
 	env := newBackendTestEnv(t)
 

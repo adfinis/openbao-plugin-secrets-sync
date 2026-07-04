@@ -100,7 +100,7 @@ func pathQueue(b *secretSyncBackend) []*framework.Path {
 			},
 			Operations: map[logical.Operation]framework.OperationHandler{
 				logical.UpdateOperation: &framework.PathOperation{
-					Callback: pathQueueOperationCancel,
+					Callback: b.pathQueueOperationCancel,
 					Summary:  "Cancel one queued outbox operation.",
 				},
 			},
@@ -292,6 +292,9 @@ func (b *secretSyncBackend) pathQueueOperationRetry(
 	req *logical.Request,
 	data *framework.FieldData,
 ) (*logical.Response, error) {
+	b.enqueueMu.Lock()
+	defer b.enqueueMu.Unlock()
+
 	record, err := getOutbox(ctx, req.Storage, data.Get("operation_id").(string))
 	if err != nil {
 		return nil, err
@@ -323,11 +326,14 @@ func (b *secretSyncBackend) pathQueueOperationRetry(
 	}
 }
 
-func pathQueueOperationCancel(
+func (b *secretSyncBackend) pathQueueOperationCancel(
 	ctx context.Context,
 	req *logical.Request,
 	data *framework.FieldData,
 ) (*logical.Response, error) {
+	b.enqueueMu.Lock()
+	defer b.enqueueMu.Unlock()
+
 	record, err := getOutbox(ctx, req.Storage, data.Get("operation_id").(string))
 	if err != nil {
 		return nil, err

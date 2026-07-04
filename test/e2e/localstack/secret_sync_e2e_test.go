@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -82,6 +83,15 @@ func TestOpenBaoPluginSyncsToLocalStackSecretsManager(t *testing.T) {
 		"openbao-sync-object": "secret-path",
 	})
 	assertStatus(t, baoClient, "SYNCED")
+	assertReconcilePlan(t, baoClient, "SYNCED")
+
+	write(t, baoClient, mountPath+"/destinations/aws-sm/prod", map[string]interface{}{
+		"allowed_resolved_name_prefixes": []string{"openbao-plugin-secrets-sync-e2e/blocked"},
+	})
+	assertReconcilePolicyFailure(t, baoClient)
+	write(t, baoClient, mountPath+"/destinations/aws-sm/prod", map[string]interface{}{
+		"allowed_resolved_name_prefixes": []string{remoteName},
+	})
 	assertReconcilePlan(t, baoClient, "SYNCED")
 
 	noOpPlan := write(t, baoClient, mountPath+"/associations/app/db/plan", associationRequest(remoteName))
@@ -508,6 +518,29 @@ func assertReconcileApply(t *testing.T, client *api.Client, expectedState string
 	t.Helper()
 	secret := write(t, client, mountPath+"/reconcile/app/db", map[string]interface{}{})
 	assertReconcileState(t, secret, expectedState)
+}
+
+func assertReconcilePolicyFailure(t *testing.T, client *api.Client) {
+	t.Helper()
+	secret, err := client.Logical().Read(mountPath + "/reconcile/app/db/plan")
+	if err != nil {
+		t.Fatalf("read reconcile plan: %v", err)
+	}
+	assertReconcileState(t, secret, "VALIDATION_ERROR")
+	objects := objectsFromSecret(t, secret.Data["objects"])
+	if len(objects) != 1 {
+		t.Fatalf("reconcile objects = %d, want 1", len(objects))
+	}
+	object := objects[0]
+	if got := object["state"]; got != "VALIDATION_ERROR" {
+		t.Fatalf("reconcile object state = %v, want VALIDATION_ERROR", got)
+	}
+	if got := object["error_class"]; got != "validation" {
+		t.Fatalf("reconcile object error_class = %v, want validation", got)
+	}
+	if got := fmt.Sprint(object["message"]); !strings.Contains(got, "does not allow resolved name") {
+		t.Fatalf("reconcile object message = %q, want destination policy failure", got)
+	}
 }
 
 func assertReconcileState(t *testing.T, secret *api.Secret, expectedState string) {

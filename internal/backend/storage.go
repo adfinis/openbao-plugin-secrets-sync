@@ -346,6 +346,15 @@ func deleteDestinationSensitiveConfig(
 }
 
 func putAssociation(ctx context.Context, storage logical.Storage, record associationRecord) error {
+	existing, err := getAssociation(ctx, storage, record.Path, record.ID)
+	if err != nil {
+		return err
+	}
+	if existing != nil {
+		if err := deleteStaleAssociationNameReservations(ctx, storage, *existing, record); err != nil {
+			return err
+		}
+	}
 	entry, err := logical.StorageEntryJSON(associationStorageKey(record.Path, record.ID), record)
 	if err != nil {
 		return err
@@ -363,14 +372,19 @@ func putAssociation(ctx context.Context, storage logical.Storage, record associa
 	if err := storage.Put(ctx, byDestinationEntry); err != nil {
 		return err
 	}
-	reservationEntry, err := logical.StorageEntryJSON(
-		associationNameStorageKey(record.DestinationRef, record.reservationName(), record.ID),
-		record.Path,
-	)
-	if err != nil {
-		return err
+	for _, reservationName := range record.reservationNames() {
+		reservationEntry, err := logical.StorageEntryJSON(
+			associationNameStorageKey(record.DestinationRef, reservationName, record.ID),
+			record.Path,
+		)
+		if err != nil {
+			return err
+		}
+		if err := storage.Put(ctx, reservationEntry); err != nil {
+			return err
+		}
 	}
-	return storage.Put(ctx, reservationEntry)
+	return nil
 }
 
 func getAssociation(ctx context.Context, storage logical.Storage, path string, id string) (*associationRecord, error) {
@@ -405,7 +419,35 @@ func deleteAssociation(ctx context.Context, storage logical.Storage, record asso
 	); err != nil {
 		return err
 	}
-	return storage.Delete(ctx, associationNameStorageKey(record.DestinationRef, record.reservationName(), record.ID))
+	for _, reservationName := range record.reservationNames() {
+		key := associationNameStorageKey(record.DestinationRef, reservationName, record.ID)
+		if err := storage.Delete(ctx, key); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func deleteStaleAssociationNameReservations(
+	ctx context.Context,
+	storage logical.Storage,
+	existing associationRecord,
+	updated associationRecord,
+) error {
+	updatedNames := map[string]struct{}{}
+	for _, reservationName := range updated.reservationNames() {
+		updatedNames[reservationName] = struct{}{}
+	}
+	for _, reservationName := range existing.reservationNames() {
+		if _, ok := updatedNames[reservationName]; ok {
+			continue
+		}
+		key := associationNameStorageKey(existing.DestinationRef, reservationName, existing.ID)
+		if err := storage.Delete(ctx, key); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func listAssociationIDsForPath(ctx context.Context, storage logical.Storage, path string) ([]string, error) {

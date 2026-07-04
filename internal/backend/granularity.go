@@ -6,6 +6,8 @@ import (
 	"strings"
 )
 
+const secretKeyReservationObjectID = "${key}"
+
 func associationObjectIDs(association associationRecord, data secretPayload) ([]string, error) {
 	switch association.Granularity {
 	case syncGranularitySecretPath:
@@ -41,6 +43,21 @@ func validateSecretKeyObjectID(key string) error {
 		return fmt.Errorf("secret-key object key %q is not supported", key)
 	}
 	return nil
+}
+
+func secretKeyReservationName(
+	template string,
+	path string,
+	destinationType string,
+	destinationName string,
+) (string, error) {
+	return renderAssociationObjectName(
+		template,
+		path,
+		destinationType,
+		destinationName,
+		secretKeyReservationObjectID,
+	)
 }
 
 func renderDataKeyTemplate(template string, key string) (string, error) {

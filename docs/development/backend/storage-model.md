@@ -124,8 +124,13 @@ association_names/<destination-ref>/<reservation>/<association-id>
 ```
 
 The remote-name reservation prevents two associations from managing the same
-remote object for the same destination. Secret-key associations reserve their
-name template. Secret-path associations reserve their resolved name.
+remote object for the same destination. Secret-path associations reserve their
+resolved name. Secret-key associations reserve their rendered name pattern:
+the backend substitutes the source path and destination placeholders, keeps a
+stable key placeholder, and applies the same slash trimming used for concrete
+remote object names. They also reserve the concrete rendered names for the
+current source keys, and source writes refresh those concrete reservations
+before committing a new version.
 
 Association records carry the source path, destination reference, name or name
 template, granularity, format, data mapping, delete mode, enabled state, and

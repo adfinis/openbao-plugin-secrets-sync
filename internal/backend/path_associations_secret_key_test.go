@@ -166,6 +166,131 @@ func TestAssociationGitLabSecretKeyRawFormat(t *testing.T) {
 	}
 }
 
+func TestAssociationSecretKeyReservesRenderedNamePattern(t *testing.T) {
+	env := newBackendTestEnv(t)
+
+	env.writeAppDBSecretData(map[string]interface{}{
+		"password": "initial",
+	})
+	env.createFakeDestination("default")
+	env.markAppDBSyncable()
+	firstResp := env.update("associations/app/db", map[string]interface{}{
+		"destination":   destinationRef(providerTypeFake, "default"),
+		"name_template": "{{ path }}/{{ key }}",
+		"granularity":   syncGranularitySecretKey,
+		"format":        defaultAssociationFormat,
+	})
+	assertNoErrorResponse(t, firstResp)
+
+	env.update("data/app", map[string]interface{}{
+		"data": map[string]interface{}{
+			"password": "other",
+		},
+	})
+	env.markSourceSyncable("app")
+	secondResp := env.update("associations/app", map[string]interface{}{
+		"destination":   destinationRef(providerTypeFake, "default"),
+		"name_template": "/app/db/{{ key }}/",
+		"granularity":   syncGranularitySecretKey,
+		"format":        defaultAssociationFormat,
+	})
+	if secondResp == nil || !secondResp.IsError() {
+		t.Fatalf("rendered-name collision response = %#v, want error", secondResp)
+	}
+	if !strings.Contains(secondResp.Error().Error(), "already reserved") {
+		t.Fatalf("rendered-name collision error = %q, want reservation error", secondResp.Error().Error())
+	}
+}
+
+func TestAssociationSecretKeyReservesConcreteRenderedNames(t *testing.T) {
+	env := newBackendTestEnv(t)
+
+	env.update("data/left", map[string]interface{}{
+		"data": map[string]interface{}{
+			"a": "left",
+		},
+	})
+	env.createFakeDestination("default")
+	env.markSourceSyncable("left")
+	firstResp := env.update("associations/left", map[string]interface{}{
+		"destination":   destinationRef(providerTypeFake, "default"),
+		"name_template": "a{{ key }}",
+		"granularity":   syncGranularitySecretKey,
+		"format":        defaultAssociationFormat,
+	})
+	assertNoErrorResponse(t, firstResp)
+
+	env.update("data/right", map[string]interface{}{
+		"data": map[string]interface{}{
+			"a": "right",
+		},
+	})
+	env.markSourceSyncable("right")
+	secondResp := env.update("associations/right", map[string]interface{}{
+		"destination":   destinationRef(providerTypeFake, "default"),
+		"name_template": "{{ key }}a",
+		"granularity":   syncGranularitySecretKey,
+		"format":        defaultAssociationFormat,
+	})
+	if secondResp == nil || !secondResp.IsError() {
+		t.Fatalf("concrete-name collision response = %#v, want error", secondResp)
+	}
+	if !strings.Contains(secondResp.Error().Error(), "already reserved") {
+		t.Fatalf("concrete-name collision error = %q, want reservation error", secondResp.Error().Error())
+	}
+}
+
+func TestAssociationSecretKeySourceWriteRejectsNewConcreteNameCollision(t *testing.T) {
+	env := newBackendTestEnv(t)
+
+	env.update("data/left", map[string]interface{}{
+		"data": map[string]interface{}{
+			"x": "left",
+		},
+	})
+	env.createFakeDestination("default")
+	env.markSourceSyncable("left")
+	firstResp := env.update("associations/left", map[string]interface{}{
+		"destination":   destinationRef(providerTypeFake, "default"),
+		"name_template": "a{{ key }}",
+		"granularity":   syncGranularitySecretKey,
+		"format":        defaultAssociationFormat,
+	})
+	assertNoErrorResponse(t, firstResp)
+
+	env.update("data/right", map[string]interface{}{
+		"data": map[string]interface{}{
+			"b": "right",
+		},
+	})
+	env.markSourceSyncable("right")
+	secondResp := env.update("associations/right", map[string]interface{}{
+		"destination":   destinationRef(providerTypeFake, "default"),
+		"name_template": "{{ key }}x",
+		"granularity":   syncGranularitySecretKey,
+		"format":        defaultAssociationFormat,
+	})
+	assertNoErrorResponse(t, secondResp)
+
+	writeResp := env.update("data/right", map[string]interface{}{
+		"data": map[string]interface{}{
+			"a": "blocked",
+		},
+	})
+	if writeResp == nil || !writeResp.IsError() {
+		t.Fatalf("source write collision response = %#v, want error", writeResp)
+	}
+	if !strings.Contains(writeResp.Error().Error(), "already reserved") {
+		t.Fatalf("source write collision error = %q, want reservation error", writeResp.Error().Error())
+	}
+	readResp := env.read("data/right")
+	assertNoErrorResponse(t, readResp)
+	metadata := readResp.Data["metadata"].(map[string]interface{})
+	if got := metadata["version"]; got != 1 {
+		t.Fatalf("right source version = %v, want 1", got)
+	}
+}
+
 func TestAssociationSecretKeyDeleteModeQueuesPerSourceKeyDeletes(t *testing.T) {
 	env := newBackendTestEnv(t)
 

@@ -285,38 +285,111 @@ func (b *secretSyncBackend) pathAssociationEnable(
 	if response != nil || err != nil {
 		return response, err
 	}
-	cfg, err := readGlobalConfig(ctx, req.Storage)
-	if err != nil {
-		return nil, err
+	activationRecord, response, err := associationRecordForEnable(
+		ctx,
+		req.Storage,
+		mount,
+		*record,
+		metadata,
+	)
+	if response != nil || err != nil {
+		return response, err
 	}
-	if err := validateSourceEligibility(metadata, cfg); err != nil {
-		return errorResponseWithDiagnostic(err.Error(), validationDiagnosticForAssociation(mount, *record, err.Error())), nil
-	}
-	if err := validateAssociationDestination(ctx, req.Storage, *record); err != nil {
-		return errorResponseWithDiagnostic(err.Error(), validationDiagnosticForAssociation(mount, *record, err.Error())), nil
-	}
-
-	wasEnabled := record.Enabled
+	previous := activationRecord
+	wasEnabled := activationRecord.Enabled
 	now := nowUTC().Format(timeFormatRFC3339)
-	record.Enabled = true
-	record.UpdatedTime = now
-	if err := putAssociation(ctx, req.Storage, *record); err != nil {
+	activationRecord.Enabled = true
+	activationRecord.UpdatedTime = now
+	if err := putAssociation(ctx, req.Storage, activationRecord); err != nil {
 		return nil, err
 	}
 	operationIDs := []string{}
 	if !wasEnabled {
-		operationIDs, err = b.enqueueAssociationCurrentVersion(ctx, req.Storage, *record, *metadata, now)
-		if err != nil {
-			return errorResponseForOperationError(err, mount), nil
-		}
-		if len(operationIDs) > 0 {
-			b.signalEventDispatch()
+		operationIDs, response, err = b.enqueueEnabledAssociationCurrentVersion(
+			ctx,
+			req.Storage,
+			activationRecord,
+			metadata,
+			previous,
+			mount,
+			now,
+		)
+		if response != nil || err != nil {
+			return response, err
 		}
 	}
 	return &logical.Response{Data: associationLifecycleResponse(
-		*record,
-		associationSyncLifecycleFields(mount, *record, operationIDs, wasEnabled && len(operationIDs) == 0)...,
+		activationRecord,
+		associationSyncLifecycleFields(mount, activationRecord, operationIDs, wasEnabled && len(operationIDs) == 0)...,
 	)}, nil
+}
+
+func associationRecordForEnable(
+	ctx context.Context,
+	storage logical.Storage,
+	mount string,
+	record associationRecord,
+	metadata *metadataRecord,
+) (associationRecord, *logical.Response, error) {
+	cfg, err := readGlobalConfig(ctx, storage)
+	if err != nil {
+		return associationRecord{}, nil, err
+	}
+	if err := validateSourceEligibility(metadata, cfg); err != nil {
+		return associationRecord{}, errorResponseWithDiagnostic(
+			err.Error(),
+			validationDiagnosticForAssociation(mount, record, err.Error()),
+		), nil
+	}
+	if err := validateAssociationDestination(ctx, storage, record); err != nil {
+		return associationRecord{}, errorResponseWithDiagnostic(
+			err.Error(),
+			validationDiagnosticForAssociation(mount, record, err.Error()),
+		), nil
+	}
+	version, err := getVersion(ctx, storage, record.Path, metadata.CurrentVersion)
+	if err != nil {
+		return associationRecord{}, nil, err
+	}
+	if version == nil || version.Destroyed || version.DeletionTime != "" {
+		return associationRecord{}, logical.ErrorResponse("current source version is unavailable"), nil
+	}
+	recordWithReservations, err := associationWithConcreteReservationNames(record, version.Data)
+	if err != nil {
+		return associationRecord{}, logical.ErrorResponse(err.Error()), nil
+	}
+	if err := validateAssociationNameReservations(
+		ctx,
+		storage,
+		recordWithReservations.DestinationRef,
+		recordWithReservations.reservationNames(),
+		recordWithReservations.ID,
+	); err != nil {
+		return associationRecord{}, logical.ErrorResponse(err.Error()), nil
+	}
+	return recordWithReservations, nil, nil
+}
+
+func (b *secretSyncBackend) enqueueEnabledAssociationCurrentVersion(
+	ctx context.Context,
+	storage logical.Storage,
+	record associationRecord,
+	metadata *metadataRecord,
+	previous associationRecord,
+	mount string,
+	now string,
+) ([]string, *logical.Response, error) {
+	operationIDs, err := b.enqueueAssociationCurrentVersion(ctx, storage, record, *metadata, now)
+	if err != nil {
+		if rollbackErr := rollbackAssociationPersistence(ctx, storage, record, &previous); rollbackErr != nil {
+			return nil, nil, rollbackAssociationPersistenceError(err, rollbackErr)
+		}
+		return nil, errorResponseForOperationError(err, mount), nil
+	}
+	if len(operationIDs) > 0 {
+		b.signalEventDispatch()
+	}
+	return operationIDs, nil, nil
 }
 
 func (b *secretSyncBackend) pathAssociationSync(
@@ -420,7 +493,7 @@ func (b *secretSyncBackend) associationWritePlan(
 	record associationRecord,
 	mount string,
 ) (associationWritePlan, *logical.Response, error) {
-	metadata, existing, response, err := associationWritePreflight(ctx, storage, path, record, mount)
+	record, metadata, existing, response, err := associationWritePreflight(ctx, storage, path, record, mount)
 	if response != nil || err != nil {
 		return associationWritePlan{}, response, err
 	}
@@ -442,6 +515,9 @@ func (b *secretSyncBackend) associationWritePlan(
 			nowUTC().Format(timeFormatRFC3339),
 		)
 		if err != nil {
+			if rollbackErr := rollbackAssociationPersistence(ctx, storage, record, existing); rollbackErr != nil {
+				return associationWritePlan{}, nil, rollbackAssociationPersistenceError(err, rollbackErr)
+			}
 			return associationWritePlan{}, errorResponseForOperationError(err, mount), nil
 		}
 		if len(operationIDs) > 0 {
@@ -455,50 +531,77 @@ func (b *secretSyncBackend) associationWritePlan(
 	}, nil, nil
 }
 
+func rollbackAssociationPersistence(
+	ctx context.Context,
+	storage logical.Storage,
+	record associationRecord,
+	previous *associationRecord,
+) error {
+	if previous != nil {
+		return putAssociation(ctx, storage, *previous)
+	}
+	return deleteAssociation(ctx, storage, record)
+}
+
+func rollbackAssociationPersistenceError(operationErr error, rollbackErr error) error {
+	return fmt.Errorf("%w; association rollback failed: %v", operationErr, rollbackErr)
+}
+
 func associationWritePreflight(
 	ctx context.Context,
 	storage logical.Storage,
 	path string,
 	record associationRecord,
 	mount string,
-) (*metadataRecord, *associationRecord, *logical.Response, error) {
-	if err := validateAssociationNameReservation(
+) (associationRecord, *metadataRecord, *associationRecord, *logical.Response, error) {
+	metadata, err := getMetadata(ctx, storage, path)
+	if err != nil {
+		return associationRecord{}, nil, nil, nil, err
+	}
+	if metadata == nil || metadata.CurrentVersion == 0 {
+		return associationRecord{}, nil, nil, logical.ErrorResponse("source path does not exist"), nil
+	}
+	version, err := getVersion(ctx, storage, path, metadata.CurrentVersion)
+	if err != nil {
+		return associationRecord{}, nil, nil, nil, err
+	}
+	if version == nil || version.Destroyed || version.DeletionTime != "" {
+		return associationRecord{}, nil, nil, logical.ErrorResponse("current source version is unavailable"), nil
+	}
+	record, err = associationWithConcreteReservationNames(record, version.Data)
+	if err != nil {
+		return associationRecord{}, nil, nil, logical.ErrorResponse(err.Error()), nil
+	}
+	if err := validateAssociationNameReservations(
 		ctx,
 		storage,
 		record.DestinationRef,
-		record.reservationName(),
+		record.reservationNames(),
 		record.ID,
 	); err != nil {
-		return nil, nil, logical.ErrorResponse(err.Error()), nil
-	}
-	metadata, err := getMetadata(ctx, storage, path)
-	if err != nil {
-		return nil, nil, nil, err
-	}
-	if metadata == nil || metadata.CurrentVersion == 0 {
-		return nil, nil, logical.ErrorResponse("source path does not exist"), nil
+		return associationRecord{}, nil, nil, logical.ErrorResponse(err.Error()), nil
 	}
 	cfg, err := readGlobalConfig(ctx, storage)
 	if err != nil {
-		return nil, nil, nil, err
+		return associationRecord{}, nil, nil, nil, err
 	}
 	if err := validateAssociationActivation(record, metadata, cfg); err != nil {
-		return nil, nil, errorResponseWithDiagnostic(
+		return associationRecord{}, nil, nil, errorResponseWithDiagnostic(
 			err.Error(),
 			validationDiagnosticForAssociation(mount, record, err.Error()),
 		), nil
 	}
 	if err := validateAssociationDestination(ctx, storage, record); err != nil {
-		return nil, nil, errorResponseWithDiagnostic(
+		return associationRecord{}, nil, nil, errorResponseWithDiagnostic(
 			err.Error(),
 			validationDiagnosticForAssociation(mount, record, err.Error()),
 		), nil
 	}
 	existing, err := getAssociation(ctx, storage, path, record.ID)
 	if err != nil {
-		return nil, nil, nil, err
+		return associationRecord{}, nil, nil, nil, err
 	}
-	return metadata, existing, nil, nil
+	return record, metadata, existing, nil, nil
 }
 
 func (b *secretSyncBackend) pathAssociationPlan(
@@ -1765,7 +1868,11 @@ func resolveAssociationNames(
 		); err != nil {
 			return "", "", err
 		}
-		return "", nameTemplate, nil
+		reservationName, err := secretKeyReservationName(nameTemplate, path, destinationType, destinationName)
+		if err != nil {
+			return "", "", err
+		}
+		return "", reservationName, nil
 	default:
 		return "", "", fmt.Errorf("unsupported granularity %q", granularity)
 	}
@@ -1821,25 +1928,52 @@ func validateSecretKeyAssociationTemplate(
 	return err
 }
 
-func validateAssociationNameReservation(
+func associationWithConcreteReservationNames(
+	record associationRecord,
+	data secretPayload,
+) (associationRecord, error) {
+	if record.Granularity != syncGranularitySecretKey {
+		record.ReservationNames = nil
+		return record, nil
+	}
+	objectIDs, err := associationObjectIDs(record, data)
+	if err != nil {
+		return associationRecord{}, err
+	}
+	reservationNames := make([]string, 0, len(objectIDs))
+	for _, objectID := range objectIDs {
+		resolvedName, err := associationResolvedNameForObject(record, objectID)
+		if err != nil {
+			return associationRecord{}, err
+		}
+		reservationNames = append(reservationNames, resolvedName)
+	}
+	record.ReservationNames = uniqueSortedStrings(reservationNames)
+	return record, nil
+}
+
+func validateAssociationNameReservations(
 	ctx context.Context,
 	storage logical.Storage,
 	destinationReference string,
-	reservationName string,
+	reservationNames []string,
 	associationID string,
 ) error {
-	reservations, err := listAssociationNameReservationIDs(ctx, storage, destinationReference, reservationName)
-	if err != nil {
-		return err
+	for _, reservationName := range reservationNames {
+		reservations, err := listAssociationNameReservationIDs(ctx, storage, destinationReference, reservationName)
+		if err != nil {
+			return err
+		}
+		if len(reservations) == 0 || (len(reservations) == 1 && reservations[0] == associationID) {
+			continue
+		}
+		return fmt.Errorf(
+			"resolved_name %q is already reserved for destination %s",
+			reservationName,
+			destinationReference,
+		)
 	}
-	if len(reservations) == 0 || (len(reservations) == 1 && reservations[0] == associationID) {
-		return nil
-	}
-	return fmt.Errorf(
-		"resolved_name %q is already reserved for destination %s",
-		reservationName,
-		destinationReference,
-	)
+	return nil
 }
 
 func validateAssociationCapabilities(capabilities providers.Capabilities, granularity string, format string) error {

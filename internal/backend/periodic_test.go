@@ -575,6 +575,52 @@ func TestPeriodicDriftRepairDetectsUnderRestoreGuardWithoutEnqueue(t *testing.T)
 	assertQueueCount(t, env.b, env.storage, "pending", 0)
 }
 
+func TestPeriodicDriftReconcileRejectsDestinationPolicyBeforeReadState(t *testing.T) {
+	env := newBackendTestEnv(t)
+
+	env.writeAppDBSecret("initial")
+	env.createFakeDestination("default")
+	associationResp := env.createFakeAssociationWithResolvedName("prod/authn/app/db")
+	associationID := associationIDFromResponse(t, associationResp)
+	restrictResp := env.update("destinations/fake/default", map[string]interface{}{
+		destinationAllowedResolvedNamePrefixesField: "safe",
+	})
+	if restrictResp != nil && restrictResp.IsError() {
+		t.Fatalf("unexpected destination write error: %v", restrictResp.Error())
+	}
+	configResp := env.update(configPath, map[string]interface{}{
+		"drift_repair": driftRepairDetect,
+	})
+	if configResp != nil && configResp.IsError() {
+		t.Fatalf("unexpected config error: %v", configResp.Error())
+	}
+	cfg, err := readGlobalConfig(context.Background(), env.storage)
+	if err != nil {
+		t.Fatalf("read config: %v", err)
+	}
+
+	if err := env.b.periodicDriftReconcile(context.Background(), env.storage, cfg, nowUTC()); err != nil {
+		t.Fatalf("periodic drift reconcile: %v", err)
+	}
+
+	status, err := getStatus(context.Background(), env.storage, "app/db", associationID, syncObjectIDSecretPath)
+	if err != nil {
+		t.Fatalf("read status: %v", err)
+	}
+	if status == nil {
+		t.Fatal("status must be written")
+	}
+	if got := status.State; got != string(domain.SyncStateValidationError) {
+		t.Fatalf("status state = %s, want %s", got, domain.SyncStateValidationError)
+	}
+	if got := status.LastErrorClass; got != string(providers.ErrorClassValidation) {
+		t.Fatalf("last error class = %s, want %s", got, providers.ErrorClassValidation)
+	}
+	if !strings.Contains(status.LastError, "does not allow resolved name") {
+		t.Fatalf("last error = %q, want destination policy failure", status.LastError)
+	}
+}
+
 func TestPeriodicDriftDetectSkippedWhenDisabled(t *testing.T) {
 	env := newBackendTestEnv(t)
 
