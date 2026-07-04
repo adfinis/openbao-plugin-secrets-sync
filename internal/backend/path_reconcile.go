@@ -264,6 +264,12 @@ func (b *secretSyncBackend) reconcileAssociationObject(
 		"",
 		"",
 	)
+	if err := validateDestinationPolicyForObject(destination, association, objectID, resolvedName); err != nil {
+		result.state = domain.SyncStateValidationError
+		result.errorClass = providers.ErrorClassValidation
+		result.message = err.Error()
+		return result
+	}
 	payload, failure := prepareReconcilePayload(provider, association, version, objectID)
 	if failure != nil {
 		result.state = syncStateForFailureClass(failure.class)

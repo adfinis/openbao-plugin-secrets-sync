@@ -41,6 +41,48 @@ func TestReconcilePlanDoesNotPersistStatus(t *testing.T) {
 	}
 }
 
+func TestReconcilePlanRejectsDestinationPolicyBeforeReadState(t *testing.T) {
+	env := newBackendTestEnv(t)
+
+	env.writeAppDBSecret("initial")
+	env.createFakeDestination("default")
+	associationResp := env.createFakeAssociationWithResolvedName("prod/authn/app/db")
+	associationID := associationIDFromResponse(t, associationResp)
+	restrictResp := env.update("destinations/fake/default", map[string]interface{}{
+		destinationAllowedResolvedNamePrefixesField: "safe",
+	})
+	if restrictResp != nil && restrictResp.IsError() {
+		t.Fatalf("unexpected destination write error: %v", restrictResp.Error())
+	}
+
+	resp := env.read("reconcile/app/db/plan")
+	assertNoErrorResponse(t, resp)
+	assertResponseValue(t, resp, "applied", false)
+	assertResponseValue(t, resp, "state", string(domain.SyncStateValidationError))
+	objects := resp.Data["objects"].([]map[string]interface{})
+	if len(objects) != 1 {
+		t.Fatalf("reconcile plan objects = %d, want 1", len(objects))
+	}
+	object := objects[0]
+	if got := object["state"]; got != string(domain.SyncStateValidationError) {
+		t.Fatalf("reconcile object state = %v, want %s", got, domain.SyncStateValidationError)
+	}
+	if got := object["error_class"]; got != string(providers.ErrorClassValidation) {
+		t.Fatalf("reconcile error class = %v, want %s", got, providers.ErrorClassValidation)
+	}
+	if got := fmt.Sprint(object["message"]); !strings.Contains(got, "does not allow resolved name") {
+		t.Fatalf("reconcile message = %q, want destination policy failure", got)
+	}
+
+	status, err := getStatus(context.Background(), env.storage, "app/db", associationID, syncObjectIDSecretPath)
+	if err != nil {
+		t.Fatalf("read status: %v", err)
+	}
+	if status != nil {
+		t.Fatalf("status = %#v, want nil after reconcile plan", status)
+	}
+}
+
 func TestReconcileApplyMapsReadStateToStatus(t *testing.T) {
 	testCases := []struct {
 		name         string
