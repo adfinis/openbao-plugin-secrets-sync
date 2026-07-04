@@ -130,28 +130,44 @@ type destinationSensitiveRecord struct {
 }
 
 type associationRecord struct {
-	ID              string `json:"id"`
-	Path            string `json:"path"`
-	DestinationType string `json:"destination_type"`
-	DestinationName string `json:"destination_name"`
-	DestinationRef  string `json:"destination_ref"`
-	NameTemplate    string `json:"name_template"`
-	ResolvedName    string `json:"resolved_name"`
-	Granularity     string `json:"granularity"`
-	Format          string `json:"format"`
-	DataMapping     string `json:"data_mapping,omitempty"`
-	DataKeyTemplate string `json:"data_key_template,omitempty"`
-	DeleteMode      string `json:"delete_mode"`
-	Enabled         bool   `json:"enabled"`
-	CreatedTime     string `json:"created_time"`
-	UpdatedTime     string `json:"updated_time"`
+	ID               string   `json:"id"`
+	Path             string   `json:"path"`
+	DestinationType  string   `json:"destination_type"`
+	DestinationName  string   `json:"destination_name"`
+	DestinationRef   string   `json:"destination_ref"`
+	NameTemplate     string   `json:"name_template"`
+	ResolvedName     string   `json:"resolved_name"`
+	ReservationNames []string `json:"reservation_names,omitempty"`
+	Granularity      string   `json:"granularity"`
+	Format           string   `json:"format"`
+	DataMapping      string   `json:"data_mapping,omitempty"`
+	DataKeyTemplate  string   `json:"data_key_template,omitempty"`
+	DeleteMode       string   `json:"delete_mode"`
+	Enabled          bool     `json:"enabled"`
+	CreatedTime      string   `json:"created_time"`
+	UpdatedTime      string   `json:"updated_time"`
 }
 
 func (record associationRecord) reservationName() string {
 	if record.Granularity == syncGranularitySecretKey {
+		reservationName, err := secretKeyReservationName(
+			record.NameTemplate,
+			record.Path,
+			record.DestinationType,
+			record.DestinationName,
+		)
+		if err == nil {
+			return reservationName
+		}
 		return record.NameTemplate
 	}
 	return record.ResolvedName
+}
+
+func (record associationRecord) reservationNames() []string {
+	names := []string{record.reservationName()}
+	names = append(names, record.ReservationNames...)
+	return uniqueSortedStrings(names)
 }
 
 type enqueueIntentRecord struct {

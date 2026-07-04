@@ -379,7 +379,7 @@ func TestAssociationUpdateRejectsReservationIdentityChange(t *testing.T) {
 			},
 			field:           "name_template",
 			granularity:     syncGranularitySecretKey,
-			reservationName: "prod/{{ path }}/{{ key }}",
+			reservationName: "prod/app/db/${key}",
 		},
 	}
 

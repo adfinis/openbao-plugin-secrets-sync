@@ -100,12 +100,13 @@ func (b *secretSyncBackend) pathDataWrite(
 }
 
 type dataWritePlan struct {
-	metadata     *metadataRecord
-	nextVersion  int
-	nowTime      time.Time
-	now          string
-	operations   []outboxRecord
-	operationIDs []string
+	metadata                      *metadataRecord
+	nextVersion                   int
+	nowTime                       time.Time
+	now                           string
+	associationReservationUpdates []associationRecord
+	operations                    []outboxRecord
+	operationIDs                  []string
 }
 
 func dataWritePlanFromRequest(
@@ -146,6 +147,15 @@ func dataWritePlanFromRequest(
 	nextVersion := metadata.CurrentVersion + 1
 	nowTime := nowUTC()
 	now := nowTime.Format(timeFormatRFC3339)
+	associationReservationUpdates, response, err := associationReservationUpdatesForPayload(
+		ctx,
+		storage,
+		associations,
+		payload,
+	)
+	if response != nil || err != nil {
+		return dataWritePlan{}, response, err
+	}
 	operations, operationIDs, err := newAssociationOutboxRecords(
 		associations,
 		metadata.Generation,
@@ -157,12 +167,13 @@ func dataWritePlanFromRequest(
 		return dataWritePlan{}, logical.ErrorResponse(err.Error()), nil
 	}
 	return dataWritePlan{
-		metadata:     metadata,
-		nextVersion:  nextVersion,
-		nowTime:      nowTime,
-		now:          now,
-		operations:   operations,
-		operationIDs: operationIDs,
+		metadata:                      metadata,
+		nextVersion:                   nextVersion,
+		nowTime:                       nowTime,
+		now:                           now,
+		associationReservationUpdates: associationReservationUpdates,
+		operations:                    operations,
+		operationIDs:                  operationIDs,
 	}, nil, nil
 }
 
@@ -194,6 +205,11 @@ func (b *secretSyncBackend) commitDataWritePlan(
 	); err != nil {
 		return errorResponseForOperationError(err, mount), nil
 	}
+	for _, association := range plan.associationReservationUpdates {
+		if err := putAssociation(ctx, storage, association); err != nil {
+			return nil, err
+		}
+	}
 	if err := putPendingEnqueueIntent(
 		ctx,
 		storage,
@@ -224,6 +240,59 @@ func (b *secretSyncBackend) commitDataWritePlan(
 		b.signalEventDispatch()
 	}
 	return nil, nil
+}
+
+func associationReservationUpdatesForPayload(
+	ctx context.Context,
+	storage logical.Storage,
+	associations []associationRecord,
+	payload secretPayload,
+) ([]associationRecord, *logical.Response, error) {
+	seen := map[string]string{}
+	updates := make([]associationRecord, 0, len(associations))
+	for _, association := range associations {
+		updated, err := associationWithConcreteReservationNames(association, payload)
+		if err != nil {
+			return nil, logical.ErrorResponse(err.Error()), nil
+		}
+		for _, reservationName := range updated.reservationNames() {
+			key := updated.DestinationRef + "\x00" + reservationName
+			if existingID, ok := seen[key]; ok && existingID != updated.ID {
+				return nil, logical.ErrorResponse(
+					"resolved_name %q is already reserved for destination %s",
+					reservationName,
+					updated.DestinationRef,
+				), nil
+			}
+			seen[key] = updated.ID
+		}
+		if err := validateAssociationNameReservations(
+			ctx,
+			storage,
+			updated.DestinationRef,
+			updated.reservationNames(),
+			updated.ID,
+		); err != nil {
+			return nil, logical.ErrorResponse(err.Error()), nil
+		}
+		if stringSlicesEqual(association.ReservationNames, updated.ReservationNames) {
+			continue
+		}
+		updates = append(updates, updated)
+	}
+	return updates, nil, nil
+}
+
+func stringSlicesEqual(left []string, right []string) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for i := range left {
+		if left[i] != right[i] {
+			return false
+		}
+	}
+	return true
 }
 
 func putSourceVersionRecord(
