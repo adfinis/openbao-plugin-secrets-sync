@@ -69,7 +69,7 @@ func TestOpenBaoPluginSyncsToAWSSecretsManager(t *testing.T) {
 
 	plan := write(t, baoClient, mountPath+"/associations/app/db/plan", associationRequest(remoteName))
 	if got := plan.Data["action"]; got != "create" {
-		t.Fatalf("plan action = %v, want create", got)
+		t.Fatalf("plan action = %v, want create; plan data = %#v", got, plan.Data)
 	}
 
 	association := write(t, baoClient, mountPath+"/associations/app/db", associationRequest(remoteName))

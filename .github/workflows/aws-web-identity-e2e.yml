@@ -66,7 +66,9 @@ jobs:
             exit 1
           fi
           printf '%s' "${token}" >"${E2E_AWS_WEB_IDENTITY_TOKEN_FILE_HOST}"
-          chmod 0600 "${E2E_AWS_WEB_IDENTITY_TOKEN_FILE_HOST}"
+          # The token is bind-mounted into an OpenBao container that runs as a
+          # different user from the GitHub runner.
+          chmod 0644 "${E2E_AWS_WEB_IDENTITY_TOKEN_FILE_HOST}"
 
       - name: Run AWS web identity e2e
         run: make test-e2e-aws
@@ -89,7 +91,7 @@ jobs:
             exit 1
           fi
           printf '%s' "${token}" >"${E2E_AWS_WEB_IDENTITY_TOKEN_FILE_HOST}"
-          chmod 0600 "${E2E_AWS_WEB_IDENTITY_TOKEN_FILE_HOST}"
+          chmod 0644 "${E2E_AWS_WEB_IDENTITY_TOKEN_FILE_HOST}"
 
       - name: Cleanup AWS e2e secrets
         if: ${{ always() }}
