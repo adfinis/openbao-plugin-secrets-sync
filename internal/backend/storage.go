@@ -420,7 +420,8 @@ func deleteAssociation(ctx context.Context, storage logical.Storage, record asso
 		return err
 	}
 	for _, reservationName := range record.reservationNames() {
-		if err := storage.Delete(ctx, associationNameStorageKey(record.DestinationRef, reservationName, record.ID)); err != nil {
+		key := associationNameStorageKey(record.DestinationRef, reservationName, record.ID)
+		if err := storage.Delete(ctx, key); err != nil {
 			return err
 		}
 	}
@@ -441,7 +442,8 @@ func deleteStaleAssociationNameReservations(
 		if _, ok := updatedNames[reservationName]; ok {
 			continue
 		}
-		if err := storage.Delete(ctx, associationNameStorageKey(existing.DestinationRef, reservationName, existing.ID)); err != nil {
+		key := associationNameStorageKey(existing.DestinationRef, reservationName, existing.ID)
+		if err := storage.Delete(ctx, key); err != nil {
 			return err
 		}
 	}

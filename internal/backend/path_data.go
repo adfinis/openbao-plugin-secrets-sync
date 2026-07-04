@@ -147,14 +147,14 @@ func dataWritePlanFromRequest(
 	nextVersion := metadata.CurrentVersion + 1
 	nowTime := nowUTC()
 	now := nowTime.Format(timeFormatRFC3339)
-	associationReservationUpdates, response, err := associationReservationUpdatesForPayload(
+	associationReservationUpdates, response := associationReservationUpdatesForPayload(
 		ctx,
 		storage,
 		associations,
 		payload,
 	)
-	if response != nil || err != nil {
-		return dataWritePlan{}, response, err
+	if response != nil {
+		return dataWritePlan{}, response, nil
 	}
 	operations, operationIDs, err := newAssociationOutboxRecords(
 		associations,
@@ -247,13 +247,13 @@ func associationReservationUpdatesForPayload(
 	storage logical.Storage,
 	associations []associationRecord,
 	payload secretPayload,
-) ([]associationRecord, *logical.Response, error) {
+) ([]associationRecord, *logical.Response) {
 	seen := map[string]string{}
 	updates := make([]associationRecord, 0, len(associations))
 	for _, association := range associations {
 		updated, err := associationWithConcreteReservationNames(association, payload)
 		if err != nil {
-			return nil, logical.ErrorResponse(err.Error()), nil
+			return nil, logical.ErrorResponse(err.Error())
 		}
 		for _, reservationName := range updated.reservationNames() {
 			key := updated.DestinationRef + "\x00" + reservationName
@@ -262,7 +262,7 @@ func associationReservationUpdatesForPayload(
 					"resolved_name %q is already reserved for destination %s",
 					reservationName,
 					updated.DestinationRef,
-				), nil
+				)
 			}
 			seen[key] = updated.ID
 		}
@@ -273,14 +273,14 @@ func associationReservationUpdatesForPayload(
 			updated.reservationNames(),
 			updated.ID,
 		); err != nil {
-			return nil, logical.ErrorResponse(err.Error()), nil
+			return nil, logical.ErrorResponse(err.Error())
 		}
 		if stringSlicesEqual(association.ReservationNames, updated.ReservationNames) {
 			continue
 		}
 		updates = append(updates, updated)
 	}
-	return updates, nil, nil
+	return updates, nil
 }
 
 func stringSlicesEqual(left []string, right []string) bool {

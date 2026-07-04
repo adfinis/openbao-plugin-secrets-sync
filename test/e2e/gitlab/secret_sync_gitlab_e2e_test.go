@@ -47,12 +47,19 @@ func TestOpenBaoPluginSyncsToGitLabProjectVariables(t *testing.T) {
 	t.Cleanup(func() {
 		_ = gitLabClient.deleteVariable(context.Background(), variableKey)
 	})
+	for _, helperKey := range []string{"E2E_REFRESH_AX", "E2E_REFRESH_BX"} {
+		helperKey := helperKey
+		t.Cleanup(func() {
+			_ = gitLabClient.deleteVariable(context.Background(), helperKey)
+		})
+	}
 
 	writeGitLabDestination(t, baoClient, nil)
 	assertDestinationValid(t, baoClient)
 	assertDestinationHealthy(t, baoClient)
 	acknowledgeRestoreGuard(t, baoClient)
 	disableEventDispatch(t, baoClient)
+	assertSecretKeyRenderedNameReservations(t, baoClient)
 	write(t, baoClient, mountPath+"/metadata/app/db", map[string]interface{}{
 		"custom_metadata": map[string]interface{}{
 			"syncable": "true",
@@ -150,11 +157,81 @@ func associationRequest() map[string]interface{} {
 	}
 }
 
+func assertSecretKeyRenderedNameReservations(t *testing.T, client *api.Client) {
+	t.Helper()
+	writeSyncableSourceAt(t, client, "reservation/left", "A", "left")
+	writeSyncableSourceAt(t, client, "reservation/right", "A", "right")
+	write(t, client, mountPath+"/associations/reservation/left", reservationAssociationRequest("E2E_COLLISION_A{{ key }}", false))
+	writeExpectError(
+		t,
+		client,
+		mountPath+"/associations/reservation/right",
+		reservationAssociationRequest("E2E_COLLISION_{{ key }}A", false),
+		"already reserved",
+	)
+
+	writeSyncableSourceAt(t, client, "reservation/source-left", "X", "left")
+	writeSyncableSourceAt(t, client, "reservation/source-right", "B", "right")
+	leftAssociation := write(
+		t,
+		client,
+		mountPath+"/associations/reservation/source-left",
+		reservationAssociationRequest("E2E_REFRESH_A{{ key }}", true),
+	)
+	if ids := stringSlice(t, leftAssociation.Data["sync_operation_ids"]); len(ids) != 1 {
+		t.Fatalf("left reservation sync_operation_ids = %v, want one operation", ids)
+	}
+	rightAssociation := write(
+		t,
+		client,
+		mountPath+"/associations/reservation/source-right",
+		reservationAssociationRequest("E2E_REFRESH_{{ key }}X", true),
+	)
+	if ids := stringSlice(t, rightAssociation.Data["sync_operation_ids"]); len(ids) != 1 {
+		t.Fatalf("right reservation sync_operation_ids = %v, want one operation", ids)
+	}
+	drainQueue(t, client, 2)
+	writeExpectError(
+		t,
+		client,
+		mountPath+"/data/reservation/source-right",
+		map[string]interface{}{
+			"data": map[string]interface{}{
+				"A": "blocked",
+			},
+		},
+		"already reserved",
+	)
+}
+
+func reservationAssociationRequest(nameTemplate string, enabled bool) map[string]interface{} {
+	request := associationRequest()
+	request["name_template"] = nameTemplate
+	request["enabled"] = enabled
+	request["delete_mode"] = "retain"
+	return request
+}
+
 func writeSource(t *testing.T, client *api.Client, variableKey string, value string) {
 	t.Helper()
-	write(t, client, mountPath+"/data/app/db", map[string]interface{}{
+	writeSourceAt(t, client, "app/db", variableKey, value)
+}
+
+func writeSyncableSourceAt(t *testing.T, client *api.Client, path string, key string, value string) {
+	t.Helper()
+	write(t, client, mountPath+"/metadata/"+path, map[string]interface{}{
+		"custom_metadata": map[string]interface{}{
+			"syncable": "true",
+		},
+	})
+	writeSourceAt(t, client, path, key, value)
+}
+
+func writeSourceAt(t *testing.T, client *api.Client, path string, key string, value string) {
+	t.Helper()
+	write(t, client, mountPath+"/data/"+path, map[string]interface{}{
 		"data": map[string]interface{}{
-			variableKey: value,
+			key: value,
 		},
 	})
 }
@@ -263,6 +340,25 @@ func write(t *testing.T, client *api.Client, path string, data map[string]interf
 		return &api.Secret{Data: map[string]interface{}{}}
 	}
 	return secret
+}
+
+func writeExpectError(t *testing.T, client *api.Client, path string, data map[string]interface{}, want string) {
+	t.Helper()
+	secret, err := client.Logical().Write(path, data)
+	if err != nil {
+		if strings.Contains(err.Error(), want) {
+			return
+		}
+		t.Fatalf("write %s error = %v, want %q", path, err, want)
+	}
+	if secret != nil {
+		for _, key := range []string{"error", "errors"} {
+			if strings.Contains(fmt.Sprint(secret.Data[key]), want) {
+				return
+			}
+		}
+	}
+	t.Fatalf("write %s succeeded, want error containing %q: %#v", path, want, secret)
 }
 
 func deletePath(t *testing.T, client *api.Client, path string) *api.Secret {

@@ -165,7 +165,8 @@ func (record associationRecord) reservationName() string {
 }
 
 func (record associationRecord) reservationNames() []string {
-	names := []string{record.reservationName()}
+	names := make([]string, 0, 1+len(record.ReservationNames))
+	names = append(names, record.reservationName())
 	names = append(names, record.ReservationNames...)
 	return uniqueSortedStrings(names)
 }
