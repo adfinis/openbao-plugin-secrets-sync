@@ -22,6 +22,12 @@ When using `auth_mode=assume_role`, the base AWS identity must also be allowed
 to call `sts:AssumeRole` on the configured `role_arn`. Use an `external_id`
 condition when the destination role is shared across trust boundaries.
 
+When using `auth_mode=web_identity`, the configured role trust policy must allow
+`sts:AssumeRoleWithWebIdentity` for the OIDC issuer, audience, and subject that
+produces the mounted token file. Validate this against real AWS; LocalStack can
+exercise Secrets Manager behavior, but it is not production evidence for AWS
+OIDC trust-policy evaluation.
+
 The manual AWS e2e fixture also grants `GetSecretValue` and `UntagResource` for
 test verification and cleanup. The provider uses `GetSecretValue` for normal
 sync decisions only when `value_drift_detection=true`.

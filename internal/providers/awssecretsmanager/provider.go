@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/netip"
 	"net/url"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -36,12 +37,14 @@ const (
 	ConfigKeyEndpointPolicy = "endpoint_policy"
 	// ConfigKeyAuthMode selects AWS credential behavior.
 	ConfigKeyAuthMode = "auth_mode"
-	// ConfigKeyRoleARN configures the role ARN for assume-role auth.
+	// ConfigKeyRoleARN configures the role ARN for STS role auth.
 	ConfigKeyRoleARN = "role_arn"
 	// ConfigKeyExternalID configures the optional external ID for assume-role auth.
 	ConfigKeyExternalID = "external_id"
-	// ConfigKeySessionName configures the optional role session name for assume-role auth.
+	// ConfigKeySessionName configures the optional STS role session name.
 	ConfigKeySessionName = "session_name"
+	// ConfigKeyWebIdentityTokenFile configures the projected OIDC token file for web-identity auth.
+	ConfigKeyWebIdentityTokenFile = "web_identity_token_file"
 	// ConfigKeyAccessKeyID configures the static AWS access key ID. Static auth is intentionally unsupported for now.
 	ConfigKeyAccessKeyID = "access_key_id"
 	// ConfigKeySecretAccessKey configures the static AWS secret access key.
@@ -59,6 +62,8 @@ const (
 	AuthModeDefault = "default"
 	// AuthModeAssumeRole uses the default credential chain and then assumes a configured role.
 	AuthModeAssumeRole = "assume_role"
+	// AuthModeWebIdentity uses an OIDC token file to call STS AssumeRoleWithWebIdentity.
+	AuthModeWebIdentity = "web_identity"
 	// AuthModeStatic is reserved for non-default static credential auth.
 	AuthModeStatic = "static"
 
@@ -441,7 +446,8 @@ func defaultClientFactory(
 		return nil, err
 	}
 	cfg.HTTPClient = defaultAWSHTTPClient()
-	if options.authMode == AuthModeAssumeRole {
+	switch options.authMode {
+	case AuthModeAssumeRole:
 		stsClient := sts.NewFromConfig(cfg)
 		assumeRoleProvider := stscreds.NewAssumeRoleProvider(
 			stsClient,
@@ -456,6 +462,19 @@ func defaultClientFactory(
 			},
 		)
 		cfg.Credentials = aws.NewCredentialsCache(assumeRoleProvider)
+	case AuthModeWebIdentity:
+		stsClient := sts.NewFromConfig(cfg)
+		webIdentityProvider := stscreds.NewWebIdentityRoleProvider(
+			stsClient,
+			options.roleARN,
+			stscreds.IdentityTokenFile(options.webIdentityTokenFile),
+			func(webIdentityOptions *stscreds.WebIdentityRoleOptions) {
+				if options.sessionName != "" {
+					webIdentityOptions.RoleSessionName = options.sessionName
+				}
+			},
+		)
+		cfg.Credentials = aws.NewCredentialsCache(webIdentityProvider)
 	}
 	clientOptions := []func(*secretsmanager.Options){}
 	if options.endpointURL != "" {
@@ -486,6 +505,7 @@ type awsDestinationOptions struct {
 	roleARN                  string
 	externalID               string
 	sessionName              string
+	webIdentityTokenFile     string
 	accessKeyID              string
 	secretAccessKey          string
 	sessionToken             string
@@ -502,6 +522,7 @@ func awsDestinationOptionsFromConfig(cfg providers.DestinationConfig) (awsDestin
 		roleARN:                  configValue(cfg, ConfigKeyRoleARN),
 		externalID:               configValue(cfg, ConfigKeyExternalID),
 		sessionName:              configValue(cfg, ConfigKeySessionName),
+		webIdentityTokenFile:     configValue(cfg, ConfigKeyWebIdentityTokenFile),
 		accessKeyID:              configValue(cfg, ConfigKeyAccessKeyID),
 		secretAccessKey:          configValue(cfg, ConfigKeySecretAccessKey),
 		sessionToken:             configValue(cfg, ConfigKeySessionToken),
@@ -540,28 +561,67 @@ func validateEndpointOptions(options awsDestinationOptions) error {
 func validateAuthOptions(options awsDestinationOptions) error {
 	switch options.authMode {
 	case AuthModeDefault:
-		if options.roleARN != "" || options.externalID != "" || options.sessionName != "" {
-			return validationError("aws-sm role fields require auth_mode assume_role")
-		}
-		if options.hasStaticCredentials() {
-			return validationError("aws-sm static credential fields require auth_mode static")
-		}
+		return validateDefaultAuthOptions(options)
 	case AuthModeAssumeRole:
-		if options.roleARN == "" {
-			return validationError("aws-sm auth_mode assume_role requires role_arn")
-		}
-		if !isLikelyRoleARN(options.roleARN) {
-			return validationError("aws-sm role_arn must be an IAM role ARN")
-		}
-		if options.hasStaticCredentials() {
-			return validationError("aws-sm static credential fields require auth_mode static")
-		}
+		return validateAssumeRoleAuthOptions(options)
+	case AuthModeWebIdentity:
+		return validateWebIdentityAuthOptions(options)
 	case AuthModeStatic:
 		return validationError("aws-sm auth_mode static is not supported yet")
 	default:
 		return validationError(
-			"aws-sm auth_mode must be default, assume_role, or static",
+			"aws-sm auth_mode must be default, assume_role, web_identity, or static",
 		)
+	}
+}
+
+func validateDefaultAuthOptions(options awsDestinationOptions) error {
+	if options.roleARN != "" ||
+		options.externalID != "" ||
+		options.sessionName != "" ||
+		options.webIdentityTokenFile != "" {
+		return validationError("aws-sm auth fields require auth_mode assume_role or web_identity")
+	}
+	if options.hasStaticCredentials() {
+		return validationError("aws-sm static credential fields require auth_mode static")
+	}
+	return nil
+}
+
+func validateAssumeRoleAuthOptions(options awsDestinationOptions) error {
+	if options.roleARN == "" {
+		return validationError("aws-sm auth_mode assume_role requires role_arn")
+	}
+	if !isLikelyRoleARN(options.roleARN) {
+		return validationError("aws-sm role_arn must be an IAM role ARN")
+	}
+	if options.webIdentityTokenFile != "" {
+		return validationError("aws-sm web_identity_token_file requires auth_mode web_identity")
+	}
+	if options.hasStaticCredentials() {
+		return validationError("aws-sm static credential fields require auth_mode static")
+	}
+	return nil
+}
+
+func validateWebIdentityAuthOptions(options awsDestinationOptions) error {
+	if options.roleARN == "" {
+		return validationError("aws-sm auth_mode web_identity requires role_arn")
+	}
+	if !isLikelyRoleARN(options.roleARN) {
+		return validationError("aws-sm role_arn must be an IAM role ARN")
+	}
+	if options.webIdentityTokenFile == "" {
+		return validationError("aws-sm auth_mode web_identity requires web_identity_token_file")
+	}
+	if !filepath.IsAbs(options.webIdentityTokenFile) {
+		return validationError("aws-sm web_identity_token_file must be an absolute path")
+	}
+	if options.externalID != "" {
+		return validationError("aws-sm external_id is only supported with auth_mode assume_role")
+	}
+	if options.hasStaticCredentials() {
+		return validationError("aws-sm static credential fields require auth_mode static")
 	}
 	return nil
 }

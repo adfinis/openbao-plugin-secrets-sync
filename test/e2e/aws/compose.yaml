@@ -4,8 +4,8 @@ services:
     cap_add:
       - IPC_LOCK
     environment:
-      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:?AWS_ACCESS_KEY_ID is required}
-      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:?AWS_SECRET_ACCESS_KEY is required}
+      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:-}
+      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:-}
       AWS_SESSION_TOKEN: ${AWS_SESSION_TOKEN:-}
       AWS_SECURITY_TOKEN: ${AWS_SECURITY_TOKEN:-}
       AWS_REGION: ${AWS_REGION:-us-east-1}
@@ -22,6 +22,7 @@ services:
       - "127.0.0.1:${E2E_AWS_OPENBAO_PORT:-18201}:8200"
     volumes:
       - ../../../bin/e2e:/openbao/plugins:ro
+      - ${E2E_AWS_WEB_IDENTITY_TOKEN_FILE_HOST:-./fixtures/empty-web-identity-token}:${E2E_AWS_WEB_IDENTITY_TOKEN_FILE:-/openbao/aws-web-identity-token}:ro
     healthcheck:
       test: ["CMD", "bao", "status", "-address=http://127.0.0.1:8200"]
       interval: 2s

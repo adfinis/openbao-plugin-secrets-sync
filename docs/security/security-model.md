@@ -124,9 +124,12 @@ seal-wrapped storage prefixes.
 - Credential rotation is possible without recreating associations.
 - Prefer workload identity and federated identity over static keys where the
   destination supports it.
-- AWS destinations store assume-role `external_id` in seal-wrapped sensitive
-  config. Static access keys and session tokens are recognized as sensitive
-  fields but intentionally remain unsupported auth material.
+- AWS destinations support SDK default credentials, assume-role auth, and
+  web-identity auth. Assume-role `external_id` is stored in seal-wrapped
+  sensitive config. Web-identity token contents are not stored by the backend;
+  the configured token file must be mounted for the plugin process.
+- Static access keys and session tokens are recognized as sensitive fields but
+  intentionally remain unsupported auth material.
 - GitLab API tokens and Kubernetes bearer tokens are stored in seal-wrapped
   sensitive config and redacted on destination reads.
 - Derived short-lived tokens are cached only in memory and invalidated on
