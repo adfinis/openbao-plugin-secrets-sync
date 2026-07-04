@@ -296,6 +296,7 @@ func (b *secretSyncBackend) pathAssociationEnable(
 		return errorResponseWithDiagnostic(err.Error(), validationDiagnosticForAssociation(mount, *record, err.Error())), nil
 	}
 
+	previous := *record
 	wasEnabled := record.Enabled
 	now := nowUTC().Format(timeFormatRFC3339)
 	record.Enabled = true
@@ -307,6 +308,9 @@ func (b *secretSyncBackend) pathAssociationEnable(
 	if !wasEnabled {
 		operationIDs, err = b.enqueueAssociationCurrentVersion(ctx, req.Storage, *record, *metadata, now)
 		if err != nil {
+			if rollbackErr := rollbackAssociationPersistence(ctx, req.Storage, *record, &previous); rollbackErr != nil {
+				return nil, rollbackAssociationPersistenceError(err, rollbackErr)
+			}
 			return errorResponseForOperationError(err, mount), nil
 		}
 		if len(operationIDs) > 0 {
@@ -442,6 +446,9 @@ func (b *secretSyncBackend) associationWritePlan(
 			nowUTC().Format(timeFormatRFC3339),
 		)
 		if err != nil {
+			if rollbackErr := rollbackAssociationPersistence(ctx, storage, record, existing); rollbackErr != nil {
+				return associationWritePlan{}, nil, rollbackAssociationPersistenceError(err, rollbackErr)
+			}
 			return associationWritePlan{}, errorResponseForOperationError(err, mount), nil
 		}
 		if len(operationIDs) > 0 {
@@ -453,6 +460,22 @@ func (b *secretSyncBackend) associationWritePlan(
 		operationIDs:       operationIDs,
 		existingWasEnabled: existingWasEnabled,
 	}, nil, nil
+}
+
+func rollbackAssociationPersistence(
+	ctx context.Context,
+	storage logical.Storage,
+	record associationRecord,
+	previous *associationRecord,
+) error {
+	if previous != nil {
+		return putAssociation(ctx, storage, *previous)
+	}
+	return deleteAssociation(ctx, storage, record)
+}
+
+func rollbackAssociationPersistenceError(operationErr error, rollbackErr error) error {
+	return fmt.Errorf("%w; association rollback failed: %v", operationErr, rollbackErr)
 }
 
 func associationWritePreflight(

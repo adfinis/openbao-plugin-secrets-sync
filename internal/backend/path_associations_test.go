@@ -92,6 +92,27 @@ func TestAssociationCreateQueuesCurrentVersion(t *testing.T) {
 	}
 }
 
+func TestAssociationCreateQueueCapacityFailureDoesNotPersistAssociation(t *testing.T) {
+	env := newBackendTestEnv(t)
+
+	env.writeAppDBSecret("initial")
+	env.createFakeDestination("default")
+	configResp := env.update(configPath, map[string]interface{}{
+		"queue_capacity": 0,
+	})
+	if configResp != nil && configResp.IsError() {
+		t.Fatalf("unexpected config write error: %v", configResp.Error())
+	}
+
+	resp := env.createDefaultFakeAssociation()
+	if resp == nil || !resp.IsError() {
+		t.Fatalf("association create response = %#v, want queue capacity error", resp)
+	}
+	assertHintContains(t, resp.Data, "Queue capacity is exhausted")
+	assertAssociationCount(t, env.storage, "app/db", 0)
+	assertQueueCount(t, env.b, env.storage, "pending", 0)
+}
+
 func TestAssociationCreateAndPlanUseDestinationRef(t *testing.T) {
 	env := newBackendTestEnv(t)
 
@@ -494,6 +515,43 @@ func TestAssociationUpdateEnqueuesWhenEnablingExistingRecord(t *testing.T) {
 	assertNoErrorResponse(t, enableResp)
 	operationID := requireSingleOperationID(t, operationIDsFromResponse(t, enableResp), "enable through write")
 	assertOutboxOperation(t, env.storage, operationID, 1, outboxStatePending)
+}
+
+func TestAssociationEnableQueueCapacityFailureLeavesAssociationDisabled(t *testing.T) {
+	env := newBackendTestEnv(t)
+
+	env.writeAppDBSecret("initial")
+	env.createFakeDestination("default")
+	env.markAppDBSyncable()
+	initialResp := env.update("associations/app/db", map[string]interface{}{
+		"destination":   destinationRef(providerTypeFake, "default"),
+		"resolved_name": "prod/app/db",
+		"granularity":   syncGranularitySecretPath,
+		"format":        defaultAssociationFormat,
+		"enabled":       false,
+	})
+	assertNoErrorResponse(t, initialResp)
+	if operationIDs := operationIDsFromResponse(t, initialResp); len(operationIDs) != 0 {
+		t.Fatalf("initial operation IDs = %v, want none", operationIDs)
+	}
+	associationID := associationIDFromResponse(t, initialResp)
+	configResp := env.update(configPath, map[string]interface{}{
+		"queue_capacity": 0,
+	})
+	if configResp != nil && configResp.IsError() {
+		t.Fatalf("unexpected config write error: %v", configResp.Error())
+	}
+
+	enableResp := env.update("associations/app/db/" + associationID + "/enable")
+	if enableResp == nil || !enableResp.IsError() {
+		t.Fatalf("association enable response = %#v, want queue capacity error", enableResp)
+	}
+	assertHintContains(t, enableResp.Data, "Queue capacity is exhausted")
+
+	readResp := env.read("associations/app/db/" + associationID)
+	assertNoErrorResponse(t, readResp)
+	assertResponseValue(t, readResp, "enabled", false)
+	assertQueueCount(t, env.b, env.storage, "pending", 0)
 }
 
 func TestAssociationPlanMergesOmittedFieldsFromExistingRecord(t *testing.T) {
