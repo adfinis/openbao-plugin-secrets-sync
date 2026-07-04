@@ -28,6 +28,7 @@ var destinationConfigFieldKeys = []string{
 	awssecretsmanager.ConfigKeyAuthMode,
 	awssecretsmanager.ConfigKeyRoleARN,
 	awssecretsmanager.ConfigKeySessionName,
+	awssecretsmanager.ConfigKeyWebIdentityTokenFile,
 	awssecretsmanager.ConfigKeyDeleteRecoveryWindowDays,
 	awssecretsmanager.ConfigKeyValueDriftDetection,
 	gitlab.ConfigKeyBaseURL,
@@ -63,6 +64,7 @@ var destinationConfigFieldKeysByType = map[string][]string{
 		awssecretsmanager.ConfigKeyAuthMode,
 		awssecretsmanager.ConfigKeyRoleARN,
 		awssecretsmanager.ConfigKeySessionName,
+		awssecretsmanager.ConfigKeyWebIdentityTokenFile,
 		awssecretsmanager.ConfigKeyDeleteRecoveryWindowDays,
 		awssecretsmanager.ConfigKeyValueDriftDetection,
 	},
@@ -227,12 +229,12 @@ func destinationRequestFields() map[string]*framework.FieldSchema {
 	}
 	fields[awssecretsmanager.ConfigKeyAuthMode] = &framework.FieldSchema{
 		Type: framework.TypeString,
-		Description: "Provider auth mode. aws-sm: default, assume_role, or reserved static. " +
+		Description: "Provider auth mode. aws-sm: default, assume_role, web_identity, or reserved static. " +
 			"k8s: in_cluster, kubeconfig, or token.",
 	}
 	fields[awssecretsmanager.ConfigKeyRoleARN] = &framework.FieldSchema{
 		Type:        framework.TypeString,
-		Description: "IAM role ARN for aws-sm assume_role destinations.",
+		Description: "IAM role ARN for aws-sm assume_role and web_identity destinations.",
 	}
 	fields[awssecretsmanager.ConfigKeyExternalID] = &framework.FieldSchema{
 		Type:        framework.TypeString,
@@ -243,7 +245,12 @@ func destinationRequestFields() map[string]*framework.FieldSchema {
 	}
 	fields[awssecretsmanager.ConfigKeySessionName] = &framework.FieldSchema{
 		Type:        framework.TypeString,
-		Description: "Optional STS session name for aws-sm assume_role destinations.",
+		Description: "Optional STS session name for aws-sm assume_role and web_identity destinations.",
+	}
+	fields[awssecretsmanager.ConfigKeyWebIdentityTokenFile] = &framework.FieldSchema{
+		Type: framework.TypeString,
+		Description: "Absolute token file path for aws-sm web_identity destinations. " +
+			"The file must be readable by the OpenBao plugin process.",
 	}
 	fields[awssecretsmanager.ConfigKeyDeleteRecoveryWindowDays] = &framework.FieldSchema{
 		Type: framework.TypeString,

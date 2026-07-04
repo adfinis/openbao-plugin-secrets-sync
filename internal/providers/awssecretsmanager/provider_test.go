@@ -29,6 +29,7 @@ const (
 	testRegion          = "eu-central-1"
 	testEndpointURL     = "http://localhost:4566"
 	testRoleARN         = "arn:aws:iam::123456789012:role/openbao-plugin-secrets-sync"
+	testIdentityFile    = "/var/run/openbao/aws-web-identity.jwt"
 	testPluginInstance  = "inst-test"
 	testRestoreEpoch    = "epoch-test"
 )
@@ -123,6 +124,16 @@ func TestValidateDestinationConfig(t *testing.T) {
 			},
 		},
 		{
+			name: "web identity auth",
+			config: map[string]string{
+				ConfigKeyAuthMode:             AuthModeWebIdentity,
+				ConfigKeyRegion:               testRegion,
+				ConfigKeyRoleARN:              testRoleARN,
+				ConfigKeyWebIdentityTokenFile: testIdentityFile,
+				ConfigKeySessionName:          "openbao-sync",
+			},
+		},
+		{
 			name: "unsupported static auth",
 			config: map[string]string{
 				ConfigKeyAuthMode: AuthModeStatic,
@@ -147,6 +158,50 @@ func TestValidateDestinationConfig(t *testing.T) {
 			name: "default auth rejects role fields",
 			config: map[string]string{
 				ConfigKeyRoleARN: testRoleARN,
+			},
+			errorClass: providers.ErrorClassValidation,
+		},
+		{
+			name: "web identity missing role arn",
+			config: map[string]string{
+				ConfigKeyAuthMode:             AuthModeWebIdentity,
+				ConfigKeyWebIdentityTokenFile: testIdentityFile,
+			},
+			errorClass: providers.ErrorClassValidation,
+		},
+		{
+			name: "web identity missing token file",
+			config: map[string]string{
+				ConfigKeyAuthMode: AuthModeWebIdentity,
+				ConfigKeyRoleARN:  testRoleARN,
+			},
+			errorClass: providers.ErrorClassValidation,
+		},
+		{
+			name: "web identity rejects relative token file",
+			config: map[string]string{
+				ConfigKeyAuthMode:             AuthModeWebIdentity,
+				ConfigKeyRoleARN:              testRoleARN,
+				ConfigKeyWebIdentityTokenFile: "token.jwt",
+			},
+			errorClass: providers.ErrorClassValidation,
+		},
+		{
+			name: "web identity rejects external id",
+			config: map[string]string{
+				ConfigKeyAuthMode:             AuthModeWebIdentity,
+				ConfigKeyRoleARN:              testRoleARN,
+				ConfigKeyWebIdentityTokenFile: testIdentityFile,
+				ConfigKeyExternalID:           "tenant-1",
+			},
+			errorClass: providers.ErrorClassValidation,
+		},
+		{
+			name: "assume role rejects web identity token file",
+			config: map[string]string{
+				ConfigKeyAuthMode:             AuthModeAssumeRole,
+				ConfigKeyRoleARN:              testRoleARN,
+				ConfigKeyWebIdentityTokenFile: testIdentityFile,
 			},
 			errorClass: providers.ErrorClassValidation,
 		},

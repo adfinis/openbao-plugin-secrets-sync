@@ -17,7 +17,9 @@ locals {
     ? var.trusted_principal_arns
     : ["arn:${data.aws_partition.current.partition}:iam::${data.aws_caller_identity.current.account_id}:root"]
   )
-  secret_arn_prefix = "arn:${data.aws_partition.current.partition}:secretsmanager:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:secret:${var.secret_name_prefix}*"
+  github_oidc_provider_host = trimsuffix(trimprefix(var.github_oidc_provider_url, "https://"), "/")
+  github_oidc_subject       = "repo:${var.github_oidc_owner}/${var.github_oidc_repo}:ref:refs/heads/${var.github_oidc_branch}"
+  secret_arn_prefix         = "arn:${data.aws_partition.current.partition}:secretsmanager:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:secret:${var.secret_name_prefix}*"
   tags = merge(
     {
       ManagedBy = "openbao-plugin-secrets-sync-e2e"
@@ -85,5 +87,56 @@ resource "aws_iam_policy" "secrets_manager" {
 
 resource "aws_iam_role_policy_attachment" "secrets_manager" {
   role       = aws_iam_role.e2e.name
+  policy_arn = aws_iam_policy.secrets_manager.arn
+}
+
+resource "aws_iam_openid_connect_provider" "github_actions" {
+  count = var.github_oidc_enabled ? 1 : 0
+
+  url             = var.github_oidc_provider_url
+  client_id_list  = [var.github_oidc_audience]
+  thumbprint_list = [var.github_oidc_thumbprint]
+  tags            = local.tags
+}
+
+data "aws_iam_policy_document" "github_web_identity" {
+  count = var.github_oidc_enabled ? 1 : 0
+
+  statement {
+    sid     = "AllowGitHubActionsWebIdentity"
+    effect  = "Allow"
+    actions = ["sts:AssumeRoleWithWebIdentity"]
+
+    principals {
+      type        = "Federated"
+      identifiers = [aws_iam_openid_connect_provider.github_actions[0].arn]
+    }
+
+    condition {
+      test     = "StringEquals"
+      variable = "${local.github_oidc_provider_host}:aud"
+      values   = [var.github_oidc_audience]
+    }
+
+    condition {
+      test     = "StringEquals"
+      variable = "${local.github_oidc_provider_host}:sub"
+      values   = [local.github_oidc_subject]
+    }
+  }
+}
+
+resource "aws_iam_role" "github_web_identity" {
+  count = var.github_oidc_enabled ? 1 : 0
+
+  name               = "${var.name_prefix}-github-web-identity-role"
+  assume_role_policy = data.aws_iam_policy_document.github_web_identity[0].json
+  tags               = local.tags
+}
+
+resource "aws_iam_role_policy_attachment" "github_web_identity_secrets_manager" {
+  count = var.github_oidc_enabled ? 1 : 0
+
+  role       = aws_iam_role.github_web_identity[0].name
   policy_arn = aws_iam_policy.secrets_manager.arn
 }

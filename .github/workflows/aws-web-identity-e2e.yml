@@ -1,0 +1,105 @@
+name: AWS Web Identity E2E
+
+on:
+  workflow_dispatch:
+    inputs:
+      role_arn:
+        description: AWS IAM role ARN trusted for GitHub OIDC on the selected ref.
+        required: true
+        type: string
+      aws_region:
+        description: AWS region for Secrets Manager.
+        required: true
+        default: eu-central-2
+        type: string
+      secret_prefix:
+        description: Secrets Manager name prefix reserved for this manual test.
+        required: true
+        default: openbao-plugin-secrets-sync-manual/
+        type: string
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  aws-web-identity-e2e:
+    name: AWS Web Identity E2E
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      E2E_AWS_AUTH_MODE: web_identity
+      E2E_AWS_CONFIRM: "1"
+      E2E_AWS_REGION: ${{ inputs.aws_region }}
+      E2E_AWS_ROLE_ARN: ${{ inputs.role_arn }}
+      E2E_AWS_SECRET_PREFIX: ${{ inputs.secret_prefix }}
+      E2E_AWS_WEB_IDENTITY_TOKEN_FILE: /openbao/aws-web-identity-token
+      E2E_AWS_WEB_IDENTITY_TOKEN_FILE_HOST: /tmp/github-oidc-token.jwt
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Setup repo tools
+        uses: ./.github/actions/setup-repo-tools
+        with:
+          cache-tools: "false"
+          bootstrap-tools: "false"
+
+      - name: Mint GitHub OIDC token
+        env:
+          OIDC_AUDIENCE: sts.amazonaws.com
+        run: |
+          set -euo pipefail
+
+          token_response="$(
+            curl -fsSL \
+              -H "Authorization: bearer ${ACTIONS_ID_TOKEN_REQUEST_TOKEN}" \
+              "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=${OIDC_AUDIENCE}"
+          )"
+          token="$(jq -r '.value // empty' <<<"${token_response}")"
+          if [ -z "${token}" ]; then
+            echo "GitHub OIDC token response did not contain a token value" >&2
+            exit 1
+          fi
+          printf '%s' "${token}" >"${E2E_AWS_WEB_IDENTITY_TOKEN_FILE_HOST}"
+          chmod 0600 "${E2E_AWS_WEB_IDENTITY_TOKEN_FILE_HOST}"
+
+      - name: Run AWS web identity e2e
+        run: make test-e2e-aws
+
+      - name: Refresh GitHub OIDC token for cleanup
+        if: ${{ always() }}
+        env:
+          OIDC_AUDIENCE: sts.amazonaws.com
+        run: |
+          set -euo pipefail
+
+          token_response="$(
+            curl -fsSL \
+              -H "Authorization: bearer ${ACTIONS_ID_TOKEN_REQUEST_TOKEN}" \
+              "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=${OIDC_AUDIENCE}"
+          )"
+          token="$(jq -r '.value // empty' <<<"${token_response}")"
+          if [ -z "${token}" ]; then
+            echo "GitHub OIDC token response did not contain a token value" >&2
+            exit 1
+          fi
+          printf '%s' "${token}" >"${E2E_AWS_WEB_IDENTITY_TOKEN_FILE_HOST}"
+          chmod 0600 "${E2E_AWS_WEB_IDENTITY_TOKEN_FILE_HOST}"
+
+      - name: Cleanup AWS e2e secrets
+        if: ${{ always() }}
+        env:
+          E2E_AWS_CLEAN_CONFIRM: "1"
+        run: |
+          set -euo pipefail
+
+          if [ ! -r "${E2E_AWS_WEB_IDENTITY_TOKEN_FILE_HOST}" ]; then
+            echo "OIDC token file was not created; skipping cleanup."
+            exit 0
+          fi
+          make test-e2e-aws-clean

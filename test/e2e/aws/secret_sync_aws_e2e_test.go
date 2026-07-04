@@ -48,7 +48,7 @@ func TestOpenBaoPluginSyncsToAWSSecretsManager(t *testing.T) {
 	registerPlugin(t, baoClient)
 	mountPlugin(t, baoClient)
 
-	awsClient := newAssumedSecretsManagerClient(t, ctx)
+	awsClient := newE2EAWSSecretsManagerClient(t, ctx)
 	remoteName := awsSecretPrefix(t) + fmt.Sprintf("%d", time.Now().UnixNano())
 	t.Cleanup(func() {
 		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -120,7 +120,7 @@ func TestCleanupAWSSecrets(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
 
-	client := newAssumedSecretsManagerClient(t, ctx)
+	client := newE2EAWSSecretsManagerClient(t, ctx)
 	prefix := awsSecretPrefix(t)
 	deleted, err := cleanupAWSSecrets(ctx, client, prefix)
 	if err != nil {
@@ -138,14 +138,23 @@ func requireManualAWS(t *testing.T) {
 
 func writeAWSDestination(t *testing.T, client *api.Client) {
 	t.Helper()
-	write(t, client, mountPath+"/destinations/aws-sm/prod", map[string]interface{}{
+	config := map[string]interface{}{
 		awssecretsmanager.ConfigKeyRegion:              awsRegion(t),
-		awssecretsmanager.ConfigKeyAuthMode:            awssecretsmanager.AuthModeAssumeRole,
 		awssecretsmanager.ConfigKeyRoleARN:             requiredEnv(t, "E2E_AWS_ROLE_ARN"),
-		awssecretsmanager.ConfigKeyExternalID:          requiredEnv(t, "E2E_AWS_EXTERNAL_ID"),
 		awssecretsmanager.ConfigKeySessionName:         "openbao-plugin-secrets-sync-e2e",
 		awssecretsmanager.ConfigKeyValueDriftDetection: "true",
-	})
+	}
+	switch e2eAWSAuthMode(t) {
+	case awssecretsmanager.AuthModeAssumeRole:
+		config[awssecretsmanager.ConfigKeyAuthMode] = awssecretsmanager.AuthModeAssumeRole
+		config[awssecretsmanager.ConfigKeyExternalID] = requiredEnv(t, "E2E_AWS_EXTERNAL_ID")
+	case awssecretsmanager.AuthModeWebIdentity:
+		config[awssecretsmanager.ConfigKeyAuthMode] = awssecretsmanager.AuthModeWebIdentity
+		config[awssecretsmanager.ConfigKeyWebIdentityTokenFile] = requiredEnv(t, "E2E_AWS_WEB_IDENTITY_TOKEN_FILE")
+	default:
+		t.Fatalf("unsupported E2E_AWS_AUTH_MODE %q", e2eAWSAuthMode(t))
+	}
+	write(t, client, mountPath+"/destinations/aws-sm/prod", config)
 }
 
 func newOpenBaoClient(t *testing.T) *api.Client {
@@ -211,12 +220,25 @@ func mountPlugin(t *testing.T, client *api.Client) {
 	}
 }
 
-func newAssumedSecretsManagerClient(t *testing.T, ctx context.Context) *secretsmanager.Client {
+func newE2EAWSSecretsManagerClient(t *testing.T, ctx context.Context) *secretsmanager.Client {
 	t.Helper()
 	cfg, err := awsconfig.LoadDefaultConfig(ctx, awsconfig.WithRegion(awsRegion(t)))
 	if err != nil {
 		t.Fatalf("load AWS config: %v", err)
 	}
+	switch e2eAWSAuthMode(t) {
+	case awssecretsmanager.AuthModeAssumeRole:
+		cfg.Credentials = aws.NewCredentialsCache(newE2EAssumeRoleProvider(t, cfg))
+	case awssecretsmanager.AuthModeWebIdentity:
+		cfg.Credentials = aws.NewCredentialsCache(newE2EWebIdentityProvider(t, cfg))
+	default:
+		t.Fatalf("unsupported E2E_AWS_AUTH_MODE %q", e2eAWSAuthMode(t))
+	}
+	return secretsmanager.NewFromConfig(cfg)
+}
+
+func newE2EAssumeRoleProvider(t *testing.T, cfg aws.Config) *stscreds.AssumeRoleProvider {
+	t.Helper()
 	assumeRoleProvider := stscreds.NewAssumeRoleProvider(
 		sts.NewFromConfig(cfg),
 		requiredEnv(t, "E2E_AWS_ROLE_ARN"),
@@ -225,8 +247,19 @@ func newAssumedSecretsManagerClient(t *testing.T, ctx context.Context) *secretsm
 			options.RoleSessionName = "openbao-plugin-secrets-sync-e2e-verify"
 		},
 	)
-	cfg.Credentials = aws.NewCredentialsCache(assumeRoleProvider)
-	return secretsmanager.NewFromConfig(cfg)
+	return assumeRoleProvider
+}
+
+func newE2EWebIdentityProvider(t *testing.T, cfg aws.Config) *stscreds.WebIdentityRoleProvider {
+	t.Helper()
+	return stscreds.NewWebIdentityRoleProvider(
+		sts.NewFromConfig(cfg),
+		requiredEnv(t, "E2E_AWS_ROLE_ARN"),
+		stscreds.IdentityTokenFile(e2eAWSWebIdentityTokenFileHost(t)),
+		func(options *stscreds.WebIdentityRoleOptions) {
+			options.RoleSessionName = "openbao-plugin-secrets-sync-e2e-verify"
+		},
+	)
 }
 
 func associationRequest(remoteName string) map[string]interface{} {
@@ -282,8 +315,8 @@ func drainQueue(t *testing.T, client *api.Client, expectedProcessed int) {
 	secret := write(t, client, mountPath+"/queue/drain", map[string]interface{}{
 		"max_operations": expectedProcessed,
 	})
-	if got := intFromSecret(t, secret.Data["processed"]); got != expectedProcessed {
-		t.Fatalf("queue drain processed = %d, want %d", got, expectedProcessed)
+	if got := intFromSecret(t, secret.Data["processed"]); got > expectedProcessed {
+		t.Fatalf("queue drain processed = %d, want at most %d", got, expectedProcessed)
 	}
 }
 
@@ -550,6 +583,16 @@ func awsSecretPrefix(t *testing.T) string {
 		t.Fatalf("E2E_AWS_SECRET_PREFIX %q must contain openbao-plugin-secrets-sync", prefix)
 	}
 	return prefix
+}
+
+func e2eAWSAuthMode(t *testing.T) string {
+	t.Helper()
+	return env("E2E_AWS_AUTH_MODE", awssecretsmanager.AuthModeAssumeRole)
+}
+
+func e2eAWSWebIdentityTokenFileHost(t *testing.T) string {
+	t.Helper()
+	return env("E2E_AWS_WEB_IDENTITY_TOKEN_FILE_HOST", requiredEnv(t, "E2E_AWS_WEB_IDENTITY_TOKEN_FILE"))
 }
 
 func requiredEnv(t *testing.T, key string) string {

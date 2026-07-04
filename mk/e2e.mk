@@ -21,6 +21,9 @@ E2E_AWS_OPENBAO_PORT ?= 18201
 E2E_AWS_OPENBAO_ADDR ?= http://127.0.0.1:$(E2E_AWS_OPENBAO_PORT)
 E2E_AWS_REGION ?= us-east-1
 E2E_AWS_SECRET_PREFIX ?= openbao-plugin-secrets-sync-manual/
+E2E_AWS_AUTH_MODE ?= assume_role
+E2E_AWS_WEB_IDENTITY_TOKEN_FILE ?= /openbao/aws-web-identity-token
+E2E_AWS_WEB_IDENTITY_TOKEN_FILE_HOST ?= $(CURDIR)/test/e2e/aws/fixtures/empty-web-identity-token
 E2E_AWS_CONFIRM ?=
 E2E_AWS_CLEAN_CONFIRM ?=
 E2E_KIND_CLUSTER ?= openbao-plugin-secrets-sync-e2e
@@ -427,8 +430,14 @@ test-e2e-gitlab: e2e-build-plugin ## Run the opt-in self-contained GitLab projec
 .PHONY: e2e-aws-up
 e2e-aws-up: e2e-build-plugin ## Start the manual real-AWS e2e OpenBao stack.
 	@if [ "$(E2E_AWS_CONFIRM)" != "1" ]; then echo "set E2E_AWS_CONFIRM=1 to start the manual AWS e2e stack"; exit 2; fi
-	@if [ -z "$$AWS_ACCESS_KEY_ID" ] || [ -z "$$AWS_SECRET_ACCESS_KEY" ]; then echo "run this target under aws-vault or provide AWS credentials"; exit 2; fi
-	@E2E_AWS_OPENBAO_PORT="$(E2E_AWS_OPENBAO_PORT)" AWS_REGION="$(E2E_AWS_REGION)" AWS_DEFAULT_REGION="$(E2E_AWS_REGION)" $(DOCKER_COMPOSE) -f "$(E2E_AWS_COMPOSE_FILE)" up -d --wait
+	@case "$(E2E_AWS_AUTH_MODE)" in \
+		assume_role) \
+			if [ -z "$$AWS_ACCESS_KEY_ID" ] || [ -z "$$AWS_SECRET_ACCESS_KEY" ]; then echo "run this target under aws-vault or provide AWS credentials"; exit 2; fi ;; \
+		web_identity) \
+			if [ ! -r "$(E2E_AWS_WEB_IDENTITY_TOKEN_FILE_HOST)" ]; then echo "set E2E_AWS_WEB_IDENTITY_TOKEN_FILE_HOST to a readable OIDC token file"; exit 2; fi ;; \
+		*) echo "E2E_AWS_AUTH_MODE must be assume_role or web_identity"; exit 2 ;; \
+	esac
+	@E2E_AWS_OPENBAO_PORT="$(E2E_AWS_OPENBAO_PORT)" E2E_AWS_WEB_IDENTITY_TOKEN_FILE="$(E2E_AWS_WEB_IDENTITY_TOKEN_FILE)" E2E_AWS_WEB_IDENTITY_TOKEN_FILE_HOST="$(E2E_AWS_WEB_IDENTITY_TOKEN_FILE_HOST)" AWS_REGION="$(E2E_AWS_REGION)" AWS_DEFAULT_REGION="$(E2E_AWS_REGION)" $(DOCKER_COMPOSE) -f "$(E2E_AWS_COMPOSE_FILE)" up -d --wait
 
 .PHONY: e2e-aws-down
 e2e-aws-down: ## Stop the manual real-AWS e2e OpenBao stack.
@@ -438,17 +447,26 @@ e2e-aws-down: ## Stop the manual real-AWS e2e OpenBao stack.
 test-e2e-aws: e2e-build-plugin ## Run the opt-in manual e2e test against real AWS Secrets Manager.
 	@if [ "$(E2E_AWS_CONFIRM)" != "1" ]; then echo "set E2E_AWS_CONFIRM=1 to run the manual AWS e2e test"; exit 2; fi
 	@if [ -z "$(E2E_AWS_ROLE_ARN)" ]; then echo "set E2E_AWS_ROLE_ARN from the OpenTofu output"; exit 2; fi
-	@if [ -z "$(E2E_AWS_EXTERNAL_ID)" ]; then echo "set E2E_AWS_EXTERNAL_ID from the OpenTofu output"; exit 2; fi
-	@if [ -z "$$AWS_ACCESS_KEY_ID" ] || [ -z "$$AWS_SECRET_ACCESS_KEY" ]; then echo "run this target under aws-vault or provide AWS credentials"; exit 2; fi
+	@case "$(E2E_AWS_AUTH_MODE)" in \
+		assume_role) \
+			if [ -z "$(E2E_AWS_EXTERNAL_ID)" ]; then echo "set E2E_AWS_EXTERNAL_ID from the OpenTofu output"; exit 2; fi; \
+			if [ -z "$$AWS_ACCESS_KEY_ID" ] || [ -z "$$AWS_SECRET_ACCESS_KEY" ]; then echo "run this target under aws-vault or provide AWS credentials"; exit 2; fi ;; \
+		web_identity) \
+			if [ ! -r "$(E2E_AWS_WEB_IDENTITY_TOKEN_FILE_HOST)" ]; then echo "set E2E_AWS_WEB_IDENTITY_TOKEN_FILE_HOST to a readable OIDC token file"; exit 2; fi ;; \
+		*) echo "E2E_AWS_AUTH_MODE must be assume_role or web_identity"; exit 2 ;; \
+	esac
 	@set -eu; \
-	E2E_AWS_OPENBAO_PORT="$(E2E_AWS_OPENBAO_PORT)" AWS_REGION="$(E2E_AWS_REGION)" AWS_DEFAULT_REGION="$(E2E_AWS_REGION)" $(DOCKER_COMPOSE) -f "$(E2E_AWS_COMPOSE_FILE)" up -d --wait; \
-	trap 'E2E_AWS_OPENBAO_PORT="$(E2E_AWS_OPENBAO_PORT)" $(DOCKER_COMPOSE) -f "$(E2E_AWS_COMPOSE_FILE)" down -v --remove-orphans' EXIT; \
+	E2E_AWS_OPENBAO_PORT="$(E2E_AWS_OPENBAO_PORT)" E2E_AWS_WEB_IDENTITY_TOKEN_FILE="$(E2E_AWS_WEB_IDENTITY_TOKEN_FILE)" E2E_AWS_WEB_IDENTITY_TOKEN_FILE_HOST="$(E2E_AWS_WEB_IDENTITY_TOKEN_FILE_HOST)" AWS_REGION="$(E2E_AWS_REGION)" AWS_DEFAULT_REGION="$(E2E_AWS_REGION)" $(DOCKER_COMPOSE) -f "$(E2E_AWS_COMPOSE_FILE)" up -d --wait; \
+	trap 'E2E_AWS_OPENBAO_PORT="$(E2E_AWS_OPENBAO_PORT)" E2E_AWS_WEB_IDENTITY_TOKEN_FILE="$(E2E_AWS_WEB_IDENTITY_TOKEN_FILE)" E2E_AWS_WEB_IDENTITY_TOKEN_FILE_HOST="$(E2E_AWS_WEB_IDENTITY_TOKEN_FILE_HOST)" $(DOCKER_COMPOSE) -f "$(E2E_AWS_COMPOSE_FILE)" down -v --remove-orphans' EXIT; \
 	AWS_REGION="$(E2E_AWS_REGION)" \
 	AWS_DEFAULT_REGION="$(E2E_AWS_REGION)" \
 	E2E_AWS_CONFIRM="$(E2E_AWS_CONFIRM)" \
 	E2E_AWS_OPENBAO_ADDR="$(E2E_AWS_OPENBAO_ADDR)" \
+	E2E_AWS_AUTH_MODE="$(E2E_AWS_AUTH_MODE)" \
 	E2E_AWS_ROLE_ARN="$(E2E_AWS_ROLE_ARN)" \
 	E2E_AWS_EXTERNAL_ID="$(E2E_AWS_EXTERNAL_ID)" \
+	E2E_AWS_WEB_IDENTITY_TOKEN_FILE="$(E2E_AWS_WEB_IDENTITY_TOKEN_FILE)" \
+	E2E_AWS_WEB_IDENTITY_TOKEN_FILE_HOST="$(E2E_AWS_WEB_IDENTITY_TOKEN_FILE_HOST)" \
 	E2E_AWS_REGION="$(E2E_AWS_REGION)" \
 	E2E_AWS_SECRET_PREFIX="$(E2E_AWS_SECRET_PREFIX)" \
 	E2E_PLUGIN_PATH="$(E2E_PLUGIN_BIN)" \
@@ -458,12 +476,21 @@ test-e2e-aws: e2e-build-plugin ## Run the opt-in manual e2e test against real AW
 test-e2e-aws-clean: ## Force-delete manual AWS e2e secrets under E2E_AWS_SECRET_PREFIX.
 	@if [ "$(E2E_AWS_CLEAN_CONFIRM)" != "1" ]; then echo "set E2E_AWS_CLEAN_CONFIRM=1 to force-delete manual AWS e2e secrets"; exit 2; fi
 	@if [ -z "$(E2E_AWS_ROLE_ARN)" ]; then echo "set E2E_AWS_ROLE_ARN from the OpenTofu output"; exit 2; fi
-	@if [ -z "$(E2E_AWS_EXTERNAL_ID)" ]; then echo "set E2E_AWS_EXTERNAL_ID from the OpenTofu output"; exit 2; fi
+	@case "$(E2E_AWS_AUTH_MODE)" in \
+		assume_role) \
+			if [ -z "$(E2E_AWS_EXTERNAL_ID)" ]; then echo "set E2E_AWS_EXTERNAL_ID from the OpenTofu output"; exit 2; fi ;; \
+		web_identity) \
+			if [ ! -r "$(E2E_AWS_WEB_IDENTITY_TOKEN_FILE_HOST)" ]; then echo "set E2E_AWS_WEB_IDENTITY_TOKEN_FILE_HOST to a readable OIDC token file"; exit 2; fi ;; \
+		*) echo "E2E_AWS_AUTH_MODE must be assume_role or web_identity"; exit 2 ;; \
+	esac
 	@AWS_REGION="$(E2E_AWS_REGION)" \
 	AWS_DEFAULT_REGION="$(E2E_AWS_REGION)" \
 	E2E_AWS_CLEAN_CONFIRM="$(E2E_AWS_CLEAN_CONFIRM)" \
+	E2E_AWS_AUTH_MODE="$(E2E_AWS_AUTH_MODE)" \
 	E2E_AWS_ROLE_ARN="$(E2E_AWS_ROLE_ARN)" \
 	E2E_AWS_EXTERNAL_ID="$(E2E_AWS_EXTERNAL_ID)" \
+	E2E_AWS_WEB_IDENTITY_TOKEN_FILE="$(E2E_AWS_WEB_IDENTITY_TOKEN_FILE)" \
+	E2E_AWS_WEB_IDENTITY_TOKEN_FILE_HOST="$(E2E_AWS_WEB_IDENTITY_TOKEN_FILE_HOST)" \
 	E2E_AWS_REGION="$(E2E_AWS_REGION)" \
 	E2E_AWS_SECRET_PREFIX="$(E2E_AWS_SECRET_PREFIX)" \
 	"$(GO)" test -tags=e2e ./test/e2e/aws -run TestCleanupAWSSecrets -count=1 -v

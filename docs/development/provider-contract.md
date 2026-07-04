@@ -387,7 +387,8 @@ AWS Secrets Manager uses destination type `aws-sm`.
 Supported auth modes:
 
 - AWS SDK default credential chain;
-- STS assume role.
+- STS assume role;
+- STS assume role with web identity.
 
 Supported association shape:
 
@@ -401,8 +402,9 @@ plan, upsert no-op detection, and read-state use tag metadata. With
 `GetSecretValue` for owned secrets and compare the live value hash with the
 desired payload hash.
 
-Static AWS access keys, secret access keys, and session tokens are recognized
-as sensitive fields but are not supported auth material.
+Static AWS access keys, secret access keys, and session tokens are recognized as
+sensitive fields but are not supported auth material. Web identity uses a
+configured token file path and does not store token contents in backend storage.
 
 ### Kubernetes Secrets
 

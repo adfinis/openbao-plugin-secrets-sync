@@ -1042,16 +1042,21 @@ components:
           enum: [local, private]
         auth_mode:
           type: string
-          description: Provider auth mode.
+          enum: [default, assume_role, web_identity, static]
+          description: Provider auth mode. Static AWS auth is reserved and not supported yet.
         role_arn:
           type: string
-          description: AWS IAM role ARN for assume-role auth.
+          description: AWS IAM role ARN for assume-role and web-identity auth.
         external_id:
           type: string
           writeOnly: true
           description: AWS STS external id. Stored seal-wrapped and redacted on read.
         session_name:
           type: string
+          description: Optional AWS STS role session name for assume-role and web-identity auth.
+        web_identity_token_file:
+          type: string
+          description: Absolute token file path for AWS web-identity auth. The token contents are not stored by the backend.
         delete_recovery_window_days:
           type: integer
           minimum: 7

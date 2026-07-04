@@ -265,6 +265,52 @@ func TestAWSDestinationConfigLifecycle(t *testing.T) {
 	assertResponseValue(t, validateResp, "valid", true)
 }
 
+func TestAWSWebIdentityDestinationConfigLifecycle(t *testing.T) {
+	env := newBackendTestEnv(t)
+
+	identityFile := "/var/run/openbao/aws-web-identity.jwt"
+	writeResp := env.update("destinations/aws-sm/prod", map[string]interface{}{
+		"description":                                   "aws production",
+		awssecretsmanager.ConfigKeyRegion:               "eu-central-1",
+		awssecretsmanager.ConfigKeyAuthMode:             awssecretsmanager.AuthModeWebIdentity,
+		awssecretsmanager.ConfigKeyRoleARN:              "arn:aws:iam::123456789012:role/openbao-plugin-secrets-sync",
+		awssecretsmanager.ConfigKeyWebIdentityTokenFile: identityFile,
+		awssecretsmanager.ConfigKeySessionName:          "openbao-sync",
+	})
+	if writeResp != nil && writeResp.IsError() {
+		t.Fatalf("unexpected destination write error: %v", writeResp.Error())
+	}
+
+	storedDestination, err := getDestination(context.Background(), env.storage, awssecretsmanager.ProviderType, "prod")
+	if err != nil {
+		t.Fatalf("read stored destination: %v", err)
+	}
+	if got := storedDestination.Config[awssecretsmanager.ConfigKeyWebIdentityTokenFile]; got != identityFile {
+		t.Fatalf("stored web_identity_token_file = %q, want %q", got, identityFile)
+	}
+	if _, ok := storedDestination.Config[awssecretsmanager.ConfigKeyExternalID]; ok {
+		t.Fatal("web_identity destination must not store external_id")
+	}
+
+	readResp := env.read("destinations/aws-sm/prod")
+	assertNoErrorResponse(t, readResp)
+	config := readResp.Data["config"].(map[string]interface{})
+	if got := config[awssecretsmanager.ConfigKeyAuthMode]; got != awssecretsmanager.AuthModeWebIdentity {
+		t.Fatalf("aws auth_mode = %v, want %s", got, awssecretsmanager.AuthModeWebIdentity)
+	}
+	if got := config[awssecretsmanager.ConfigKeyWebIdentityTokenFile]; got != identityFile {
+		t.Fatalf("read web_identity_token_file = %v, want %s", got, identityFile)
+	}
+	sensitiveConfig := readResp.Data["sensitive_config"].(map[string]interface{})
+	if got := sensitiveConfig["configured"]; got != false {
+		t.Fatalf("sensitive_config configured = %v, want false", got)
+	}
+
+	validateResp := env.update("destinations/aws-sm/prod/validate")
+	assertNoErrorResponse(t, validateResp)
+	assertResponseValue(t, validateResp, "valid", true)
+}
+
 func TestKubernetesDestinationConfigLifecycle(t *testing.T) {
 	env := newBackendTestEnv(t)
 
