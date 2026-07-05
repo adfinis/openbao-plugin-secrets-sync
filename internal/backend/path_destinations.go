@@ -48,14 +48,6 @@ var destinationConfigFieldKeys = []string{
 	kubernetessecrets.ConfigKeyTLSServerName,
 }
 
-var destinationSensitiveConfigFieldKeys = []string{
-	awssecretsmanager.ConfigKeyExternalID,
-	awssecretsmanager.ConfigKeyAccessKeyID,
-	awssecretsmanager.ConfigKeySecretAccessKey,
-	awssecretsmanager.ConfigKeySessionToken,
-	gitlab.ConfigKeyToken,
-}
-
 var destinationConfigFieldKeysByType = map[string][]string{
 	awssecretsmanager.ProviderType: {
 		awssecretsmanager.ConfigKeyRegion,
@@ -104,6 +96,8 @@ var destinationSensitiveConfigFieldKeysByType = map[string][]string{
 		kubernetessecrets.ConfigKeyToken,
 	},
 }
+
+var destinationSensitiveConfigFieldKeys = allDestinationSensitiveConfigFieldKeys()
 
 func pathDestinations(b *secretSyncBackend) []*framework.Path {
 	return []*framework.Path{
@@ -432,8 +426,7 @@ func destinationWriteRecordFromFieldData(
 	if err != nil {
 		return destinationRecord{}, nil, "", logical.ErrorResponse(err.Error()), nil
 	}
-	migrateSensitiveConfigFromDestination(existing, data, sensitiveConfig)
-	removeSensitiveConfigKeys(config)
+	removeSensitiveConfigKeys(destinationType, config)
 	allowedSourcePrefixes, err := destinationSourcePathPrefixesFromFieldData(existing, data)
 	if err != nil {
 		return destinationRecord{}, nil, "", logical.ErrorResponse(err.Error()), nil
@@ -786,7 +779,7 @@ func destinationResponse(
 		responseField("disabled", record.Disabled),
 		responseField("allowed_source_path_prefixes", copyStringSlice(record.AllowedSourcePathPrefixes)),
 		responseField("allowed_resolved_name_prefixes", copyStringSlice(record.AllowedResolvedNamePrefixes)),
-		responseField("config", destinationConfigResponse(record.Config)),
+		responseField("config", destinationConfigResponse(record.Type, record.Config)),
 		responseField("created_time", record.CreatedTime),
 		responseField("updated_time", record.UpdatedTime),
 		responseField("sensitive_config", destinationSensitiveConfigResponse(sensitiveRecord)),
@@ -917,6 +910,14 @@ func destinationSensitiveConfigFieldKeysForType(destinationType string) []string
 	return destinationSensitiveConfigFieldKeysByType[destinationType]
 }
 
+func allDestinationSensitiveConfigFieldKeys() []string {
+	keys := []string{}
+	for _, providerKeys := range destinationSensitiveConfigFieldKeysByType {
+		keys = append(keys, providerKeys...)
+	}
+	return uniqueSortedStrings(keys)
+}
+
 func stringSet(values []string) map[string]struct{} {
 	set := make(map[string]struct{}, len(values))
 	for _, value := range values {
@@ -1010,37 +1011,18 @@ func normalizeResolvedNamePrefixes(prefixes []string) ([]string, error) {
 	return uniqueSortedStrings(normalized), nil
 }
 
-func removeSensitiveConfigKeys(config map[string]string) {
-	for _, key := range destinationSensitiveConfigFieldKeys {
+func removeSensitiveConfigKeys(destinationType string, config map[string]string) {
+	for _, key := range destinationSensitiveConfigFieldKeysForType(destinationType) {
 		delete(config, key)
 	}
 }
 
-func migrateSensitiveConfigFromDestination(
-	existing *destinationRecord,
-	data *framework.FieldData,
-	sensitiveConfig map[string]string,
-) {
-	if existing == nil {
-		return
-	}
-	for _, key := range destinationSensitiveConfigFieldKeys {
-		if _, ok := data.GetOk(key); ok {
-			continue
-		}
-		value := strings.TrimSpace(existing.Config[key])
-		if value == "" {
-			continue
-		}
-		if _, ok := sensitiveConfig[key]; !ok {
-			sensitiveConfig[key] = value
-		}
-	}
-}
-
-func destinationConfigResponse(config map[string]string) map[string]interface{} { //nolint:forbidigo
+func destinationConfigResponse(
+	destinationType string,
+	config map[string]string,
+) map[string]interface{} { //nolint:forbidigo
 	publicConfig := copyStringMap(config)
-	removeSensitiveConfigKeys(publicConfig)
+	removeSensitiveConfigKeys(destinationType, publicConfig)
 	response := make(map[string]interface{}, len(publicConfig)) //nolint:forbidigo
 	for key, value := range publicConfig {
 		response[key] = value

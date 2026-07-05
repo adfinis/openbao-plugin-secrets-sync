@@ -512,49 +512,8 @@ func TestDestinationSensitiveConfigDeletion(t *testing.T) {
 	}
 }
 
-func TestDestinationWriteMigratesSensitiveKeysFromLegacyConfig(t *testing.T) {
-	env := newBackendTestEnv(t)
-	if err := putDestination(context.Background(), env.storage, destinationRecord{
-		Type: awssecretsmanager.ProviderType,
-		Name: "prod",
-		Config: map[string]string{
-			awssecretsmanager.ConfigKeyAuthMode:   awssecretsmanager.AuthModeAssumeRole,
-			awssecretsmanager.ConfigKeyRoleARN:    "arn:aws:iam::123456789012:role/openbao-plugin-secrets-sync",
-			awssecretsmanager.ConfigKeyExternalID: "tenant-legacy",
-		},
-	}); err != nil {
-		t.Fatalf("write legacy destination: %v", err)
-	}
-
-	updateResp := env.update("destinations/aws-sm/prod", map[string]interface{}{
-		"description": "migrated",
-	})
-	if updateResp != nil && updateResp.IsError() {
-		t.Fatalf("unexpected destination update error: %v", updateResp.Error())
-	}
-	storedDestination, err := getDestination(context.Background(), env.storage, awssecretsmanager.ProviderType, "prod")
-	if err != nil {
-		t.Fatalf("read stored destination: %v", err)
-	}
-	if _, ok := storedDestination.Config[awssecretsmanager.ConfigKeyExternalID]; ok {
-		t.Fatal("legacy external_id must be removed from non-sensitive destination config")
-	}
-	storedSensitiveConfig, err := getDestinationSensitiveConfig(
-		context.Background(),
-		env.storage,
-		awssecretsmanager.ProviderType,
-		"prod",
-	)
-	if err != nil {
-		t.Fatalf("read stored sensitive config: %v", err)
-	}
-	if got := storedSensitiveConfig.Config[awssecretsmanager.ConfigKeyExternalID]; got != "tenant-legacy" {
-		t.Fatalf("migrated external_id = %q, want tenant-legacy", got)
-	}
-}
-
 func TestDestinationConfigResponseFiltersSensitiveKeys(t *testing.T) {
-	response := destinationConfigResponse(map[string]string{
+	response := destinationConfigResponse(awssecretsmanager.ProviderType, map[string]string{
 		awssecretsmanager.ConfigKeyRegion:          "eu-central-1",
 		awssecretsmanager.ConfigKeyExternalID:      "tenant-1",
 		awssecretsmanager.ConfigKeySecretAccessKey: "secret",
@@ -567,6 +526,17 @@ func TestDestinationConfigResponseFiltersSensitiveKeys(t *testing.T) {
 	}
 	if _, ok := response[awssecretsmanager.ConfigKeySecretAccessKey]; ok {
 		t.Fatal("response must not include secret_access_key")
+	}
+
+	k8sResponse := destinationConfigResponse(kubernetessecrets.ProviderType, map[string]string{
+		kubernetessecrets.ConfigKeyAPIServer: "https://kubernetes.example.com",
+		kubernetessecrets.ConfigKeyToken:     "bearer-token",
+	})
+	if got := k8sResponse[kubernetessecrets.ConfigKeyAPIServer]; got != "https://kubernetes.example.com" {
+		t.Fatalf("api_server = %v, want https://kubernetes.example.com", got)
+	}
+	if _, ok := k8sResponse[kubernetessecrets.ConfigKeyToken]; ok {
+		t.Fatal("response must not include k8s token")
 	}
 }
 
