@@ -19,6 +19,7 @@ import (
 const (
 	maxAutomaticRetryAttempts         = 3
 	retryBaseDelay                    = 30 * time.Second
+	retryJitterDivisor                = 5
 	retryMaxDelay                     = 5 * time.Minute
 	outboxClaimLease                  = 5 * time.Minute
 	providerMutationTimeout           = 2 * time.Minute
@@ -930,7 +931,7 @@ func markOperationFailed(
 	record.Attempts++
 	if shouldRetryAutomatically(failure.class, record.Attempts) {
 		record.State = outboxStateRetryWait
-		record.NotBefore = now.Add(retryDelay(record.Attempts)).Format(timeFormatRFC3339)
+		record.NotBefore = now.Add(retryDelay(record)).Format(timeFormatRFC3339)
 	} else {
 		record.NotBefore = ""
 	}
@@ -1157,7 +1158,19 @@ func shouldRetryAutomatically(errorClass providers.ErrorClass, attempts int) boo
 	return errorClass == providers.ErrorClassRateLimit || errorClass == providers.ErrorClassUnavailable
 }
 
-func retryDelay(attempts int) time.Duration {
+func retryDelay(record outboxRecord) time.Duration {
+	delay := retryBaseDelayForAttempts(record.Attempts)
+	if delay >= retryMaxDelay {
+		return retryMaxDelay
+	}
+	jitter := retryJitter(record, delay)
+	if delay+jitter > retryMaxDelay {
+		return retryMaxDelay
+	}
+	return delay + jitter
+}
+
+func retryBaseDelayForAttempts(attempts int) time.Duration {
 	if attempts <= 1 {
 		return retryBaseDelay
 	}
@@ -1166,4 +1179,37 @@ func retryDelay(attempts int) time.Duration {
 		return retryMaxDelay
 	}
 	return delay
+}
+
+func retryJitter(record outboxRecord, delay time.Duration) time.Duration {
+	maxJitter := delay / retryJitterDivisor
+	maxJitterSeconds := int64(maxJitter / time.Second)
+	if maxJitterSeconds <= 0 {
+		return 0
+	}
+	identity := record.ID
+	if identity == "" {
+		identity = strings.Join([]string{
+			record.Path,
+			record.AssociationID,
+			record.ObjectID,
+			record.DestinationRef,
+		}, "\x00")
+	}
+	return time.Duration(retryJitterSlot(identity, record.Attempts, maxJitterSeconds+1)) * time.Second
+}
+
+func retryJitterSlot(identity string, attempts int, slots int64) int64 {
+	if slots <= 1 {
+		return 0
+	}
+	hash := int64(17)
+	for i := 0; i < len(identity); i++ {
+		hash = (hash*31 + int64(identity[i])) % slots
+	}
+	attempt := int64(attempts)
+	if attempt < 0 {
+		attempt = -attempt
+	}
+	return (hash*31 + attempt) % slots
 }
