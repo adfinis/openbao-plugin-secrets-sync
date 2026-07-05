@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/adfinis/openbao-plugin-secrets-sync/internal/observability"
 	"github.com/adfinis/openbao-plugin-secrets-sync/internal/providers"
 	"github.com/openbao/openbao/sdk/v2/logical"
 )
@@ -65,6 +66,7 @@ func TestDispatchSkipsSuccessCommitAfterClaimReclaim(t *testing.T) {
 		operationID,
 		operation.ClaimOwner,
 		nowUTC(),
+		observability.OperationPeriodic,
 	)
 	if err != nil {
 		t.Fatalf("reclaim operation: %v", err)
@@ -115,6 +117,7 @@ func TestDispatchSkipsFailureCommitAfterClaimReclaim(t *testing.T) {
 		operationID,
 		operation.ClaimOwner,
 		nowUTC(),
+		observability.OperationPeriodic,
 	)
 	if err != nil {
 		t.Fatalf("reclaim operation: %v", err)

@@ -178,7 +178,13 @@ func (b *secretSyncBackend) periodic(ctx context.Context, req *logical.Request) 
 		b.recordRemoteMutationBlocked(ctx, observability.OperationPeriodic, observability.ReasonRestoreGuard)
 		return periodicErr
 	}
-	_, err = b.processDueOutboxLimit(ctx, req.Storage, now, defaultPeriodicMaxOperations)
+	_, err = b.processDueOutboxLimit(
+		ctx,
+		req.Storage,
+		now,
+		defaultPeriodicMaxOperations,
+		observability.OperationPeriodic,
+	)
 	return errors.Join(periodicErr, err)
 }
 

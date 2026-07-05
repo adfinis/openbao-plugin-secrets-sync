@@ -193,7 +193,13 @@ func (b *secretSyncBackend) runEventDispatchPass(
 		b.recordEventDispatchError(ctx, err)
 		return 0, 0, false
 	}
-	processed, err = b.processDueOutboxLimit(ctx, storage, now, cfg.EventDispatchMaxOperations)
+	processed, err = b.processDueOutboxLimit(
+		ctx,
+		storage,
+		now,
+		cfg.EventDispatchMaxOperations,
+		observability.OperationEventDispatch,
+	)
 	if err != nil {
 		b.recordEventDispatchError(ctx, err)
 		return 0, 0, false

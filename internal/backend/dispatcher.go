@@ -31,6 +31,7 @@ func (b *secretSyncBackend) processDueOutboxLimit(
 	storage logical.Storage,
 	now time.Time,
 	maxOperations int,
+	operation string,
 ) (int, error) {
 	claimOwner, err := b.outboxClaimOwner(ctx, storage)
 	if err != nil {
@@ -45,7 +46,7 @@ func (b *secretSyncBackend) processDueOutboxLimit(
 	}
 	processed := 0
 	for _, id := range ids {
-		claimed, ok, err := b.claimDispatchableOutboxRecord(ctx, storage, id, claimOwner, now)
+		claimed, ok, err := b.claimDispatchableOutboxRecord(ctx, storage, id, claimOwner, now, operation)
 		if err != nil {
 			return processed, err
 		}
@@ -69,6 +70,7 @@ func (b *secretSyncBackend) claimDispatchableOutboxRecord(
 	id string,
 	claimOwner string,
 	now time.Time,
+	operation string,
 ) (*outboxRecord, bool, error) {
 	b.enqueueMu.Lock()
 	defer b.enqueueMu.Unlock()
@@ -86,7 +88,32 @@ func (b *secretSyncBackend) claimDispatchableOutboxRecord(
 		}
 		return nil, false, nil
 	}
+	blocked, err := b.claimBlockedByGlobalSwitch(ctx, storage, operation)
+	if err != nil || blocked {
+		return nil, false, err
+	}
 	return claimOutboxRecord(ctx, storage, *record, claimOwner, now)
+}
+
+func (b *secretSyncBackend) claimBlockedByGlobalSwitch(
+	ctx context.Context,
+	storage logical.Storage,
+	operation string,
+) (bool, error) {
+	cfg, err := readGlobalConfig(ctx, storage)
+	if err != nil {
+		return false, err
+	}
+	switch {
+	case cfg.Disabled:
+		b.recordRemoteMutationBlocked(ctx, operation, observability.ReasonDisabled)
+		return true, nil
+	case cfg.RestoreGuard:
+		b.recordRemoteMutationBlocked(ctx, operation, observability.ReasonRestoreGuard)
+		return true, nil
+	default:
+		return false, nil
+	}
 }
 
 func (b *secretSyncBackend) outboxClaimOwner(ctx context.Context, storage logical.Storage) (string, error) {

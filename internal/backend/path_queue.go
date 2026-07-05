@@ -160,7 +160,13 @@ func (b *secretSyncBackend) pathQueueDrain(
 	if err := b.recoverIncompleteEnqueueIntents(ctx, req.Storage, now); err != nil {
 		return nil, err
 	}
-	processed, err := b.processDueOutboxLimit(ctx, req.Storage, now, maxOperations)
+	processed, err := b.processDueOutboxLimit(
+		ctx,
+		req.Storage,
+		now,
+		maxOperations,
+		observability.OperationDrain,
+	)
 	if err != nil {
 		return nil, err
 	}
