@@ -189,11 +189,17 @@ func (b *secretSyncBackend) runEventDispatchPass(
 	}
 
 	now := nowUTC()
-	if err := recoverIncompleteEnqueueIntentsLimit(ctx, storage, now, defaultEventDispatchRecoveryLimit); err != nil {
+	if err := b.recoverIncompleteEnqueueIntentsLimit(ctx, storage, now, defaultEventDispatchRecoveryLimit); err != nil {
 		b.recordEventDispatchError(ctx, err)
 		return 0, 0, false
 	}
-	processed, err = b.processDueOutboxLimit(ctx, storage, now, cfg.EventDispatchMaxOperations)
+	processed, err = b.processDueOutboxLimit(
+		ctx,
+		storage,
+		now,
+		cfg.EventDispatchMaxOperations,
+		observability.OperationEventDispatch,
+	)
 	if err != nil {
 		b.recordEventDispatchError(ctx, err)
 		return 0, 0, false

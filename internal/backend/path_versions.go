@@ -186,6 +186,7 @@ func (b *secretSyncBackend) mutateCurrentVersionDelete(
 		metadata.Generation,
 		version,
 		deletePlan.operations,
+		deletePlan.staleUpsertIDs,
 		now,
 	); err != nil {
 		return err
@@ -243,7 +244,16 @@ func (b *secretSyncBackend) mutateCurrentVersionUndelete(
 	if err := ensureQueuedOutboxIDsUnclaimed(ctx, storage, staleDeleteIDs); err != nil {
 		return err
 	}
-	if err := putPendingEnqueueIntent(ctx, storage, path, metadata.Generation, version, operations, now); err != nil {
+	if err := putPendingEnqueueIntent(
+		ctx,
+		storage,
+		path,
+		metadata.Generation,
+		version,
+		operations,
+		staleDeleteIDs,
+		now,
+	); err != nil {
 		return err
 	}
 	if err := mutate(ctx, storage, metadata, path, version, now); err != nil {

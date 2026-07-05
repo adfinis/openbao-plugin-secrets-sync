@@ -56,6 +56,11 @@ func recoverEnqueueIntent(
 		return err
 	}
 	versionAvailable := version != nil && !version.Destroyed && version.DeletionTime == ""
+	if intentSourceMutationCommitted(intent, versionAvailable) {
+		if err := cancelQueuedOutboxIDs(ctx, storage, intent.CancelOperationIDs); err != nil {
+			return err
+		}
+	}
 	operations, err := recoverableIntentOperations(ctx, storage, intent, now, versionAvailable)
 	if err != nil {
 		return err
@@ -72,7 +77,31 @@ func recoverEnqueueIntent(
 			return err
 		}
 	}
+	if intentSourceMetadataRecoverable(intent, versionAvailable) {
+		if err := recoverIntentSourceMetadata(ctx, storage, intent); err != nil {
+			return err
+		}
+	}
 	return pruneRecoveredIntent(ctx, storage, intent)
+}
+
+func (b *secretSyncBackend) recoverIncompleteEnqueueIntents(
+	ctx context.Context,
+	storage logical.Storage,
+	now time.Time,
+) error {
+	return b.recoverIncompleteEnqueueIntentsLimit(ctx, storage, now, 0)
+}
+
+func (b *secretSyncBackend) recoverIncompleteEnqueueIntentsLimit(
+	ctx context.Context,
+	storage logical.Storage,
+	now time.Time,
+	maxIntents int,
+) error {
+	b.enqueueMu.Lock()
+	defer b.enqueueMu.Unlock()
+	return recoverIncompleteEnqueueIntentsLimit(ctx, storage, now, maxIntents)
 }
 
 func recoverableIntentOperations(
@@ -113,17 +142,11 @@ func outboxRecordsFromIntentOperations(
 			ObjectID:       operation.ObjectID,
 			DestinationRef: operation.DestinationRef,
 			State:          outboxStatePending,
-			NotBefore:      now,
+			NotBefore:      operation.NotBefore,
 			CreatedTime:    intent.CreatedTime,
 			UpdatedTime:    now,
-			IdempotencyKey: operationIdempotencyKey(
-				intent.Generation,
-				intent.Path,
-				intent.Version,
-				operation.AssociationID,
-				operation.ObjectID,
-				operation.Type,
-			),
+			IdempotencyKey: operation.IdempotencyKey,
+			Trigger:        operation.Trigger,
 		})
 	}
 	return records, nil
@@ -138,6 +161,47 @@ func shouldRecoverIntentOperation(operationType outbox.OperationType, versionAva
 	default:
 		return false
 	}
+}
+
+func intentSourceMutationCommitted(intent enqueueIntentRecord, versionAvailable bool) bool {
+	for _, operation := range intent.Operations {
+		if shouldRecoverIntentOperation(operation.Type, versionAvailable) {
+			return true
+		}
+	}
+	return false
+}
+
+func intentSourceMetadataRecoverable(intent enqueueIntentRecord, versionAvailable bool) bool {
+	if !versionAvailable {
+		return false
+	}
+	for _, operation := range intent.Operations {
+		if operation.Type == outbox.OperationTypeUpsert {
+			return true
+		}
+	}
+	return false
+}
+
+func recoverIntentSourceMetadata(
+	ctx context.Context,
+	storage logical.Storage,
+	intent enqueueIntentRecord,
+) error {
+	metadata, err := getMetadata(ctx, storage, intent.Path)
+	if err != nil {
+		return err
+	}
+	if metadata == nil {
+		record := newMetadataRecord()
+		record.Generation = intent.Generation
+		metadata = &record
+	}
+	if metadata.CurrentVersion >= intent.Version {
+		return nil
+	}
+	return commitSourceMetadata(ctx, storage, intent.Path, metadata, intent.Version, intent.CreatedTime)
 }
 
 func pruneRecoveredIntent(

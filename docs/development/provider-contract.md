@@ -81,6 +81,7 @@ Providers:
 - classify errors into stable classes;
 - avoid logging secret values and credentials;
 - support context cancellation and timeouts;
+- make same-request upsert and delete calls idempotent;
 - write ownership metadata where the destination supports it;
 - report partial success precisely.
 
@@ -167,16 +168,17 @@ Upsert requests receive prepared payload bytes and payload metadata:
 
 ```go
 type UpsertRequest struct {
-    Runtime       RuntimeIdentity
-    ResolvedName  string
-    Format        string
-    Payload       []byte
-    PayloadSHA256 string
-    DataMap       map[string][]byte
-    SourcePath    string
-    SourceVersion int
-    AssociationID string
-    ObjectID      string
+    Runtime        RuntimeIdentity
+    ResolvedName   string
+    Format         string
+    Payload        []byte
+    PayloadSHA256  string
+    IdempotencyKey string
+    DataMap        map[string][]byte
+    SourcePath     string
+    SourceVersion  int
+    AssociationID  string
+    ObjectID       string
 }
 ```
 
@@ -187,6 +189,13 @@ payload before writing it when they also persist or compare the payload hash.
 Providers with metadata readback reject stale mutations when the remote managed
 source version is newer than the request source version.
 
+Upsert implementations must be content-idempotent: repeating the same request
+for the same owned remote object must either leave the remote object unchanged
+or converge it to the same payload and metadata without returning an error.
+Providers may additionally pass `IdempotencyKey` to destination APIs that
+support request tokens, but the backend does not rely on provider-specific
+token support for correctness.
+
 ## Delete input
 
 Delete requests are sent only when the association uses `delete_mode=delete`
@@ -194,19 +203,25 @@ and the provider advertises owned delete support:
 
 ```go
 type DeleteRequest struct {
-    Runtime       RuntimeIdentity
-    ResolvedName  string
-    DataMap       bool
-    SourcePath    string
-    SourceVersion int
-    AssociationID string
-    ObjectID      string
+    Runtime        RuntimeIdentity
+    ResolvedName   string
+    IdempotencyKey string
+    DataMap        bool
+    SourcePath     string
+    SourceVersion  int
+    AssociationID  string
+    ObjectID       string
 }
 ```
 
 Provider delete implementations delete only owned objects. If ownership cannot
 be proven, the provider returns the `ownership` error class instead of
 deleting.
+
+Delete implementations must also be idempotent: repeating the same owned delete
+request must not fail after the remote object has already been deleted or
+scheduled for deletion. Missing owned objects are reported as successful
+`SyncResult`s rather than errors.
 
 ## Read-state input
 

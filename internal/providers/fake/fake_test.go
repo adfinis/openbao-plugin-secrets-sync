@@ -93,6 +93,12 @@ func TestProviderConformance(t *testing.T) {
 			RemoteVersion:  "fake",
 		},
 		Maturity: fakeMaturityMatrix(),
+		Idempotency: &providertest.IdempotencyCase{
+			Name:                 "same-request",
+			UpsertRequest:        defaultFakeUpsertRequest("prod/idempotent/app/db", []byte(`{"password":"secret"}`)),
+			DeleteRequest:        defaultFakeDeleteRequest("prod/idempotent/app/db"),
+			ExpectMutationResult: true,
+		},
 		UpsertErrors: []providertest.UpsertErrorCase{
 			{
 				Name:       "rate-limit",

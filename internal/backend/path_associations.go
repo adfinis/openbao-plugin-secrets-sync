@@ -1397,7 +1397,29 @@ func (b *secretSyncBackend) enqueueAssociationCurrentVersion(
 			operations[index] = operation
 		}
 	}
+	if err := putPendingEnqueueIntent(
+		ctx,
+		storage,
+		record.Path,
+		metadata.Generation,
+		metadata.CurrentVersion,
+		operations,
+		nil,
+		now,
+	); err != nil {
+		return nil, err
+	}
 	if err := putOutboxRecords(ctx, storage, operations); err != nil {
+		return nil, err
+	}
+	if err := completeEnqueueIntent(
+		ctx,
+		storage,
+		record.Path,
+		metadata.CurrentVersion,
+		operations,
+		now,
+	); err != nil {
 		return nil, err
 	}
 	return operationIDs, nil
@@ -1501,7 +1523,29 @@ func (b *secretSyncBackend) enqueueAssociationCurrentVersionWithSalt(
 	if err := ensureQueueCapacityFor(ctx, storage, additionalOperations); err != nil {
 		return nil, err
 	}
+	if err := putPendingEnqueueIntent(
+		ctx,
+		storage,
+		record.Path,
+		metadata.Generation,
+		metadata.CurrentVersion,
+		operations,
+		nil,
+		now,
+	); err != nil {
+		return nil, err
+	}
 	if err := putOutboxRecords(ctx, storage, operations); err != nil {
+		return nil, err
+	}
+	if err := completeEnqueueIntent(
+		ctx,
+		storage,
+		record.Path,
+		metadata.CurrentVersion,
+		operations,
+		now,
+	); err != nil {
 		return nil, err
 	}
 	return operationIDs, nil

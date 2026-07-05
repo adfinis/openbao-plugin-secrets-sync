@@ -19,6 +19,7 @@ type Harness struct {
 	PlanCases            []PlanCase
 	Lifecycle            *LifecycleCase
 	Maturity             *MaturityMatrix
+	Idempotency          *IdempotencyCase
 	UpsertSuccess        *UpsertCase
 	DeleteSuccess        *DeleteCase
 	ReadStateCase        *ReadStateCase
@@ -85,6 +86,18 @@ type ReadStateCase struct {
 	PayloadSHA256  string
 	SourceVersion  int
 	RemoteVersion  string
+}
+
+// IdempotencyCase validates repeated same-request mutations.
+type IdempotencyCase struct {
+	Name                 string
+	Provider             providers.Provider
+	Destination          providers.DestinationConfig
+	UpsertRequest        providers.UpsertRequest
+	StateAfterUpsert     *ReadStateCase
+	DeleteRequest        providers.DeleteRequest
+	StateAfterDelete     *ReadStateCase
+	ExpectMutationResult bool
 }
 
 // LifecycleCase validates a stateful create/update/delete provider flow.
@@ -193,6 +206,9 @@ func Run(t *testing.T, harness Harness) {
 	}
 	if harness.Maturity != nil {
 		runMaturityMatrix(t, harness.Provider, harness.ValidDestination, *harness.Maturity)
+	}
+	if harness.Idempotency != nil {
+		runIdempotencyCheck(t, harness.Provider, harness.ValidDestination, *harness.Idempotency)
 	}
 	if harness.UpsertSuccess != nil {
 		runUpsertSuccessCheck(t, harness.Provider, harness.ValidDestination, *harness.UpsertSuccess)
@@ -346,6 +362,58 @@ func runReadStateCheck(
 			t.Fatal("remote state must not be nil")
 		}
 		assertRemoteState(t, state, readStateCase)
+	})
+}
+
+func runIdempotencyCheck(
+	t *testing.T,
+	defaultProvider providers.Provider,
+	defaultDestination providers.DestinationConfig,
+	idempotencyCase IdempotencyCase,
+) {
+	t.Helper()
+	name := idempotencyCase.Name
+	if name == "" {
+		name = "default"
+	}
+	t.Run("idempotency/"+name, func(t *testing.T) {
+		assertUpsertRequestWellFormed(t, idempotencyCase.UpsertRequest)
+		if idempotencyCase.DeleteRequest.ResolvedName != "" {
+			assertDeleteRequestWellFormed(t, idempotencyCase.DeleteRequest)
+		}
+		if idempotencyCase.StateAfterUpsert != nil {
+			assertReadStateRequestWellFormed(t, idempotencyCase.StateAfterUpsert.Request)
+		}
+		if idempotencyCase.StateAfterDelete != nil {
+			assertReadStateRequestWellFormed(t, idempotencyCase.StateAfterDelete.Request)
+		}
+
+		provider := idempotencyCase.Provider
+		if provider == nil {
+			provider = defaultProvider
+		}
+		destination := destinationOrDefault(idempotencyCase.Destination, defaultDestination)
+		runtime := openRuntime(t, provider, destination)
+
+		assertIdempotentUpsert(t, runtime, idempotencyCase.UpsertRequest, idempotencyCase.ExpectMutationResult)
+		if idempotencyCase.StateAfterUpsert != nil {
+			state, err := runtime.ReadState(context.Background(), idempotencyCase.StateAfterUpsert.Request)
+			if err != nil {
+				t.Fatalf("read state after repeated upsert: %v", err)
+			}
+			assertRemoteState(t, state, *idempotencyCase.StateAfterUpsert)
+		}
+		if idempotencyCase.DeleteRequest.ResolvedName == "" {
+			return
+		}
+		assertIdempotentDelete(t, runtime, idempotencyCase.DeleteRequest, idempotencyCase.ExpectMutationResult)
+		if idempotencyCase.StateAfterDelete != nil {
+			state, err := runtime.ReadState(context.Background(), idempotencyCase.StateAfterDelete.Request)
+			if err != nil {
+				t.Fatalf("read state after repeated delete: %v", err)
+			}
+			assertRemoteState(t, state, *idempotencyCase.StateAfterDelete)
+		}
 	})
 }
 
@@ -665,6 +733,42 @@ func runMaturityHealthCase(
 	}
 	if health.ErrorClass != maturityCase.ErrorClass {
 		t.Fatalf("health error class = %s, want %s", health.ErrorClass, maturityCase.ErrorClass)
+	}
+}
+
+func assertIdempotentUpsert(
+	t *testing.T,
+	runtime providers.DestinationRuntime,
+	request providers.UpsertRequest,
+	expectResult bool,
+) {
+	t.Helper()
+	for attempt := 1; attempt <= 2; attempt++ {
+		result, err := runtime.Upsert(context.Background(), request)
+		if err != nil {
+			t.Fatalf("idempotent upsert attempt %d: %v", attempt, err)
+		}
+		if expectResult && result == nil {
+			t.Fatalf("idempotent upsert attempt %d result must not be nil", attempt)
+		}
+	}
+}
+
+func assertIdempotentDelete(
+	t *testing.T,
+	runtime providers.DestinationRuntime,
+	request providers.DeleteRequest,
+	expectResult bool,
+) {
+	t.Helper()
+	for attempt := 1; attempt <= 2; attempt++ {
+		result, err := runtime.Delete(context.Background(), request)
+		if err != nil {
+			t.Fatalf("idempotent delete attempt %d: %v", attempt, err)
+		}
+		if expectResult && result == nil {
+			t.Fatalf("idempotent delete attempt %d result must not be nil", attempt)
+		}
 	}
 }
 

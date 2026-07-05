@@ -172,14 +172,15 @@ func (record associationRecord) reservationNames() []string {
 }
 
 type enqueueIntentRecord struct {
-	Path          string                   `json:"path"`
-	Generation    string                   `json:"generation"`
-	Version       int                      `json:"version"`
-	Operations    []enqueueIntentOperation `json:"operations"`
-	Complete      bool                     `json:"complete"`
-	CreatedTime   string                   `json:"created_time"`
-	UpdatedTime   string                   `json:"updated_time"`
-	CompletedTime string                   `json:"completed_time"`
+	Path               string                   `json:"path"`
+	Generation         string                   `json:"generation"`
+	Version            int                      `json:"version"`
+	Operations         []enqueueIntentOperation `json:"operations"`
+	CancelOperationIDs []string                 `json:"cancel_operation_ids"`
+	Complete           bool                     `json:"complete"`
+	CreatedTime        string                   `json:"created_time"`
+	UpdatedTime        string                   `json:"updated_time"`
+	CompletedTime      string                   `json:"completed_time"`
 }
 
 type enqueueIntentOperation struct {
@@ -188,6 +189,9 @@ type enqueueIntentOperation struct {
 	AssociationID  string               `json:"association_id"`
 	ObjectID       string               `json:"object_id"`
 	DestinationRef string               `json:"destination_ref"`
+	NotBefore      string               `json:"not_before"`
+	IdempotencyKey string               `json:"idempotency_key"`
+	Trigger        string               `json:"trigger,omitempty"`
 }
 
 type outboxRecord struct {

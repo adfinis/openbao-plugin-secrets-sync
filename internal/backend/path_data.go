@@ -217,6 +217,7 @@ func (b *secretSyncBackend) commitDataWritePlan(
 		plan.metadata.Generation,
 		plan.nextVersion,
 		plan.operations,
+		staleUpsertIDs,
 		plan.now,
 	); err != nil {
 		return nil, err
@@ -419,6 +420,7 @@ func (b *secretSyncBackend) pathDataDelete(
 		metadata.Generation,
 		metadata.CurrentVersion,
 		deletePlan.operations,
+		deletePlan.staleUpsertIDs,
 		now,
 	); err != nil {
 		return nil, err
@@ -923,12 +925,20 @@ func putPendingEnqueueIntent(
 	generation string,
 	version int,
 	operations []outboxRecord,
+	cancelOperationIDs []string,
 	now string,
 ) error {
 	if len(operations) == 0 {
 		return nil
 	}
-	return putEnqueueIntent(ctx, storage, newEnqueueIntentRecord(path, generation, version, operations, now))
+	return putEnqueueIntent(ctx, storage, newEnqueueIntentRecord(
+		path,
+		generation,
+		version,
+		operations,
+		cancelOperationIDs,
+		now,
+	))
 }
 
 func putOutboxRecords(ctx context.Context, storage logical.Storage, operations []outboxRecord) error {
@@ -966,15 +976,17 @@ func newEnqueueIntentRecord(
 	generation string,
 	version int,
 	operations []outboxRecord,
+	cancelOperationIDs []string,
 	now string,
 ) enqueueIntentRecord {
 	return enqueueIntentRecord{
-		Path:        path,
-		Generation:  generation,
-		Version:     version,
-		Operations:  enqueueIntentOperations(operations),
-		CreatedTime: now,
-		UpdatedTime: now,
+		Path:               path,
+		Generation:         generation,
+		Version:            version,
+		Operations:         enqueueIntentOperations(operations),
+		CancelOperationIDs: uniqueSortedStrings(copyStringSlice(cancelOperationIDs)),
+		CreatedTime:        now,
+		UpdatedTime:        now,
 	}
 }
 
@@ -987,6 +999,9 @@ func enqueueIntentOperations(operations []outboxRecord) []enqueueIntentOperation
 			AssociationID:  operation.AssociationID,
 			ObjectID:       operation.ObjectID,
 			DestinationRef: operation.DestinationRef,
+			NotBefore:      operation.NotBefore,
+			IdempotencyKey: operation.IdempotencyKey,
+			Trigger:        operation.Trigger,
 		})
 	}
 	return intentOperations
