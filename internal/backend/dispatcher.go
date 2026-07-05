@@ -21,6 +21,7 @@ const (
 	retryBaseDelay                    = 30 * time.Second
 	retryMaxDelay                     = 5 * time.Minute
 	outboxClaimLease                  = 5 * time.Minute
+	providerMutationTimeout           = 2 * time.Minute
 	driftRepairWarningThreshold       = 3
 	defaultPeriodicMaxOperations      = 100
 	defaultPeriodicRecoveryMaxIntents = 100
@@ -303,6 +304,9 @@ func (b *secretSyncBackend) processUpsert(
 		}
 		return err
 	}
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		return ctxErr
+	}
 	b.recordProviderRequest(
 		ctx,
 		upsertContext.provider.Type(),
@@ -467,6 +471,9 @@ func (b *secretSyncBackend) processDelete(
 		}
 		return err
 	}
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		return ctxErr
+	}
 	b.recordProviderRequest(
 		ctx,
 		deleteContext.provider.Type(),
@@ -538,11 +545,14 @@ func (b *secretSyncBackend) providerUpsert(
 	resolvedName string,
 	preparedPayload payloadpkg.CanonicalPayload,
 ) (*providers.SyncResult, error) {
-	runtime, err := b.destinationRuntime(ctx, ctxData.provider, *ctxData.destination, destinationConfig)
+	mutationCtx, cancel := providerMutationContext(ctx)
+	defer cancel()
+
+	runtime, err := b.destinationRuntime(mutationCtx, ctxData.provider, *ctxData.destination, destinationConfig)
 	if err != nil {
 		return nil, err
 	}
-	return runtime.Upsert(ctx, providers.UpsertRequest{
+	return runtime.Upsert(mutationCtx, providers.UpsertRequest{
 		Runtime:        runtimeIdentity,
 		ResolvedName:   resolvedName,
 		Format:         preparedPayload.Format,
@@ -565,11 +575,14 @@ func (b *secretSyncBackend) providerDelete(
 	record outboxRecord,
 	resolvedName string,
 ) (*providers.SyncResult, error) {
-	runtime, err := b.destinationRuntime(ctx, ctxData.provider, *ctxData.destination, destinationConfig)
+	mutationCtx, cancel := providerMutationContext(ctx)
+	defer cancel()
+
+	runtime, err := b.destinationRuntime(mutationCtx, ctxData.provider, *ctxData.destination, destinationConfig)
 	if err != nil {
 		return nil, err
 	}
-	return runtime.Delete(ctx, providers.DeleteRequest{
+	return runtime.Delete(mutationCtx, providers.DeleteRequest{
 		Runtime:        runtimeIdentity,
 		ResolvedName:   resolvedName,
 		IdempotencyKey: record.IdempotencyKey,
@@ -873,6 +886,9 @@ func providerErrorClass(err error) providers.ErrorClass {
 	if errors.As(err, &providerError) && providerError.Class != "" {
 		return providerError.Class
 	}
+	if errorClass, ok := providers.ClassifyTransportError(err); ok {
+		return errorClass
+	}
 	return providers.ErrorClassInternal
 }
 
@@ -883,10 +899,11 @@ func isDispatchContextCanceled(ctx context.Context, err error) bool {
 	if ctx.Err() != nil {
 		return true
 	}
-	if errors.Is(err, context.Canceled) {
-		return true
-	}
-	return errors.Is(err, context.DeadlineExceeded)
+	return errors.Is(err, context.Canceled)
+}
+
+func providerMutationContext(ctx context.Context) (context.Context, context.CancelFunc) {
+	return context.WithTimeout(ctx, providerMutationTimeout)
 }
 
 type operationFailure struct {
