@@ -216,7 +216,7 @@ func TestQueueDrainProcessesDueOperations(t *testing.T) {
 	assertStatusObjectState(t, env.b, env.storage, domain.SyncStateSynced)
 }
 
-func TestQueueDrainSkipsUnexpiredClaim(t *testing.T) {
+func TestQueueDrainSkipsUnexpiredCurrentOwnerClaim(t *testing.T) {
 	env := newBackendTestEnv(t)
 
 	env.writeAppDBSecret("initial")
@@ -227,7 +227,11 @@ func TestQueueDrainSkipsUnexpiredClaim(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read outbox operation: %v", err)
 	}
-	operation.ClaimOwner = "worker-other"
+	claimOwner, err := env.b.outboxClaimOwner(context.Background(), env.storage)
+	if err != nil {
+		t.Fatalf("claim owner: %v", err)
+	}
+	operation.ClaimOwner = claimOwner
 	operation.ClaimExpiresTime = nowUTC().Add(time.Hour).Format(timeFormatRFC3339)
 	operation.ClaimAttempt = 1
 	if err := putOutbox(context.Background(), env.storage, *operation); err != nil {
@@ -242,14 +246,43 @@ func TestQueueDrainSkipsUnexpiredClaim(t *testing.T) {
 	assertResponseValue(t, drainResp, "processed", 0)
 	assertResponseValue(t, drainResp, "queue_claimed", 1)
 	operation = assertOutboxOperation(t, env.storage, operationID, 1, outboxStatePending)
-	if operation.ClaimOwner != "worker-other" {
-		t.Fatalf("claim_owner = %q, want worker-other", operation.ClaimOwner)
+	if operation.ClaimOwner != claimOwner {
+		t.Fatalf("claim_owner = %q, want %s", operation.ClaimOwner, claimOwner)
 	}
 
 	cancelResp := env.update("queue/" + operationID + "/cancel")
 	if cancelResp == nil || !cancelResp.IsError() {
 		t.Fatalf("cancel claimed operation response = %#v, want error", cancelResp)
 	}
+}
+
+func TestQueueDrainResetsOtherOwnerClaim(t *testing.T) {
+	env := newBackendTestEnv(t)
+
+	env.writeAppDBSecret("initial")
+	env.createFakeDestination("default")
+	associationResp := env.createDefaultFakeAssociation()
+	operationID := operationIDsFromResponse(t, associationResp)[0]
+	operation, err := getOutbox(context.Background(), env.storage, operationID)
+	if err != nil {
+		t.Fatalf("read outbox operation: %v", err)
+	}
+	operation.ClaimOwner = "inst-old/worker-old"
+	operation.ClaimExpiresTime = nowUTC().Add(time.Hour).Format(timeFormatRFC3339)
+	operation.ClaimAttempt = 1
+	if err := putOutbox(context.Background(), env.storage, *operation); err != nil {
+		t.Fatalf("write claimed outbox operation: %v", err)
+	}
+
+	env.acknowledgeRestoreGuard()
+	drainResp := env.update("queue/drain", map[string]interface{}{
+		"max_operations": 1,
+	})
+	assertNoErrorResponse(t, drainResp)
+	assertResponseValue(t, drainResp, "processed", 1)
+	assertResponseValue(t, drainResp, "queue_claimed", 0)
+	assertOutboxMissing(t, env.storage, operationID)
+	assertStatusObjectState(t, env.b, env.storage, domain.SyncStateSynced)
 }
 
 func TestQueueOperationRetryRejectsClaimedOperation(t *testing.T) {

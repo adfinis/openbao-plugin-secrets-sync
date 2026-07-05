@@ -36,6 +36,9 @@ func (b *secretSyncBackend) processDueOutboxLimit(
 	if err != nil {
 		return 0, err
 	}
+	if err := b.resetOutboxClaimsForOtherOwners(ctx, storage, claimOwner, now); err != nil {
+		return 0, err
+	}
 	ids, err := listDueOutboxIDs(ctx, storage, now)
 	if err != nil {
 		return 0, err
@@ -140,6 +143,39 @@ func clearOutboxClaim(record *outboxRecord) {
 	record.ClaimOwner = ""
 	record.ClaimExpiresTime = ""
 	record.ClaimAttempt = 0
+}
+
+func (b *secretSyncBackend) resetOutboxClaimsForOtherOwners(
+	ctx context.Context,
+	storage logical.Storage,
+	claimOwner string,
+	now time.Time,
+) error {
+	b.enqueueMu.Lock()
+	defer b.enqueueMu.Unlock()
+
+	ids, err := listQueuedOutboxIDs(ctx, storage)
+	if err != nil {
+		return err
+	}
+	nowString := now.Format(timeFormatRFC3339)
+	for _, id := range ids {
+		record, err := getOutbox(ctx, storage, id)
+		if err != nil {
+			return err
+		}
+		if record == nil ||
+			record.ClaimOwner == "" ||
+			record.ClaimOwner == claimOwner {
+			continue
+		}
+		clearOutboxClaim(record)
+		record.UpdatedTime = nowString
+		if err := putOutbox(ctx, storage, *record); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func isSupportedOperation(record outboxRecord) bool {
