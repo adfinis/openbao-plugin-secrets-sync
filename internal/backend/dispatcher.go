@@ -107,7 +107,7 @@ func claimOutboxRecord(
 	claimExpires := now.Add(outboxClaimLease).Format(timeFormatRFC3339)
 	record.ClaimOwner = owner
 	record.ClaimExpiresTime = claimExpires
-	record.ClaimAttempt = record.Attempts + 1
+	record.ClaimAttempt++
 	record.UpdatedTime = now.Format(timeFormatRFC3339)
 	if err := putOutbox(ctx, storage, record); err != nil {
 		return nil, false, err
@@ -184,25 +184,22 @@ func (b *secretSyncBackend) processUpsert(
 		return err
 	}
 	if stale {
-		return cancelOutboxOperation(ctx, storage, record)
+		return b.cancelClaimedOutboxOperation(ctx, storage, record)
 	}
 	upsertContext, failure, err := b.loadUpsertContext(ctx, storage, record)
 	if err != nil {
 		return err
 	}
 	if failure != nil {
-		b.recordOperationFailure(ctx, record, failure.class)
-		return markOperationFailed(ctx, storage, record, *failure, now)
+		return b.markClaimedOperationFailed(ctx, storage, record, *failure, now)
 	}
 	preparedPayload, failure := prepareProviderPayload(upsertContext, record.ObjectID)
 	if failure != nil {
-		b.recordOperationFailure(ctx, record, failure.class)
-		return markOperationFailed(ctx, storage, record, *failure, now)
+		return b.markClaimedOperationFailed(ctx, storage, record, *failure, now)
 	}
 	resolvedName, failure := resolvedNameForOperation(upsertContext.association, record.ObjectID)
 	if failure != nil {
-		b.recordOperationFailure(ctx, record, failure.class)
-		return markOperationFailed(ctx, storage, record, *failure, now)
+		return b.markClaimedOperationFailed(ctx, storage, record, *failure, now)
 	}
 	if err := validateDestinationPolicyForObject(
 		*upsertContext.destination,
@@ -216,8 +213,7 @@ func (b *secretSyncBackend) processUpsert(
 			resolvedName:  resolvedName,
 			payloadSHA256: preparedPayload.SHA256,
 		}
-		b.recordOperationFailure(ctx, record, failure.class)
-		return markOperationFailed(ctx, storage, record, failure, now)
+		return b.markClaimedOperationFailed(ctx, storage, record, failure, now)
 	}
 
 	resolvedDestinationConfig, err := destinationConfig(ctx, storage, *upsertContext.destination)
@@ -253,8 +249,7 @@ func (b *secretSyncBackend) processUpsert(
 	)
 	if err != nil {
 		errorClass := providerErrorClass(err)
-		b.recordOperationFailure(ctx, record, errorClass)
-		return markOperationFailed(ctx, storage, record, operationFailure{
+		return b.markClaimedOperationFailed(ctx, storage, record, operationFailure{
 			class:         errorClass,
 			message:       "provider upsert failed",
 			resolvedName:  resolvedName,
@@ -265,16 +260,7 @@ func (b *secretSyncBackend) processUpsert(
 		result = &providers.SyncResult{}
 	}
 
-	record.Attempts++
-	record.UpdatedTime = now.Format(timeFormatRFC3339)
-	clearOutboxClaim(&record)
-	b.recordOperationSuccess(ctx, record)
-	status, err := markUpsertSuccessStatus(ctx, storage, record, resolvedName, preparedPayload, result, now)
-	if err != nil {
-		return err
-	}
-	b.warnIfDriftRepairThresholdExceeded(record, status)
-	return deleteOutbox(ctx, storage, record)
+	return b.commitClaimedUpsertSuccess(ctx, storage, record, resolvedName, preparedPayload, result, now)
 }
 
 func markUpsertSuccessStatus(
@@ -317,6 +303,39 @@ func markUpsertSuccessStatus(
 	return &status, nil
 }
 
+func (b *secretSyncBackend) commitClaimedUpsertSuccess(
+	ctx context.Context,
+	storage logical.Storage,
+	record outboxRecord,
+	resolvedName string,
+	preparedPayload payloadpkg.CanonicalPayload,
+	result *providers.SyncResult,
+	now time.Time,
+) error {
+	claimed := record
+	record.Attempts++
+	record.UpdatedTime = now.Format(timeFormatRFC3339)
+	clearOutboxClaim(&record)
+	var status *statusRecord
+	committed, err := b.commitIfOutboxClaimHeld(ctx, storage, claimed, func() error {
+		var err error
+		status, err = markUpsertSuccessStatus(ctx, storage, record, resolvedName, preparedPayload, result, now)
+		if err != nil {
+			return err
+		}
+		return deleteOutbox(ctx, storage, record)
+	})
+	if err != nil {
+		return err
+	}
+	if !committed {
+		return nil
+	}
+	b.recordOperationSuccess(ctx, record)
+	b.warnIfDriftRepairThresholdExceeded(record, status)
+	return nil
+}
+
 func (b *secretSyncBackend) warnIfDriftRepairThresholdExceeded(record outboxRecord, status *statusRecord) {
 	if outboxTrigger(record) != outboxTriggerDriftRepair ||
 		status == nil ||
@@ -343,13 +362,11 @@ func (b *secretSyncBackend) processDelete(
 		return err
 	}
 	if failure != nil {
-		b.recordOperationFailure(ctx, record, failure.class)
-		return markOperationFailed(ctx, storage, record, *failure, now)
+		return b.markClaimedOperationFailed(ctx, storage, record, *failure, now)
 	}
 	resolvedName, failure := resolvedNameForOperation(deleteContext.association, record.ObjectID)
 	if failure != nil {
-		b.recordOperationFailure(ctx, record, failure.class)
-		return markOperationFailed(ctx, storage, record, *failure, now)
+		return b.markClaimedOperationFailed(ctx, storage, record, *failure, now)
 	}
 	if err := validateDestinationPolicyForObject(
 		*deleteContext.destination,
@@ -362,8 +379,7 @@ func (b *secretSyncBackend) processDelete(
 			message:      err.Error(),
 			resolvedName: resolvedName,
 		}
-		b.recordOperationFailure(ctx, record, failure.class)
-		return markOperationFailed(ctx, storage, record, failure, now)
+		return b.markClaimedOperationFailed(ctx, storage, record, failure, now)
 	}
 	resolvedDestinationConfig, err := destinationConfig(ctx, storage, *deleteContext.destination)
 	if err != nil {
@@ -397,8 +413,7 @@ func (b *secretSyncBackend) processDelete(
 	)
 	if err != nil {
 		errorClass := providerErrorClass(err)
-		b.recordOperationFailure(ctx, record, errorClass)
-		return markOperationFailed(ctx, storage, record, operationFailure{
+		return b.markClaimedOperationFailed(ctx, storage, record, operationFailure{
 			class:        errorClass,
 			message:      "provider delete failed",
 			resolvedName: resolvedName,
@@ -408,26 +423,47 @@ func (b *secretSyncBackend) processDelete(
 		result = &providers.SyncResult{}
 	}
 
+	return b.commitClaimedDeleteSuccess(ctx, storage, record, resolvedName, result, now)
+}
+
+func (b *secretSyncBackend) commitClaimedDeleteSuccess(
+	ctx context.Context,
+	storage logical.Storage,
+	record outboxRecord,
+	resolvedName string,
+	result *providers.SyncResult,
+	now time.Time,
+) error {
+	claimed := record
 	record.Attempts++
 	record.UpdatedTime = now.Format(timeFormatRFC3339)
 	clearOutboxClaim(&record)
-	b.recordOperationSuccess(ctx, record)
-	if err := putStatus(ctx, storage, statusRecord{
-		Path:            record.Path,
-		Version:         record.Version,
-		AssociationID:   record.AssociationID,
-		ObjectID:        record.ObjectID,
-		DestinationRef:  record.DestinationRef,
-		ResolvedName:    resolvedName,
-		State:           string(domain.SyncStateRemoteMissing),
-		RemoteVersion:   result.RemoteVersion,
-		LastOperationID: record.ID,
-		LastSuccessTime: now.Format(timeFormatRFC3339),
-		UpdatedTime:     now.Format(timeFormatRFC3339),
-	}); err != nil {
+	committed, err := b.commitIfOutboxClaimHeld(ctx, storage, claimed, func() error {
+		if err := putStatus(ctx, storage, statusRecord{
+			Path:            record.Path,
+			Version:         record.Version,
+			AssociationID:   record.AssociationID,
+			ObjectID:        record.ObjectID,
+			DestinationRef:  record.DestinationRef,
+			ResolvedName:    resolvedName,
+			State:           string(domain.SyncStateRemoteMissing),
+			RemoteVersion:   result.RemoteVersion,
+			LastOperationID: record.ID,
+			LastSuccessTime: now.Format(timeFormatRFC3339),
+			UpdatedTime:     now.Format(timeFormatRFC3339),
+		}); err != nil {
+			return err
+		}
+		return deleteOutbox(ctx, storage, record)
+	})
+	if err != nil {
 		return err
 	}
-	return deleteOutbox(ctx, storage, record)
+	if !committed {
+		return nil
+	}
+	b.recordOperationSuccess(ctx, record)
+	return nil
 }
 
 func (b *secretSyncBackend) providerUpsert(
@@ -839,6 +875,29 @@ func markOperationFailed(
 	})
 }
 
+func (b *secretSyncBackend) markClaimedOperationFailed(
+	ctx context.Context,
+	storage logical.Storage,
+	record outboxRecord,
+	failure operationFailure,
+	now time.Time,
+) error {
+	errorClass := failure.class
+	if errorClass == "" {
+		errorClass = providers.ErrorClassInternal
+	}
+	committed, err := b.commitIfOutboxClaimHeld(ctx, storage, record, func() error {
+		return markOperationFailed(ctx, storage, record, failure, now)
+	})
+	if err != nil {
+		return err
+	}
+	if committed {
+		b.recordOperationFailure(ctx, record, errorClass)
+	}
+	return nil
+}
+
 func staleUpsertForCurrentVersion(ctx context.Context, storage logical.Storage, record outboxRecord) (bool, error) {
 	if record.Type != outbox.OperationTypeUpsert {
 		return false, nil
@@ -850,8 +909,44 @@ func staleUpsertForCurrentVersion(ctx context.Context, storage logical.Storage, 
 	return metadata != nil && metadata.CurrentVersion > record.Version, nil
 }
 
-func cancelOutboxOperation(ctx context.Context, storage logical.Storage, record outboxRecord) error {
-	return deleteOutbox(ctx, storage, record)
+func (b *secretSyncBackend) cancelClaimedOutboxOperation(
+	ctx context.Context,
+	storage logical.Storage,
+	record outboxRecord,
+) error {
+	_, err := b.commitIfOutboxClaimHeld(ctx, storage, record, func() error {
+		return deleteOutbox(ctx, storage, record)
+	})
+	return err
+}
+
+func (b *secretSyncBackend) commitIfOutboxClaimHeld(
+	ctx context.Context,
+	storage logical.Storage,
+	record outboxRecord,
+	commit func() error,
+) (bool, error) {
+	b.enqueueMu.Lock()
+	defer b.enqueueMu.Unlock()
+
+	current, err := getOutbox(ctx, storage, record.ID)
+	if err != nil {
+		return false, err
+	}
+	if !outboxClaimMatches(current, record) {
+		return false, nil
+	}
+	if err := commit(); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+func outboxClaimMatches(current *outboxRecord, claimed outboxRecord) bool {
+	return current != nil &&
+		claimed.ClaimOwner != "" &&
+		current.ClaimOwner == claimed.ClaimOwner &&
+		current.ClaimAttempt == claimed.ClaimAttempt
 }
 
 func syncStateForFailureClass(errorClass providers.ErrorClass) domain.SyncState {
