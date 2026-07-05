@@ -172,6 +172,12 @@ func TestRunExercisesHarnessContracts(t *testing.T) {
 				},
 			},
 		},
+		Idempotency: &IdempotencyCase{
+			Name:                 "same-request",
+			UpsertRequest:        contractUpsertRequest("idempotent", 1),
+			DeleteRequest:        contractDeleteRequest("idempotent", 1),
+			ExpectMutationResult: true,
+		},
 		UpsertSuccess: &UpsertCase{
 			Request:       contractUpsertRequest("success", 1),
 			RemoteVersion: "upserted",

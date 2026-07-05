@@ -88,6 +88,12 @@ func TestProviderConformance(t *testing.T) {
 			RemoteVersion:  "current-version",
 		},
 		Maturity: awsMaturityMatrix(),
+		Idempotency: &providertest.IdempotencyCase{
+			Name:                 "same-request",
+			UpsertRequest:        defaultUpsertRequest(),
+			DeleteRequest:        defaultDeleteRequest(),
+			ExpectMutationResult: true,
+		},
 	})
 }
 

@@ -107,6 +107,24 @@ func TestProviderConformance(t *testing.T) {
 			},
 		},
 		Maturity: gitlabMaturityMatrix(),
+		Idempotency: &providertest.IdempotencyCase{
+			Name:          "same-request",
+			UpsertRequest: defaultUpsertRequest(testPayloadSHAOld, []byte("old"), 1),
+			StateAfterUpsert: &providertest.ReadStateCase{
+				Request:        defaultReadStateRequest(testPayloadSHAOld, 1),
+				Exists:         true,
+				OwnershipKnown: true,
+				Owned:          true,
+				PayloadSHA256:  testPayloadSHAOld,
+				SourceVersion:  1,
+				RemoteVersion:  testPayloadSHAOld,
+			},
+			DeleteRequest: defaultDeleteRequest(1),
+			StateAfterDelete: &providertest.ReadStateCase{
+				Request: defaultReadStateRequest(testPayloadSHAOld, 1),
+			},
+			ExpectMutationResult: true,
+		},
 	})
 }
 
