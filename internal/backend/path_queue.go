@@ -157,7 +157,7 @@ func (b *secretSyncBackend) pathQueueDrain(
 		maxOperations = defaultDrainMaxOperations
 	}
 	now := nowUTC()
-	if err := recoverIncompleteEnqueueIntents(ctx, req.Storage, now); err != nil {
+	if err := b.recoverIncompleteEnqueueIntents(ctx, req.Storage, now); err != nil {
 		return nil, err
 	}
 	processed, err := b.processDueOutboxLimit(ctx, req.Storage, now, maxOperations)

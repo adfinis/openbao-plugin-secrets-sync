@@ -35,6 +35,7 @@ func TestPeriodicRecoversIncompleteEnqueueIntent(t *testing.T) {
 		sourceGeneration(t, env.storage),
 		2,
 		[]outboxRecord{*operation},
+		nil,
 		operation.CreatedTime,
 	)
 	if err := putEnqueueIntent(context.Background(), env.storage, intent); err != nil {
@@ -77,6 +78,7 @@ func TestRecoveryRestoresDeleteIntentAfterSourceDelete(t *testing.T) {
 		sourceGeneration(t, env.storage),
 		1,
 		[]outboxRecord{*operation},
+		nil,
 		operation.CreatedTime,
 	)
 	if err := putEnqueueIntent(context.Background(), env.storage, intent); err != nil {
@@ -99,6 +101,7 @@ func TestRecoveryCompletesIntentWithoutCommittedVersion(t *testing.T) {
 	env.createFakeDestination("default")
 	associationResp := env.createDefaultFakeAssociation()
 	associationID := associationIDFromResponse(t, associationResp)
+	staleOperationID := operationIDsFromResponse(t, associationResp)[0]
 	association, err := getAssociation(context.Background(), env.storage, "app/db", associationID)
 	if err != nil {
 		t.Fatalf("read association: %v", err)
@@ -106,7 +109,7 @@ func TestRecoveryCompletesIntentWithoutCommittedVersion(t *testing.T) {
 	now := nowUTC().Format(timeFormatRFC3339)
 	generation := sourceGeneration(t, env.storage)
 	operation := newAssociationOutboxRecord(*association, generation, 99, syncObjectIDSecretPath, now)
-	intent := newEnqueueIntentRecord("app/db", generation, 99, []outboxRecord{operation}, now)
+	intent := newEnqueueIntentRecord("app/db", generation, 99, []outboxRecord{operation}, []string{staleOperationID}, now)
 	if err := putEnqueueIntent(context.Background(), env.storage, intent); err != nil {
 		t.Fatalf("write enqueue intent: %v", err)
 	}
@@ -128,12 +131,64 @@ func TestRecoveryCompletesIntentWithoutCommittedVersion(t *testing.T) {
 	if recoveredOperation != nil {
 		t.Fatalf("recovered operation = %#v, want nil without committed version", recoveredOperation)
 	}
+	assertOutboxOperation(t, env.storage, staleOperationID, 1, outboxStatePending)
+	metadata, err := getMetadata(context.Background(), env.storage, "app/db")
+	if err != nil {
+		t.Fatalf("read metadata: %v", err)
+	}
+	if got := metadata.CurrentVersion; got != 1 {
+		t.Fatalf("metadata current version = %d, want 1", got)
+	}
+}
+
+func TestRecoveryCompletesCommittedVersionIntent(t *testing.T) {
+	env := newBackendTestEnv(t)
+
+	env.writeAppDBSecret("initial")
+	env.createFakeDestination("default")
+	associationResp := env.createDefaultFakeAssociation()
+	associationID := associationIDFromResponse(t, associationResp)
+	staleOperationID := operationIDsFromResponse(t, associationResp)[0]
+	association, err := getAssociation(context.Background(), env.storage, "app/db", associationID)
+	if err != nil {
+		t.Fatalf("read association: %v", err)
+	}
+	now := nowUTC().Format(timeFormatRFC3339)
+	generation := sourceGeneration(t, env.storage)
+	if err := putSourceVersionRecord(
+		context.Background(),
+		env.storage,
+		"app/db",
+		2,
+		secretPayload{"password": "rotated"},
+		now,
+	); err != nil {
+		t.Fatalf("write committed source version: %v", err)
+	}
+	operation := newAssociationOutboxRecord(*association, generation, 2, syncObjectIDSecretPath, now)
+	intent := newEnqueueIntentRecord("app/db", generation, 2, []outboxRecord{operation}, []string{staleOperationID}, now)
+	if err := putEnqueueIntent(context.Background(), env.storage, intent); err != nil {
+		t.Fatalf("write enqueue intent: %v", err)
+	}
+
+	if err := recoverIncompleteEnqueueIntents(context.Background(), env.storage, nowUTC()); err != nil {
+		t.Fatalf("recover incomplete enqueue intents: %v", err)
+	}
+	assertOutboxMissing(t, env.storage, staleOperationID)
+	assertOutboxOperation(t, env.storage, operation.ID, 2, outboxStatePending)
+	metadata, err := getMetadata(context.Background(), env.storage, "app/db")
+	if err != nil {
+		t.Fatalf("read metadata: %v", err)
+	}
+	if got := metadata.CurrentVersion; got != 2 {
+		t.Fatalf("metadata current version = %d, want 2", got)
+	}
 }
 
 func TestRecoveryPrunesCompletedEnqueueIntent(t *testing.T) {
 	storage := &logical.InmemStorage{}
 	now := nowUTC().Format(timeFormatRFC3339)
-	intent := newEnqueueIntentRecord("app/db", "gen-test", 1, nil, now)
+	intent := newEnqueueIntentRecord("app/db", "gen-test", 1, nil, nil, now)
 	intent.Complete = true
 	intent.CompletedTime = now
 	if err := putEnqueueIntent(context.Background(), storage, intent); err != nil {
@@ -156,7 +211,7 @@ func TestPeriodicLimitsRecoveredEnqueueIntents(t *testing.T) {
 	env := newBackendTestEnv(t)
 	now := nowUTC().Format(timeFormatRFC3339)
 	for index := 0; index < defaultPeriodicRecoveryMaxIntents+1; index++ {
-		intent := newEnqueueIntentRecord(fmt.Sprintf("app/db-%03d", index), "gen-test", 1, nil, now)
+		intent := newEnqueueIntentRecord(fmt.Sprintf("app/db-%03d", index), "gen-test", 1, nil, nil, now)
 		intent.Complete = true
 		intent.CompletedTime = now
 		if err := putEnqueueIntent(context.Background(), env.storage, intent); err != nil {

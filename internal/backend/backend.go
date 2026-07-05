@@ -162,7 +162,7 @@ func (b *secretSyncBackend) periodic(ctx context.Context, req *logical.Request) 
 		return nil
 	}
 	now := nowUTC()
-	if err := recoverIncompleteEnqueueIntentsLimit(
+	if err := b.recoverIncompleteEnqueueIntentsLimit(
 		ctx,
 		req.Storage,
 		now,
