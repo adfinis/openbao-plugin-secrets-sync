@@ -142,17 +142,11 @@ func outboxRecordsFromIntentOperations(
 			ObjectID:       operation.ObjectID,
 			DestinationRef: operation.DestinationRef,
 			State:          outboxStatePending,
-			NotBefore:      now,
+			NotBefore:      operation.NotBefore,
 			CreatedTime:    intent.CreatedTime,
 			UpdatedTime:    now,
-			IdempotencyKey: operationIdempotencyKey(
-				intent.Generation,
-				intent.Path,
-				intent.Version,
-				operation.AssociationID,
-				operation.ObjectID,
-				operation.Type,
-			),
+			IdempotencyKey: operation.IdempotencyKey,
+			Trigger:        operation.Trigger,
 		})
 	}
 	return records, nil

@@ -189,6 +189,9 @@ type enqueueIntentOperation struct {
 	AssociationID  string               `json:"association_id"`
 	ObjectID       string               `json:"object_id"`
 	DestinationRef string               `json:"destination_ref"`
+	NotBefore      string               `json:"not_before"`
+	IdempotencyKey string               `json:"idempotency_key"`
+	Trigger        string               `json:"trigger,omitempty"`
 }
 
 type outboxRecord struct {

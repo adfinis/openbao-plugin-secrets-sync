@@ -999,6 +999,9 @@ func enqueueIntentOperations(operations []outboxRecord) []enqueueIntentOperation
 			AssociationID:  operation.AssociationID,
 			ObjectID:       operation.ObjectID,
 			DestinationRef: operation.DestinationRef,
+			NotBefore:      operation.NotBefore,
+			IdempotencyKey: operation.IdempotencyKey,
+			Trigger:        operation.Trigger,
 		})
 	}
 	return intentOperations
