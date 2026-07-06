@@ -75,6 +75,27 @@ Pre-release schema policy:
 - the first schema bump must add explicit migration or compatibility handling,
   tests, and release notes before the schema version is increased.
 
+## Tolerant Reads and Orphans
+
+Primary records are authoritative. Secondary indexes are redundant lookup aids
+and must be dereferenced through the primary record before they affect source,
+queue, association, destination, or remote mutation behavior.
+
+Crash recovery only replays pending `enqueue_intent/<path>/<version>` records.
+It does not run a general storage compaction pass. Interrupted writes can leave
+orphaned source version records, stale outbox index entries, stale association
+destination indexes, or stale association name reservations. Readers must
+tolerate those records by ignoring index entries whose primary record is
+missing or no longer matches the indexed destination, reservation, state, path,
+or due-time candidate.
+
+This means stale derived records can accumulate until source deletion, targeted
+maintenance, or a future bounded compaction feature removes them. They must not
+authorize dispatch, block destination deletion, or reserve a remote object name
+without a live matching primary record. Any future compaction must preserve
+version records referenced by pending enqueue intents, outbox records, or
+status diagnostics.
+
 ## Runtime Identity
 
 `identity/plugin-instance` is generated once per mount. Provider requests carry

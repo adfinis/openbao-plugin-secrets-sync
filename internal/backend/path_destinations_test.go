@@ -172,6 +172,27 @@ func TestDestinationLifecycle(t *testing.T) {
 	}
 }
 
+func TestDestinationDeleteIgnoresDanglingAssociationIndex(t *testing.T) {
+	env := newBackendTestEnv(t)
+
+	env.createFakeDestination("primary")
+	putStorageJSON(
+		t,
+		env.storage,
+		associationByDestinationStorageKey("fake", "primary", "assoc-missing"),
+		"app/missing",
+	)
+
+	deleteResp := env.delete("destinations/fake/primary")
+	if deleteResp != nil && deleteResp.IsError() {
+		t.Fatalf("unexpected destination delete error: %v", deleteResp.Error())
+	}
+	readDeletedResp := env.read("destinations/fake/primary")
+	if readDeletedResp != nil {
+		t.Fatalf("deleted destination response = %#v, want nil", readDeletedResp)
+	}
+}
+
 func TestDestinationListPagination(t *testing.T) {
 	env := newBackendTestEnv(t)
 
