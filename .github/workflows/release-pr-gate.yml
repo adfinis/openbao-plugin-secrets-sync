@@ -47,15 +47,15 @@ jobs:
             exit 0
           fi
 
-          if [[ -z "${REQUIRED_APPROVER}" ]]; then
-            echo "OPENBAO_SECRET_SYNC_RELEASE_REQUIRED_APPROVER repository variable is required for release PR gating." >&2
-            exit 1
-          fi
-
           files="$(gh api "repos/${REPO}/pulls/${PR_NUMBER}/files" --paginate --jq '.[].filename')"
           if ! (echo "${files}" | grep -qx "CHANGELOG.md" && echo "${files}" | grep -qx ".release-please-manifest.json"); then
             echo "Not a release PR (missing CHANGELOG.md and/or .release-please-manifest.json); skipping gate."
             exit 0
+          fi
+
+          if [[ -z "${REQUIRED_APPROVER}" ]]; then
+            echo "OPENBAO_SECRET_SYNC_RELEASE_REQUIRED_APPROVER repository variable is required for release PR gating." >&2
+            exit 1
           fi
 
           labels="$(gh api "repos/${REPO}/issues/${PR_NUMBER}/labels" --paginate --jq '.[].name')"

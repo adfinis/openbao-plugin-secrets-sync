@@ -8,6 +8,7 @@ BASE_BRANCH="${BASE_BRANCH:-main}"
 MANIFEST_FILE="${MANIFEST_FILE:-.release-please-manifest.json}"
 RELEASE_NOTES_DIR="${RELEASE_NOTES_DIR:-release-notes}"
 DRY_RUN="${DRY_RUN:-0}"
+BEFORE_SHA="${BEFORE_SHA:-}"
 
 GH_READ_TOKEN="${GH_READ_TOKEN:-${GH_TOKEN:-}}"
 GH_WRITE_TOKEN="${GH_WRITE_TOKEN:-${GH_TOKEN:-}}"
@@ -28,6 +29,34 @@ require_file() {
     echo "required file not found: ${path}" >&2
     exit 1
   fi
+}
+
+write_output() {
+  local name="$1"
+  local value="$2"
+
+  if [[ -n "${GITHUB_OUTPUT:-}" ]]; then
+    printf '%s=%s\n' "${name}" "${value}" >> "${GITHUB_OUTPUT}"
+  fi
+}
+
+changed_files_for_push() {
+  if [[ -n "${BEFORE_SHA}" &&
+    "${BEFORE_SHA}" != "0000000000000000000000000000000000000000" ]] &&
+    git rev-parse -q --verify "${BEFORE_SHA}^{commit}" >/dev/null; then
+    git diff --name-only "${BEFORE_SHA}" HEAD
+    return
+  fi
+
+  git show --name-only --format= HEAD
+}
+
+is_release_pr_file_update() {
+  local files
+
+  files="$(changed_files_for_push)"
+  grep -qx "CHANGELOG.md" <<<"${files}" &&
+    grep -qx "${MANIFEST_FILE}" <<<"${files}"
 }
 
 sanitize_release_notes() {
@@ -133,6 +162,8 @@ if ! [[ "${version}" =~ ^[0-9]+\.[0-9]+\.[0-9]+([\-+].*)?$ ]]; then
   echo "release-please manifest version must be semver, got ${version}" >&2
   exit 1
 fi
+write_output "version" "${version}"
+write_output "release_ready" "false"
 
 release_pr_title="chore(${BASE_BRANCH}): release ${version}"
 pr_candidates="$(
@@ -147,6 +178,11 @@ pr_candidates="$(
 match_count="$(
   jq -r --arg title "${release_pr_title}" '[.[] | select(.title == $title)] | length' <<<"${pr_candidates}"
 )"
+
+if [[ "${match_count}" == "0" ]] && ! is_release_pr_file_update; then
+  echo "No merged release PR titled '${release_pr_title}' found; skipping non-release metadata update."
+  exit 0
+fi
 
 if [[ "${match_count}" != "1" ]]; then
   echo "expected exactly one merged release PR titled '${release_pr_title}', found ${match_count}" >&2
@@ -243,6 +279,7 @@ fi
 if [[ "${release_exists}" == "false" ]]; then
   if [[ "${DRY_RUN}" == "1" ]]; then
     echo "[dry-run] would create draft release ${version} from merged PR #${release_pr_number}"
+    write_output "release_ready" "true"
     exit 0
   fi
 
@@ -258,6 +295,7 @@ if [[ "${release_exists}" == "false" ]]; then
     release_args+=(--prerelease)
   fi
   gh_write "${release_args[@]}"
+  write_output "release_ready" "true"
   exit 0
 fi
 
@@ -275,6 +313,7 @@ if [[ "${release_is_draft}" != "true" ]]; then
     exit 1
   fi
   echo "release ${version} already exists and is published; leaving it unchanged" >&2
+  write_output "release_ready" "true"
   exit 0
 fi
 
@@ -285,6 +324,7 @@ fi
 
 if [[ "${DRY_RUN}" == "1" ]]; then
   echo "[dry-run] would refresh draft release ${version} from merged PR #${release_pr_number}"
+  write_output "release_ready" "true"
   exit 0
 fi
 
@@ -302,3 +342,4 @@ if [[ "${is_prerelease}" == "true" ]]; then
 fi
 
 gh_write "${edit_args[@]}"
+write_output "release_ready" "true"
