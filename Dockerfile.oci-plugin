@@ -23,7 +23,7 @@ LABEL org.opencontainers.image.revision="${COMMIT}"
 LABEL org.opencontainers.image.created="${BUILD_DATE}"
 LABEL org.opencontainers.image.version="${PLUGIN_VERSION}"
 LABEL org.opencontainers.image.vendor="Adfinis"
-LABEL org.opencontainers.image.licenses="MPL-2.0"
+LABEL org.opencontainers.image.licenses="Apache-2.0"
 
 COPY ${DIST_DIR}/${BINARY_NAME}_${VERSION}_${TARGETOS}_${TARGETARCH} /openbao-plugin-secrets-sync
 

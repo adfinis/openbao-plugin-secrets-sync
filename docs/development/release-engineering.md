@@ -26,6 +26,7 @@ openbao-plugin-secrets-sync_<version>_linux_amd64
 openbao-plugin-secrets-sync_<version>_linux_arm64
 sbom-openbao-plugin-secrets-sync-linux-amd64.spdx.json
 sbom-openbao-plugin-secrets-sync-linux-arm64.spdx.json
+go-licenses-report.csv
 reproducibility-report.md
 checksums.txt
 checksums.txt.bundle
@@ -50,12 +51,14 @@ OpenBao OCI plugin version is used directly as the image tag.
 Build release artifacts locally:
 
 ```sh
+make install-go-tools
 VERSION=0.1.0-preview.1 make release-artifacts
 ```
 
-This creates the Linux plugin binaries, per-binary SPDX JSON SBOMs, and
-`checksums.txt`. Signature bundles and `provenance-index.json` are generated
-after checksum verification during the release workflow.
+This creates the Linux plugin binaries, per-binary SPDX JSON SBOMs, a
+dependency license report, and `checksums.txt`. Signature bundles and
+`provenance-index.json` are generated after checksum verification during the
+release workflow.
 
 Verify checksums:
 
@@ -184,6 +187,7 @@ The workflow:
 - builds release binaries with deterministic build metadata derived from the
   tagged commit;
 - generates per-binary SPDX JSON SBOMs from the compiled Go build metadata;
+- generates a dependency license report for the shipped Go package graph;
 - rebuilds the binaries and SBOMs independently and verifies byte equality;
 - writes a reproducibility report and includes it in `checksums.txt`;
 - generates and verifies `checksums.txt`;
@@ -206,3 +210,22 @@ The workflow:
 - uploads the files to the matching GitHub Release without replacing
   conflicting existing assets;
 - refuses to add missing assets to an already published release.
+
+## License metadata
+
+The plugin source code is licensed under Apache-2.0. Release binaries also link
+OpenBao, HashiCorp-derived, provider, and telemetry modules that retain their
+own licenses, including MPL-2.0 modules. The release workflow verifies the
+configured dependency license allow-list and publishes
+`go-licenses-report.csv` so operators can inspect the package-level license
+evidence that accompanied the release.
+
+The OCI image label `org.opencontainers.image.licenses` records the plugin
+project license as `Apache-2.0`. Dependency license evidence remains in the
+release license report and SBOMs rather than being flattened into the OCI image
+label.
+
+This repository is an external OpenBao plugin released separately from OpenBao
+core, matching OpenBao's documented model for external, community-supported
+plugins:
+<https://openbao.org/community/policies/plugins/>.

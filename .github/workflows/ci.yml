@@ -86,9 +86,6 @@ jobs:
 
       - name: Setup repo tools
         uses: ./.github/actions/setup-repo-tools
-        with:
-          cache-tools: "false"
-          bootstrap-tools: "false"
 
       - name: Run heavy checks
         run: make ci-heavy

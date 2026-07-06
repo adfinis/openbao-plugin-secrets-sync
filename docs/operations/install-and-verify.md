@@ -7,9 +7,9 @@ release automation.
 
 ## Artifact set
 
-Release artifacts include Linux plugin binaries, per-binary SBOMs, checksums,
-a keyless checksum signature bundle, a reproducibility report, and a
-provenance index.
+Release artifacts include Linux plugin binaries, per-binary SBOMs, a dependency
+license report, checksums, a keyless checksum signature bundle, a
+reproducibility report, and a provenance index.
 
 Published binary names use this shape:
 
@@ -69,6 +69,16 @@ Inspect the release provenance index:
 jq '.release, .checksums, .assets, .reproducibility, .attestations' \
   provenance-index.json
 ```
+
+Inspect dependency license evidence:
+
+```sh
+column -s, -t go-licenses-report.csv | less -S
+```
+
+The plugin project source is licensed under Apache-2.0. Dependency licenses,
+including MPL-2.0 OpenBao modules, remain attached to the corresponding
+packages and are listed in the license report.
 
 ## Install a binary plugin
 
