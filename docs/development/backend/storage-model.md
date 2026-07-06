@@ -239,6 +239,8 @@ gates described in [Safety and diagnostics](safety-and-diagnostics.md).
 
 Source paths are stored byte-exact after slash trimming and segment validation.
 They are not case-normalized: `App/DB` and `app/db` are different sources.
+The plugin does not impose a separate source-path length limit; effective
+limits come from OpenBao request routing and the configured storage backend.
 
 Association IDs are deterministic hashes of the source path, destination,
 reserved remote name, and granularity. The ID encoding is `assoc-` plus the
