@@ -25,6 +25,7 @@ const (
 	outboxByDueStoragePrefix   = "outbox_by_due/"
 	outboxByPathStoragePrefix  = "outbox_by_path/"
 	outboxByStateStoragePrefix = "outbox_by_state/"
+	outboxDueZeroTime          = "0001-01-01T00:00:00Z"
 	defaultQueueCapacity       = 1000
 	defaultDriftRepair         = driftRepairOff
 	defaultDriftInterval       = "1h"
@@ -32,35 +33,37 @@ const (
 	defaultDriftBatch          = 16
 	defaultMaxVersions         = 10
 	defaultDeleteVersionAfter  = "0s"
-	outboxStatePending         = "pending"
-	outboxStateRetryWait       = "retry_wait"
-	outboxStateFailedTerminal  = "failed_terminal"
-	outboxStateCanceled        = "canceled"
-	syncGranularitySecretPath  = "secret-path"
-	syncGranularitySecretKey   = "secret-key"
-	syncObjectIDSecretPath     = syncGranularitySecretPath
-	statusStoragePrefix        = "status/"
-	providerTypeFake           = "fake"
-	defaultAssociationFormat   = "json"
-	rawAssociationFormat       = "raw"
-	defaultDataMapping         = "payload"
-	dataMappingSourceKeys      = "source-keys"
-	defaultDataKeyTemplate     = "{{ key }}"
-	defaultNameTemplate        = "{{ path }}"
-	defaultPerKeyNameTemplate  = "{{ path }}/{{ key }}"
-	defaultDeleteMode          = deleteModeRetain
-	deleteModeRetain           = "retain"
-	deleteModeDelete           = "delete"
-	deleteModeOrphan           = "orphan"
-	driftRepairOff             = "off"
-	driftRepairDetect          = "detect"
-	driftRepairRepair          = "repair"
-	outboxTriggerUser          = "user"
-	outboxTriggerDriftRepair   = "drift-repair"
-	sourceMetadataKeySyncable  = "syncable"
-	sourceMetadataValueTrue    = "true"
-	currentStorageSchema       = 1
-	minSupportedStorageSchema  = 1
+	// Outbox state strings are persisted in outbox_by_state storage keys.
+	outboxStatePending        = "pending"
+	outboxStateRetryWait      = "retry_wait"
+	outboxStateFailedTerminal = "failed_terminal"
+	outboxStateCanceled       = "canceled"
+	syncGranularitySecretPath = "secret-path"
+	syncGranularitySecretKey  = "secret-key"
+	// The secret-path object ID is persisted in status storage keys.
+	syncObjectIDSecretPath    = syncGranularitySecretPath
+	statusStoragePrefix       = "status/"
+	providerTypeFake          = "fake"
+	defaultAssociationFormat  = "json"
+	rawAssociationFormat      = "raw"
+	defaultDataMapping        = "payload"
+	dataMappingSourceKeys     = "source-keys"
+	defaultDataKeyTemplate    = "{{ key }}"
+	defaultNameTemplate       = "{{ path }}"
+	defaultPerKeyNameTemplate = "{{ path }}/{{ key }}"
+	defaultDeleteMode         = deleteModeRetain
+	deleteModeRetain          = "retain"
+	deleteModeDelete          = "delete"
+	deleteModeOrphan          = "orphan"
+	driftRepairOff            = "off"
+	driftRepairDetect         = "detect"
+	driftRepairRepair         = "repair"
+	outboxTriggerUser         = "user"
+	outboxTriggerDriftRepair  = "drift-repair"
+	sourceMetadataKeySyncable = "syncable"
+	sourceMetadataValueTrue   = "true"
+	currentStorageSchema      = 1
+	minSupportedStorageSchema = 1
 )
 
 type secretPayload map[string]interface{} //nolint:forbidigo // OpenBao SDK TypeMap uses map[string]interface{}.
@@ -177,10 +180,8 @@ type enqueueIntentRecord struct {
 	Version            int                      `json:"version"`
 	Operations         []enqueueIntentOperation `json:"operations"`
 	CancelOperationIDs []string                 `json:"cancel_operation_ids"`
-	Complete           bool                     `json:"complete"`
 	CreatedTime        string                   `json:"created_time"`
 	UpdatedTime        string                   `json:"updated_time"`
-	CompletedTime      string                   `json:"completed_time"`
 }
 
 type enqueueIntentOperation struct {

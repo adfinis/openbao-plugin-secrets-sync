@@ -22,6 +22,8 @@ func TestStorageSchemaCompatibilityRules(t *testing.T) {
 	for _, testCase := range []struct {
 		name      string
 		record    storageSchemaRecord
+		current   int
+		min       int
 		errorText string
 	}{
 		{
@@ -30,6 +32,8 @@ func TestStorageSchemaCompatibilityRules(t *testing.T) {
 				Version:              currentStorageSchema,
 				MinCompatibleVersion: minSupportedStorageSchema,
 			},
+			current: currentStorageSchema,
+			min:     minSupportedStorageSchema,
 		},
 		{
 			name: "future compatible schema",
@@ -37,6 +41,8 @@ func TestStorageSchemaCompatibilityRules(t *testing.T) {
 				Version:              currentStorageSchema + 1,
 				MinCompatibleVersion: currentStorageSchema,
 			},
+			current: currentStorageSchema,
+			min:     minSupportedStorageSchema,
 		},
 		{
 			name: "future incompatible schema",
@@ -44,7 +50,19 @@ func TestStorageSchemaCompatibilityRules(t *testing.T) {
 				Version:              currentStorageSchema + 1,
 				MinCompatibleVersion: currentStorageSchema + 1,
 			},
+			current:   currentStorageSchema,
+			min:       minSupportedStorageSchema,
 			errorText: "requires plugin schema",
+		},
+		{
+			name: "older than storage floor",
+			record: storageSchemaRecord{
+				Version:              1,
+				MinCompatibleVersion: 1,
+			},
+			current:   2,
+			min:       2,
+			errorText: "older than minimum supported schema",
 		},
 		{
 			name: "invalid zero schema",
@@ -52,11 +70,13 @@ func TestStorageSchemaCompatibilityRules(t *testing.T) {
 				Version:              0,
 				MinCompatibleVersion: 0,
 			},
+			current:   currentStorageSchema,
+			min:       minSupportedStorageSchema,
 			errorText: "must be greater than zero",
 		},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
-			err := validateStorageSchema(testCase.record)
+			err := validateStorageSchemaVersions(testCase.record, testCase.current, testCase.min)
 			if testCase.errorText == "" {
 				if err != nil {
 					t.Fatalf("validateStorageSchema() = %v, want nil", err)
@@ -208,6 +228,12 @@ func TestNormalizeSourcePathRejectsReservedSegments(t *testing.T) {
 				t.Fatalf("normalizeSourcePath(%q): %v", input, err)
 			}
 		})
+	}
+}
+
+func TestSecretPathObjectIDIsStorageKeySentinel(t *testing.T) {
+	if syncObjectIDSecretPath != "secret-path" {
+		t.Fatalf("secret-path object ID = %q, want frozen storage key sentinel %q", syncObjectIDSecretPath, "secret-path")
 	}
 }
 

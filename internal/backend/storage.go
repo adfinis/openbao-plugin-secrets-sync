@@ -288,7 +288,14 @@ func getDestination(
 	if err := entry.DecodeJSON(&record); err != nil {
 		return nil, err
 	}
+	normalizeDestinationDefaults(&record)
 	return &record, nil
+}
+
+func normalizeDestinationDefaults(_ *destinationRecord) {
+	// Destination records intentionally have no defaulted stored fields yet.
+	// Keep this hook so future destination defaults are backfilled on read
+	// instead of freezing zero-value behavior by accident.
 }
 
 func deleteDestination(ctx context.Context, storage logical.Storage, destinationType string, name string) error {
@@ -672,7 +679,7 @@ func outboxDueIndexTime(record outboxRecord) string {
 	if _, err := time.Parse(timeFormatRFC3339, record.NotBefore); err == nil {
 		return record.NotBefore
 	}
-	return "0001-01-01T00:00:00Z"
+	return outboxDueZeroTime
 }
 
 func listOutboxIDsForPath(ctx context.Context, storage logical.Storage, path string) ([]string, error) {

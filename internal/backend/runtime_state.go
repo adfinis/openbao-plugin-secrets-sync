@@ -94,25 +94,33 @@ func ensureStorageSchema(
 }
 
 func validateStorageSchema(record storageSchemaRecord) error {
+	return validateStorageSchemaVersions(record, currentStorageSchema, minSupportedStorageSchema)
+}
+
+func validateStorageSchemaVersions(
+	record storageSchemaRecord,
+	currentVersion int,
+	minSupportedVersion int,
+) error {
 	if record.Version <= 0 {
 		return storageSchemaCompatibilityError{message: "stored schema version must be greater than zero"}
 	}
-	if record.Version < minSupportedStorageSchema {
+	if record.Version < minSupportedVersion {
 		return storageSchemaCompatibilityError{
 			message: fmt.Sprintf(
 				"stored schema version %d is older than minimum supported schema %d",
 				record.Version,
-				minSupportedStorageSchema,
+				minSupportedVersion,
 			),
 		}
 	}
-	if record.MinCompatibleVersion > currentStorageSchema {
+	if record.MinCompatibleVersion > currentVersion {
 		return storageSchemaCompatibilityError{
 			message: fmt.Sprintf(
 				"stored schema version %d requires plugin schema %d, but this binary supports schema %d",
 				record.Version,
 				record.MinCompatibleVersion,
-				currentStorageSchema,
+				currentVersion,
 			),
 		}
 	}
