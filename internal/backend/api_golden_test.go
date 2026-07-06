@@ -3,9 +3,6 @@ package backend
 import (
 	"bytes"
 	"encoding/json"
-	"fmt"
-	"os"
-	"path/filepath"
 	"sort"
 	"strings"
 	"testing"
@@ -234,28 +231,12 @@ func repeatedPlaceholder(count int, placeholder string) []interface{} {
 
 func assertAPIGolden(t *testing.T, responses map[string]interface{}) {
 	t.Helper()
-	actual := marshalAPIGolden(t, responses)
-	path := filepath.FromSlash(apiGoldenFile)
-	if os.Getenv(apiGoldenUpdateEnv) == "1" {
-		if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
-			t.Fatalf("create golden directory: %v", err)
-		}
-		if err := os.WriteFile(path, actual, 0o600); err != nil {
-			t.Fatalf("write golden file: %v", err)
-		}
-		return
-	}
-	expected, err := os.ReadFile(path) //nolint:gosec // Test fixture path is fixed by apiGoldenFile.
-	if err != nil {
-		t.Fatalf("read golden file: %v; run %s", err, apiGoldenUpdateCommand())
-	}
-	if !bytes.Equal(bytes.TrimSpace(expected), bytes.TrimSpace(actual)) {
-		t.Fatalf(
-			"API golden responses changed; review the diff and run %s if intentional\n%s",
-			apiGoldenUpdateCommand(),
-			apiGoldenMismatch(expected, actual),
-		)
-	}
+	assertGoldenFixture(t, goldenFixture{
+		file:          apiGoldenFile,
+		updateEnv:     apiGoldenUpdateEnv,
+		updateCommand: apiGoldenUpdateCommand(),
+		description:   "API golden responses",
+	}, marshalAPIGolden(t, responses))
 }
 
 func apiGoldenUpdateCommand() string {
@@ -281,8 +262,4 @@ func marshalAPIGolden(t *testing.T, responses map[string]interface{}) []byte {
 		t.Fatalf("marshal API golden responses: %v", err)
 	}
 	return buffer.Bytes()
-}
-
-func apiGoldenMismatch(expected []byte, actual []byte) string {
-	return fmt.Sprintf("--- expected\n%s\n--- actual\n%s", expected, actual)
 }

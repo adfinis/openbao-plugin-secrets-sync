@@ -1,0 +1,184 @@
+[
+  {
+    "key": "association_names/fake/default/f132e41e504f860cb372fb8a/<association-id>",
+    "value": "app/db"
+  },
+  {
+    "key": "associations/app/db/<association-id>",
+    "value": {
+      "created_time": "<timestamp>",
+      "data_mapping": "payload",
+      "delete_mode": "retain",
+      "destination_name": "default",
+      "destination_ref": "fake/default",
+      "destination_type": "fake",
+      "enabled": true,
+      "format": "json",
+      "granularity": "secret-path",
+      "id": "<association-id>",
+      "name_template": "{{ path }}",
+      "path": "app/db",
+      "resolved_name": "prod/app/db",
+      "updated_time": "<timestamp>"
+    }
+  },
+  {
+    "key": "associations_by_destination/fake/default/<association-id>",
+    "value": "app/db"
+  },
+  {
+    "key": "config",
+    "value": {
+      "disabled": false,
+      "drift_reconcile_batch": 16,
+      "drift_reconcile_interval": "1h",
+      "drift_repair": "off",
+      "event_dispatch_enabled": false,
+      "event_dispatch_max_operations": 16,
+      "queue_capacity": 10,
+      "require_source_opt_in": false,
+      "restore_guard": false,
+      "restore_guard_acknowledged_time": "<timestamp>",
+      "updated_time": "<timestamp>"
+    }
+  },
+  {
+    "key": "data/app/db/versions/1",
+    "value": {
+      "created_time": "<timestamp>",
+      "data": {
+        "setting": "enabled",
+        "username": "app"
+      },
+      "deletion_time": "",
+      "destroyed": false,
+      "version": 1
+    }
+  },
+  {
+    "key": "data/app/db/versions/2",
+    "value": {
+      "created_time": "<timestamp>",
+      "data": {
+        "setting": "rotated",
+        "username": "app"
+      },
+      "deletion_time": "",
+      "destroyed": false,
+      "version": 2
+    }
+  },
+  {
+    "key": "destinations/fake/default",
+    "value": {
+      "config": {},
+      "created_time": "<timestamp>",
+      "description": "test destination",
+      "disabled": false,
+      "name": "default",
+      "type": "fake",
+      "updated_time": "<timestamp>"
+    }
+  },
+  {
+    "key": "identity/plugin-instance",
+    "value": {
+      "created_time": "<timestamp>",
+      "id": "<plugin-instance-id>"
+    }
+  },
+  {
+    "key": "identity/restore-epoch",
+    "value": {
+      "created_time": "<timestamp>",
+      "epoch": "<restore-epoch>",
+      "updated_time": "<timestamp>"
+    }
+  },
+  {
+    "key": "metadata/app/db",
+    "value": {
+      "cas_required": false,
+      "current_version": 2,
+      "custom_metadata": {
+        "syncable": "true"
+      },
+      "delete_version_after": "0s",
+      "generation": "<generation>",
+      "max_versions": 10,
+      "oldest_version": 1,
+      "updated_time": "<timestamp>",
+      "versions": {
+        "1": {
+          "created_time": "<timestamp>",
+          "deletion_time": "",
+          "destroyed": false
+        },
+        "2": {
+          "created_time": "<timestamp>",
+          "deletion_time": "",
+          "destroyed": false
+        }
+      }
+    }
+  },
+  {
+    "key": "outbox/<operation-id>",
+    "value": {
+      "association_id": "<association-id>",
+      "attempts": 0,
+      "created_time": "<timestamp>",
+      "destination_ref": "fake/default",
+      "id": "<operation-id>",
+      "idempotency_key": "<operation-id>",
+      "not_before": "<timestamp>",
+      "object_id": "secret-path",
+      "path": "app/db",
+      "state": "pending",
+      "trigger": "user",
+      "type": "upsert",
+      "updated_time": "<timestamp>",
+      "version": 2
+    }
+  },
+  {
+    "key": "outbox_by_due/<timestamp>/<operation-id>",
+    "value": "<operation-id>"
+  },
+  {
+    "key": "outbox_by_path/app/db/<operation-id>",
+    "value": "<operation-id>"
+  },
+  {
+    "key": "outbox_by_state/pending/<operation-id>",
+    "value": "<operation-id>"
+  },
+  {
+    "key": "schema/version",
+    "value": {
+      "created_time": "<timestamp>",
+      "min_compatible_version": 1,
+      "updated_time": "<timestamp>",
+      "version": 1
+    }
+  },
+  {
+    "key": "status/app/db/<association-id>/secret-path",
+    "value": {
+      "association_id": "<association-id>",
+      "destination_ref": "fake/default",
+      "last_error": "",
+      "last_error_class": "",
+      "last_operation_id": "<operation-id>",
+      "last_success_time": "<timestamp>",
+      "object_id": "secret-path",
+      "path": "app/db",
+      "payload_sha256": "sha256:df4f53dec75a44db5a32b05dd20fc4c1aafa34939df184d83936c2d4b86544ec",
+      "remote_version": "fake",
+      "resolved_name": "prod/app/db",
+      "state": "SYNCED",
+      "updated_time": "<timestamp>",
+      "version": 1
+    }
+  }
+]
