@@ -827,7 +827,7 @@ components:
       required: true
       schema:
         type: string
-        pattern: ^assoc-[0-9a-f]+$
+        pattern: ^assoc-[0-9a-f]{32}$
       description: Association id returned by association create or read.
     OperationID:
       name: operation_id

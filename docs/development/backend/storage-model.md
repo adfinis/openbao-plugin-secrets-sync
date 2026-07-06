@@ -68,8 +68,33 @@ Pre-release schema policy:
   less than or equal to the running binary's `currentStorageSchema`;
 - incompatible schemas fail closed before path handlers, queue drain, periodic
   dispatch, or event dispatch can mutate source or remote state;
+- persisted records are decoded with tolerant JSON readers, so an older binary
+  can silently drop fields added by a newer binary when it rewrites a record;
+- any added, removed, renamed, or semantics-changing persisted field must bump
+  the storage compatibility floor or add explicit compatibility handling;
 - the first schema bump must add explicit migration or compatibility handling,
   tests, and release notes before the schema version is increased.
+
+## Tolerant Reads and Orphans
+
+Primary records are authoritative. Secondary indexes are redundant lookup aids
+and must be dereferenced through the primary record before they affect source,
+queue, association, destination, or remote mutation behavior.
+
+Crash recovery only replays pending `enqueue_intent/<path>/<version>` records.
+It does not run a general storage compaction pass. Interrupted writes can leave
+orphaned source version records, stale outbox index entries, stale association
+destination indexes, or stale association name reservations. Readers must
+tolerate those records by ignoring index entries whose primary record is
+missing or no longer matches the indexed destination, reservation, state, path,
+or due-time candidate.
+
+This means stale derived records can accumulate until source deletion, targeted
+maintenance, or a future bounded compaction feature removes them. They must not
+authorize dispatch, block destination deletion, or reserve a remote object name
+without a live matching primary record. Any future compaction must preserve
+version records referenced by pending enqueue intents, outbox records, or
+status diagnostics.
 
 ## Runtime Identity
 
@@ -153,6 +178,9 @@ timestamps.
 outbox records are written. It is used to recover partial enqueue work after an
 interrupted write path.
 
+Intent completion is deletion-based: a completed intent is removed rather than
+marked complete in place.
+
 `outbox/<operation-id>` stores durable remote-mutation intent. Outbox records
 are indexed by due time, source path, and state:
 
@@ -165,6 +193,14 @@ outbox_by_state/<state>/<operation-id>
 Outbox records carry operation type, path, version, association ID, object ID,
 destination reference, state, attempt count, due time, idempotency key, trigger,
 claim fields, and timestamps.
+
+The due-time index uses UTC RFC3339 timestamps at whole-second precision as
+lexical sort keys. The zero-time string `0001-01-01T00:00:00Z` is the sentinel
+for queued operations without a valid future `not_before` value.
+
+Outbox state strings are part of the key layout because they appear under
+`outbox_by_state/<state>/`. Renaming a state string is a storage migration, not
+just a response-shape change.
 
 ## Status Records
 
@@ -183,6 +219,9 @@ reference, resolved remote name, payload hash, provider remote version,
 verification marker, operation ID, success time, reconcile time, drift time,
 repair time, repair count, error class, error message, and updated time.
 
+The secret-path association object uses the synthetic object ID `secret-path`.
+That value appears in status storage keys and is a frozen storage sentinel.
+
 Status records are diagnostic state. They must not contain source payload
 values or sensitive destination config.
 
@@ -195,3 +234,15 @@ configuration changes. Backend cleanup closes cached runtimes.
 Runtime caches are an optimization. Correctness comes from durable storage,
 queue claims, provider idempotency, provider ownership checks, and the safety
 gates described in [Safety and diagnostics](safety-and-diagnostics.md).
+
+## Path and ID Encoding
+
+Source paths are stored byte-exact after slash trimming and segment validation.
+They are not case-normalized: `App/DB` and `app/db` are different sources.
+The plugin does not impose a separate source-path length limit; effective
+limits come from OpenBao request routing and the configured storage backend.
+
+Association IDs are deterministic hashes of the source path, destination,
+reserved remote name, and granularity. The ID encoding is `assoc-` plus the
+first 128 bits of the SHA-256 hash in lowercase hex. Widening or shortening it
+later would be a storage and API compatibility change.

@@ -24,16 +24,6 @@ func recoverIncompleteEnqueueIntentsLimit(
 	}
 	recovered := 0
 	for _, intent := range intents {
-		if intent.Complete {
-			if err := deleteEnqueueIntent(ctx, storage, intent.Path, intent.Version); err != nil {
-				return err
-			}
-			recovered++
-			if maxIntents > 0 && recovered >= maxIntents {
-				break
-			}
-			continue
-		}
 		if err := recoverEnqueueIntent(ctx, storage, intent, now.Format(timeFormatRFC3339)); err != nil {
 			return err
 		}

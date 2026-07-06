@@ -41,7 +41,7 @@ func TestQueueDrainCancelsClaimedStaleUpsertAfterClaimExpiry(t *testing.T) {
 		t.Fatalf("read stale operation: %v", err)
 	}
 	staleOperation.ClaimExpiresTime = nowUTC().Add(-time.Minute).Format(timeFormatRFC3339)
-	staleOperation.NotBefore = "0001-01-01T00:00:00Z"
+	staleOperation.NotBefore = outboxDueZeroTime
 	if err := putOutbox(context.Background(), env.storage, *staleOperation); err != nil {
 		t.Fatalf("expire stale operation claim: %v", err)
 	}

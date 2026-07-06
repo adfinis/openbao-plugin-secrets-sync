@@ -359,14 +359,12 @@ func TestRecoveryRestoresIntentOperationMetadata(t *testing.T) {
 	}
 }
 
-func TestRecoveryPrunesCompletedEnqueueIntent(t *testing.T) {
+func TestRecoveryPrunesNoopEnqueueIntent(t *testing.T) {
 	storage := &logical.InmemStorage{}
 	now := nowUTC().Format(timeFormatRFC3339)
 	intent := newEnqueueIntentRecord("app/db", "gen-test", 1, nil, nil, now)
-	intent.Complete = true
-	intent.CompletedTime = now
 	if err := putEnqueueIntent(context.Background(), storage, intent); err != nil {
-		t.Fatalf("write completed enqueue intent: %v", err)
+		t.Fatalf("write noop enqueue intent: %v", err)
 	}
 
 	if err := recoverIncompleteEnqueueIntents(context.Background(), storage, nowUTC()); err != nil {
@@ -386,10 +384,8 @@ func TestPeriodicLimitsRecoveredEnqueueIntents(t *testing.T) {
 	now := nowUTC().Format(timeFormatRFC3339)
 	for index := 0; index < defaultPeriodicRecoveryMaxIntents+1; index++ {
 		intent := newEnqueueIntentRecord(fmt.Sprintf("app/db-%03d", index), "gen-test", 1, nil, nil, now)
-		intent.Complete = true
-		intent.CompletedTime = now
 		if err := putEnqueueIntent(context.Background(), env.storage, intent); err != nil {
-			t.Fatalf("write completed enqueue intent %d: %v", index, err)
+			t.Fatalf("write noop enqueue intent %d: %v", index, err)
 		}
 	}
 
