@@ -2,8 +2,20 @@ package backend
 
 import (
 	"reflect"
+	"regexp"
 	"testing"
 )
+
+func TestAssociationIDUsesFrozen128BitHash(t *testing.T) {
+	id := newAssociationID("app/db", "fake", "default", "prod/app/db", syncGranularitySecretPath)
+	const want = "assoc-bf93063f318e089f9bced8488e5b70e2"
+	if id != want {
+		t.Fatalf("association ID = %q, want frozen 128-bit hash ID %q", id, want)
+	}
+	if !regexp.MustCompile("^" + associationIDPattern + "$").MatchString(id) {
+		t.Fatalf("association ID %q does not match path pattern %q", id, associationIDPattern)
+	}
+}
 
 func TestStorageRecordJSONTags(t *testing.T) {
 	for _, testCase := range []struct {

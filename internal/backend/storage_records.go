@@ -323,7 +323,7 @@ func newAssociationID(
 ) string {
 	raw := fmt.Sprintf("%s:%s:%s:%s:%s", path, destinationType, destinationName, resolvedName, granularity)
 	sum := sha256.Sum256([]byte(raw))
-	return "assoc-" + hex.EncodeToString(sum[:8])
+	return "assoc-" + hex.EncodeToString(sum[:16])
 }
 
 func nameReservationID(resolvedName string) string {

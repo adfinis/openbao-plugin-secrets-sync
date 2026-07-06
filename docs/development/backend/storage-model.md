@@ -241,6 +241,6 @@ Source paths are stored byte-exact after slash trimming and segment validation.
 They are not case-normalized: `App/DB` and `app/db` are different sources.
 
 Association IDs are deterministic hashes of the source path, destination,
-reserved remote name, and granularity. The current ID encoding truncates the
-hash to 64 bits; widening it later would be a storage and API compatibility
-change.
+reserved remote name, and granularity. The ID encoding is `assoc-` plus the
+first 128 bits of the SHA-256 hash in lowercase hex. Widening or shortening it
+later would be a storage and API compatibility change.

@@ -14,6 +14,8 @@ import (
 	"github.com/openbao/openbao/sdk/v2/logical"
 )
 
+const associationIDPattern = "assoc-[0-9a-f]{32}"
+
 func pathAssociations(b *secretSyncBackend) []*framework.Path {
 	return []*framework.Path{
 		{
@@ -41,7 +43,7 @@ func pathAssociations(b *secretSyncBackend) []*framework.Path {
 			HelpDescription: "Builds a non-mutating provider plan for the current source version.",
 		},
 		{
-			Pattern: "associations/(?P<path>.+)/(?P<association_id>assoc-[0-9a-f]+)/disable",
+			Pattern: "associations/(?P<path>.+)/(?P<association_id>" + associationIDPattern + ")/disable",
 			Fields:  associationLifecycleFields(),
 			Operations: map[logical.Operation]framework.OperationHandler{
 				logical.UpdateOperation: &framework.PathOperation{
@@ -53,7 +55,7 @@ func pathAssociations(b *secretSyncBackend) []*framework.Path {
 			HelpDescription: "Disables future enqueue and cancels queued work for one association.",
 		},
 		{
-			Pattern: "associations/(?P<path>.+)/(?P<association_id>assoc-[0-9a-f]+)/enable",
+			Pattern: "associations/(?P<path>.+)/(?P<association_id>" + associationIDPattern + ")/enable",
 			Fields:  associationLifecycleFields(),
 			Operations: map[logical.Operation]framework.OperationHandler{
 				logical.UpdateOperation: &framework.PathOperation{
@@ -65,7 +67,7 @@ func pathAssociations(b *secretSyncBackend) []*framework.Path {
 			HelpDescription: "Enables an association and enqueues the current source version when transitioning from disabled.",
 		},
 		{
-			Pattern: "associations/(?P<path>.+)/(?P<association_id>assoc-[0-9a-f]+)/sync",
+			Pattern: "associations/(?P<path>.+)/(?P<association_id>" + associationIDPattern + ")/sync",
 			Fields:  associationLifecycleFields(),
 			Operations: map[logical.Operation]framework.OperationHandler{
 				logical.UpdateOperation: &framework.PathOperation{
@@ -114,7 +116,7 @@ func pathAssociations(b *secretSyncBackend) []*framework.Path {
 			HelpDescription: "Enqueues the current source version for one enabled association resolved by destination.",
 		},
 		{
-			Pattern: "associations/(?P<path>.+)/(?P<association_id>assoc-[0-9a-f]+)",
+			Pattern: "associations/(?P<path>.+)/(?P<association_id>" + associationIDPattern + ")",
 			Fields: map[string]*framework.FieldSchema{
 				"path": {
 					Type:        framework.TypeString,
