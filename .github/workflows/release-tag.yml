@@ -111,16 +111,18 @@ jobs:
           } >> "${GITHUB_ENV}"
 
       - name: Create tag and draft release
+        id: release_tag
         if: ${{ steps.release-tag-secrets.outputs.configured == 'true' }}
         env:
           REPO: ${{ github.repository }}
+          BEFORE_SHA: ${{ github.event.before }}
           GH_READ_TOKEN: ${{ github.token }}
           GH_WRITE_TOKEN: ${{ github.token }}
           OPENBAO_SECRET_SYNC_RELEASE_TAG_GPG_PASSPHRASE: ${{ secrets.OPENBAO_SECRET_SYNC_RELEASE_TAG_GPG_PASSPHRASE }}
         run: bash hack/ci/create-release-tag-and-draft.sh
 
       - name: Dispatch release artifact workflow
-        if: ${{ steps.release-tag-secrets.outputs.configured == 'true' }}
+        if: ${{ steps.release-tag-secrets.outputs.configured == 'true' && steps.release_tag.outputs.release_ready == 'true' }}
         env:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
