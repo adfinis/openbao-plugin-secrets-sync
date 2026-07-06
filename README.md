@@ -73,6 +73,19 @@ make test-e2e-kind
 E2E_GITLAB_CONFIRM=1 make test-e2e-gitlab
 ```
 
+## License and plugin policy
+
+This repository is an external OpenBao secret engine plugin, maintained and
+released independently from the OpenBao core release cycle. That release model
+matches the OpenBao plugin support policy for external, community-supported
+plugins:
+[openbao.org/community/policies/plugins](https://openbao.org/community/policies/plugins/).
+
+The project source is licensed under Apache-2.0. Linked dependencies keep their
+own licenses; release builds run dependency license checks and publish a
+`go-licenses-report.csv` artifact alongside the binary, SBOM, checksum, and
+provenance artifacts.
+
 ## Contributing and security
 
 Use conventional commits with DCO sign-off for repository changes. See

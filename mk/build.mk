@@ -17,6 +17,7 @@ release-artifacts: clean-dist ## Build Linux release binaries and checksums.
 		CGO_ENABLED=0 GOOS="$$goos" GOARCH="$$goarch" "$(GO)" build $(GO_BUILD_FLAGS) -ldflags "$(LDFLAGS)" -o "$$artifact" ./cmd/openbao-plugin-secrets-sync; \
 	done
 	@$(MAKE) release-sboms
+	@$(MAKE) release-license-report
 	@$(MAKE) checksums
 
 .PHONY: release-sboms
@@ -37,6 +38,18 @@ release-sboms: ## Generate SPDX SBOMs for release binaries.
 		SOURCE_DATE_EPOCH="$${SOURCE_DATE_EPOCH:-$$(git show -s --format=%ct HEAD 2>/dev/null || date +%s)}" \
 		./hack/ci/generate-go-binary-sbom.sh; \
 	done
+
+.PHONY: release-license-report
+release-license-report: go-licenses ## Generate the release dependency license report.
+	@set -eu; \
+	mkdir -p "$(DIST_DIR)"; \
+	stderr_path="$(DIST_DIR)/go-licenses-report.stderr.log"; \
+	"$(GO_LICENSES)" report \
+		--ignore "$(GO_LICENSES_IGNORE)" \
+		$(GO_LICENSES_PACKAGE_TARGETS) \
+		> "$(DIST_DIR)/go-licenses-report.csv" \
+		2> "$$stderr_path"; \
+	rm -f "$$stderr_path"
 
 .PHONY: oci-plugin-image
 oci-plugin-image: ## Build an OCI plugin distribution image from release binaries.

@@ -337,7 +337,7 @@ The plugin is shipped like other OpenBao external plugins:
 
 - reproducible Go builds where practical;
 - checksums for every release artifact;
-- SBOM and dependency vulnerability scan;
+- SBOM, dependency vulnerability scan, and dependency license report;
 - signed release artifacts;
 - documented `bao plugin register` flow;
 - documented minimum OpenBao version;
