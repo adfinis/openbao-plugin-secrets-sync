@@ -51,8 +51,11 @@ operation, plugin-relative path, parameters, whether the action can mutate
 remote state, and an example `bao` command.
 
 On successful responses, `hint` and `next_actions` are top-level response data
-fields. On OpenBao error responses, they are nested under the error `data` field
-so clients still recognize the response as an error.
+fields. On OpenBao error responses, the structured copy is nested under the
+error `data` field so clients still recognize the response as an error. The
+human-readable error text also includes a compact `Hint:` line and the first
+`Next action:` command so `bao` CLI users see the recovery path without parsing
+JSON.
 
 Examples:
 

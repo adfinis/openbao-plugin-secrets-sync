@@ -11,7 +11,6 @@ import (
 	"github.com/adfinis/openbao-plugin-secrets-sync/internal/observability"
 	"github.com/adfinis/openbao-plugin-secrets-sync/internal/providers"
 	"github.com/adfinis/openbao-plugin-secrets-sync/internal/providers/awssecretsmanager"
-	"github.com/adfinis/openbao-plugin-secrets-sync/internal/providers/fake"
 	"github.com/adfinis/openbao-plugin-secrets-sync/internal/providers/gitlab"
 	"github.com/adfinis/openbao-plugin-secrets-sync/internal/providers/kubernetessecrets"
 	"github.com/adfinis/openbao-plugin-secrets-sync/internal/version"
@@ -37,13 +36,20 @@ func Factory(ctx context.Context, conf *logical.BackendConfig) (logical.Backend,
 
 // Backend creates an uninitialized logical backend.
 func Backend(_ *logical.BackendConfig) *secretSyncBackend {
+	return backendWithProviders(productionProviders()...)
+}
+
+func productionProviders() []providers.Provider {
+	return []providers.Provider{
+		awssecretsmanager.New(),
+		gitlab.New(),
+		kubernetessecrets.New(),
+	}
+}
+
+func backendWithProviders(providerSet ...providers.Provider) *secretSyncBackend {
 	b := secretSyncBackend{
-		providerRegistry: providers.MustNewRegistry(
-			fake.Provider{},
-			awssecretsmanager.New(),
-			gitlab.New(),
-			kubernetessecrets.New(),
-		),
+		providerRegistry: providers.MustNewRegistry(providerSet...),
 		observer:         observability.New(),
 		dispatchWorkerID: bestEffortRuntimeID("worker"),
 		writeLocks:       locksutil.CreateLocks(),

@@ -1,11 +1,24 @@
 package backend
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestErrorResponseWithDiagnosticPreservesOpenBaoErrorShape(t *testing.T) {
 	resp := errorResponseWithDiagnostic("blocked", queueCapacityDiagnostic("secret-sync"))
 	if resp == nil || !resp.IsError() {
 		t.Fatalf("response = %#v, want OpenBao error response", resp)
+	}
+	errorText := resp.Error().Error()
+	for _, want := range []string{
+		"blocked",
+		"Hint: Queue capacity is exhausted",
+		"Next action: bao read secret-sync/queue",
+	} {
+		if !strings.Contains(errorText, want) {
+			t.Fatalf("error text = %q, want substring %q", errorText, want)
+		}
 	}
 	data, ok := resp.Data["data"].(map[string]interface{})
 	if !ok {
@@ -13,4 +26,21 @@ func TestErrorResponseWithDiagnosticPreservesOpenBaoErrorShape(t *testing.T) {
 	}
 	assertHintContains(t, data, "Queue capacity is exhausted")
 	assertNextActionCommand(t, data, "read_queue", "bao read secret-sync/queue")
+}
+
+func TestDestinationHealthDiagnosticUsesReadCommand(t *testing.T) {
+	diagnostic := destinationFailureDiagnostic(
+		"secret-sync",
+		"aws-sm/prod",
+		"",
+		"Destination is unavailable. Check destination health.",
+	)
+	data := newResponseData(diagnosticResponseFields(diagnostic)...)
+
+	assertNextActionCommand(
+		t,
+		data,
+		"check_destination_health",
+		"bao read secret-sync/destinations/aws-sm/prod/health",
+	)
 }

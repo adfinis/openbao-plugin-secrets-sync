@@ -66,11 +66,7 @@ paths:
               $ref: "#/components/schemas/ConfigWriteRequest"
       responses:
         "200":
-          description: Updated configuration.
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/ConfigResponse"
+          description: Configuration updated. Empty response body on success.
 
   /config/restore-guard/acknowledge:
     post:
@@ -803,7 +799,7 @@ components:
       required: true
       schema:
         type: string
-        enum: [fake, aws-sm, k8s, gitlab]
+        enum: [aws-sm, k8s, gitlab]
       description: Destination provider type.
     DestinationName:
       name: name
@@ -859,6 +855,7 @@ components:
       properties:
         errors:
           type: array
+          description: Error strings. Diagnostic errors include a CLI-readable hint and first next-action command.
           items:
             type: string
         data:
@@ -967,6 +964,20 @@ components:
         delegated_mode:
           type: boolean
           description: Require delegated-mode guardrails. Requires require_source_opt_in=true and constrained destinations.
+        drift_repair:
+          type: string
+          enum: [off, detect, repair]
+          default: off
+          description: Background drift policy.
+        drift_reconcile_interval:
+          type: string
+          default: 1h
+          description: Minimum interval between background drift checks for one association object.
+        drift_reconcile_batch:
+          type: integer
+          minimum: 1
+          default: 16
+          description: Maximum association objects checked by one periodic drift sweep.
         event_dispatch_enabled:
           type: boolean
           default: true
@@ -1011,6 +1022,16 @@ components:
         delegated_mode:
           type: boolean
           description: Whether delegated association guardrails are enforced for destination constraints.
+        drift_repair:
+          type: string
+          enum: [off, detect, repair]
+          description: Background drift policy.
+        drift_reconcile_interval:
+          type: string
+          description: Minimum interval between background drift checks for one association object.
+        drift_reconcile_batch:
+          type: integer
+          description: Maximum association objects checked by one periodic drift sweep.
         event_dispatch_enabled:
           type: boolean
           description: Whether enqueue-producing writes wake the event-triggered dispatcher.
@@ -1048,8 +1069,8 @@ components:
           enum: [local, private]
         auth_mode:
           type: string
-          enum: [default, assume_role, web_identity, static]
-          description: Provider auth mode. Static AWS auth is reserved and not supported yet.
+          enum: [default, assume_role, web_identity]
+          description: Provider auth mode.
         role_arn:
           type: string
           description: AWS IAM role ARN for assume-role and web-identity auth.
@@ -1073,18 +1094,6 @@ components:
           type: boolean
           default: false
           description: Opt in to AWS GetSecretValue checks for explicit plan, upsert, and read-state value drift detection.
-        access_key_id:
-          type: string
-          writeOnly: true
-          description: Reserved AWS static auth field. Static auth is not supported yet.
-        secret_access_key:
-          type: string
-          writeOnly: true
-          description: Reserved AWS static auth field. Static auth is not supported yet.
-        session_token:
-          type: string
-          writeOnly: true
-          description: Reserved AWS static auth field. Static auth is not supported yet.
         namespace:
           type: string
           description: Kubernetes namespace.
@@ -1616,8 +1625,6 @@ components:
               type: array
               items:
                 type: string
-            association:
-              $ref: "#/components/schemas/Association"
             hint:
               type: string
             next_actions:
@@ -1793,30 +1800,6 @@ components:
               type: array
               items:
                 type: string
-            association_id:
-              type: string
-            object_id:
-              type: string
-            destination_ref:
-              type: string
-            resolved_name:
-              type: string
-            remote_version:
-              type: string
-            last_operation_id:
-              type: string
-            last_success_time:
-              type: string
-            last_error_class:
-              $ref: "#/components/schemas/ProviderErrorClass"
-            last_error:
-              type: string
-            hint:
-              type: string
-            next_actions:
-              type: array
-              items:
-                $ref: "#/components/schemas/DiagnosticAction"
             objects:
               type: array
               items:
@@ -1847,6 +1830,16 @@ components:
         last_error_class:
           $ref: "#/components/schemas/ProviderErrorClass"
         last_error:
+          type: string
+        verification:
+          $ref: "#/components/schemas/RemoteStateVerification"
+        repair_count:
+          type: integer
+        last_reconcile_time:
+          type: string
+        last_drift_detected_time:
+          type: string
+        last_repair_time:
           type: string
         hint:
           type: string
@@ -1881,21 +1874,6 @@ components:
               type: integer
             max_operations:
               type: integer
-            queue_pending:
-              type: integer
-            queue_retry_wait:
-              type: integer
-            queue_claimed:
-              type: integer
-            queue_terminal:
-              type: integer
-            queue_oldest_age_seconds:
-              type: integer
-            queue_capacity:
-              type: integer
-            queue_utilization:
-              type: number
-              format: double
             queue:
               $ref: "#/components/schemas/QueueSummary"
       required: [data]
@@ -1947,6 +1925,9 @@ components:
         state:
           type: string
           enum: [pending, retry_wait, failed_terminal, canceled]
+        trigger:
+          type: string
+          enum: [user, drift-repair]
         attempts:
           type: integer
         not_before:
@@ -2011,6 +1992,8 @@ components:
           type: integer
         remote_version:
           type: string
+        verification:
+          $ref: "#/components/schemas/RemoteStateVerification"
         error_class:
           $ref: "#/components/schemas/ProviderErrorClass"
         message:
@@ -2021,6 +2004,11 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/DiagnosticAction"
+
+    RemoteStateVerification:
+      type: string
+      enum: ["", value, metadata]
+      description: Remote state signal used to verify drift; empty means no remote verification was available.
 
     ProviderErrorClass:
       type: string

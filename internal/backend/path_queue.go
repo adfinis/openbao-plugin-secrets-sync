@@ -183,13 +183,6 @@ func (b *secretSyncBackend) pathQueueDrain(
 	return &logical.Response{Data: newResponseData(
 		responseField("processed", processed),
 		responseField("max_operations", maxOperations),
-		responseField("queue_pending", summary.Pending),
-		responseField("queue_retry_wait", summary.RetryWait),
-		responseField("queue_claimed", summary.Claimed),
-		responseField("queue_terminal", summary.Terminal),
-		responseField("queue_oldest_age_seconds", summary.OldestAgeSeconds),
-		responseField("queue_capacity", summary.Capacity),
-		responseField("queue_utilization", summary.Utilization),
 		responseField("queue", queueSummaryResponse(summary)),
 	)}, nil
 }

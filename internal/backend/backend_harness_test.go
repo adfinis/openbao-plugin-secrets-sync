@@ -10,6 +10,7 @@ import (
 	"github.com/adfinis/openbao-plugin-secrets-sync/internal/observability"
 	"github.com/adfinis/openbao-plugin-secrets-sync/internal/providers"
 	"github.com/adfinis/openbao-plugin-secrets-sync/internal/providers/awssecretsmanager"
+	"github.com/adfinis/openbao-plugin-secrets-sync/internal/providers/fake"
 	"github.com/openbao/openbao/sdk/v2/logical"
 )
 
@@ -23,9 +24,14 @@ func newBackendTestEnv(t *testing.T) *backendTestEnv {
 	t.Helper()
 	return &backendTestEnv{
 		t:       t,
-		b:       Backend(&logical.BackendConfig{}),
+		b:       newBackendForTest(&logical.BackendConfig{}),
 		storage: &logical.InmemStorage{},
 	}
+}
+
+func newBackendForTest(_ *logical.BackendConfig) *secretSyncBackend {
+	providerSet := append(productionProviders(), fake.Provider{})
+	return backendWithProviders(providerSet...)
 }
 
 func (env *backendTestEnv) handle(
@@ -160,6 +166,29 @@ func assertStoredAWSDestinationConfig(t *testing.T, storage logical.Storage) {
 	}
 	if got := storedSensitiveConfig.Config[awssecretsmanager.ConfigKeyExternalID]; got != "tenant-1" {
 		t.Fatalf("stored external_id = %q, want tenant-1", got)
+	}
+}
+
+func assertNoStoredAWSDestination(t *testing.T, storage logical.Storage) {
+	t.Helper()
+	storedDestination, err := getDestination(context.Background(), storage, awssecretsmanager.ProviderType, "prod")
+	if err != nil {
+		t.Fatalf("read stored destination: %v", err)
+	}
+	if storedDestination != nil {
+		t.Fatalf("stored destination = %#v, want nil", storedDestination)
+	}
+	storedSensitiveConfig, err := getDestinationSensitiveConfig(
+		context.Background(),
+		storage,
+		awssecretsmanager.ProviderType,
+		"prod",
+	)
+	if err != nil {
+		t.Fatalf("read stored sensitive config: %v", err)
+	}
+	if storedSensitiveConfig != nil {
+		t.Fatalf("stored sensitive config = %#v, want nil", storedSensitiveConfig)
 	}
 }
 
@@ -343,11 +372,7 @@ func assertOperationIDs(t *testing.T, metadata map[string]interface{}, expected 
 func assertAssociationEnabled(t *testing.T, resp *logical.Response, want bool) {
 	t.Helper()
 	assertNoErrorResponse(t, resp)
-	association, ok := resp.Data["association"].(map[string]interface{})
-	if !ok {
-		t.Fatalf("association = %T, want map[string]interface{}", resp.Data["association"])
-	}
-	if got := association["enabled"]; got != want {
+	if got := resp.Data["enabled"]; got != want {
 		t.Fatalf("association enabled = %v, want %v", got, want)
 	}
 }
@@ -745,13 +770,9 @@ func operationIDsFromResponse(t *testing.T, resp *logical.Response) []string {
 func associationIDFromResponse(t *testing.T, resp *logical.Response) string {
 	t.Helper()
 	assertNoErrorResponse(t, resp)
-	association, ok := resp.Data["association"].(map[string]interface{})
-	if !ok {
-		t.Fatalf("association = %T, want map[string]interface{}", resp.Data["association"])
-	}
-	id, ok := association["id"].(string)
+	id, ok := resp.Data["association_id"].(string)
 	if !ok || id == "" {
-		t.Fatalf("association id = %v, want non-empty string", association["id"])
+		t.Fatalf("association_id = %v, want non-empty string", resp.Data["association_id"])
 	}
 	return id
 }

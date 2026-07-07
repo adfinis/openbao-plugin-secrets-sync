@@ -852,8 +852,12 @@ func assertStatusDetails(t *testing.T, client *api.Client, expectedState string,
 		if got := secret.Data["state"]; got != expectedState {
 			return fmt.Errorf("status state = %v, want %s", got, expectedState)
 		}
-		if got := secret.Data["last_error_class"]; got != expectedErrorClass {
-			return fmt.Errorf("status last_error_class = %v, want %s", got, expectedErrorClass)
+		object := objectByID(t, objectsFromSecret(t, secret.Data["objects"]), "secret-path")
+		if got := object["state"]; got != expectedState {
+			return fmt.Errorf("status object state = %v, want %s", got, expectedState)
+		}
+		if got := object["last_error_class"]; got != expectedErrorClass {
+			return fmt.Errorf("status object last_error_class = %v, want %s", got, expectedErrorClass)
 		}
 		return nil
 	})

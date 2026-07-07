@@ -45,14 +45,6 @@ const (
 	ConfigKeySessionName = "session_name"
 	// ConfigKeyWebIdentityTokenFile configures the projected OIDC token file for web-identity auth.
 	ConfigKeyWebIdentityTokenFile = "web_identity_token_file"
-	// ConfigKeyAccessKeyID configures the static AWS access key ID. Static auth is intentionally unsupported for now.
-	ConfigKeyAccessKeyID = "access_key_id"
-	// ConfigKeySecretAccessKey configures the static AWS secret access key.
-	// Static auth is intentionally unsupported for now.
-	ConfigKeySecretAccessKey = "secret_access_key"
-	// ConfigKeySessionToken configures the optional static AWS session token.
-	// Static auth is intentionally unsupported for now.
-	ConfigKeySessionToken = "session_token"
 	// ConfigKeyDeleteRecoveryWindowDays configures AWS Secrets Manager scheduled-delete recovery days.
 	ConfigKeyDeleteRecoveryWindowDays = "delete_recovery_window_days"
 	// ConfigKeyValueDriftDetection opts in to GetSecretValue-based drift checks.
@@ -64,8 +56,6 @@ const (
 	AuthModeAssumeRole = "assume_role"
 	// AuthModeWebIdentity uses an OIDC token file to call STS AssumeRoleWithWebIdentity.
 	AuthModeWebIdentity = "web_identity"
-	// AuthModeStatic is reserved for non-default static credential auth.
-	AuthModeStatic = "static"
 
 	// EndpointPolicyLocal allows development endpoints such as LocalStack.
 	EndpointPolicyLocal = "local"
@@ -506,9 +496,6 @@ type awsDestinationOptions struct {
 	externalID               string
 	sessionName              string
 	webIdentityTokenFile     string
-	accessKeyID              string
-	secretAccessKey          string
-	sessionToken             string
 	deleteRecoveryWindowDays int
 	valueDriftDetection      bool
 }
@@ -523,9 +510,6 @@ func awsDestinationOptionsFromConfig(cfg providers.DestinationConfig) (awsDestin
 		externalID:               configValue(cfg, ConfigKeyExternalID),
 		sessionName:              configValue(cfg, ConfigKeySessionName),
 		webIdentityTokenFile:     configValue(cfg, ConfigKeyWebIdentityTokenFile),
-		accessKeyID:              configValue(cfg, ConfigKeyAccessKeyID),
-		secretAccessKey:          configValue(cfg, ConfigKeySecretAccessKey),
-		sessionToken:             configValue(cfg, ConfigKeySessionToken),
 		deleteRecoveryWindowDays: defaultDeleteRecoveryWindowDays,
 	}
 	var err error
@@ -566,11 +550,9 @@ func validateAuthOptions(options awsDestinationOptions) error {
 		return validateAssumeRoleAuthOptions(options)
 	case AuthModeWebIdentity:
 		return validateWebIdentityAuthOptions(options)
-	case AuthModeStatic:
-		return validationError("aws-sm auth_mode static is not supported yet")
 	default:
 		return validationError(
-			"aws-sm auth_mode must be default, assume_role, web_identity, or static",
+			"aws-sm auth_mode must be default, assume_role, or web_identity",
 		)
 	}
 }
@@ -581,9 +563,6 @@ func validateDefaultAuthOptions(options awsDestinationOptions) error {
 		options.sessionName != "" ||
 		options.webIdentityTokenFile != "" {
 		return validationError("aws-sm auth fields require auth_mode assume_role or web_identity")
-	}
-	if options.hasStaticCredentials() {
-		return validationError("aws-sm static credential fields require auth_mode static")
 	}
 	return nil
 }
@@ -597,9 +576,6 @@ func validateAssumeRoleAuthOptions(options awsDestinationOptions) error {
 	}
 	if options.webIdentityTokenFile != "" {
 		return validationError("aws-sm web_identity_token_file requires auth_mode web_identity")
-	}
-	if options.hasStaticCredentials() {
-		return validationError("aws-sm static credential fields require auth_mode static")
 	}
 	return nil
 }
@@ -619,9 +595,6 @@ func validateWebIdentityAuthOptions(options awsDestinationOptions) error {
 	}
 	if options.externalID != "" {
 		return validationError("aws-sm external_id is only supported with auth_mode assume_role")
-	}
-	if options.hasStaticCredentials() {
-		return validationError("aws-sm static credential fields require auth_mode static")
 	}
 	return nil
 }
@@ -651,10 +624,6 @@ func boolConfigValue(cfg providers.DestinationConfig, key string, fallback bool)
 		return false, validationError("aws-sm " + key + " must be true or false")
 	}
 	return parsed, nil
-}
-
-func (options awsDestinationOptions) hasStaticCredentials() bool {
-	return options.accessKeyID != "" || options.secretAccessKey != "" || options.sessionToken != ""
 }
 
 func normalizedAuthMode(cfg providers.DestinationConfig) string {

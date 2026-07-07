@@ -74,25 +74,6 @@
   },
   "associations.write.create": {
     "data": {
-      "association": {
-        "created_time": "<timestamp>",
-        "data_key_template": "",
-        "data_mapping": "payload",
-        "delete_mode": "retain",
-        "destination": {
-          "name": "default",
-          "type": "fake"
-        },
-        "destination_ref": "fake/default",
-        "enabled": true,
-        "format": "json",
-        "granularity": "secret-path",
-        "id": "<association-id>",
-        "name_template": "{{ path }}",
-        "path": "app/db",
-        "resolved_name": "prod/app/db",
-        "updated_time": "<timestamp>"
-      },
       "association_id": "<association-id>",
       "data_key_template": "",
       "data_mapping": "payload",
@@ -376,14 +357,7 @@
         "retry_wait": 0,
         "terminal": 0,
         "utilization": 0
-      },
-      "queue_capacity": 10,
-      "queue_claimed": 0,
-      "queue_oldest_age_seconds": 0,
-      "queue_pending": 0,
-      "queue_retry_wait": 0,
-      "queue_terminal": 0,
-      "queue_utilization": 0
+      }
     }
   },
   "queue.operation.read": {
@@ -527,16 +501,6 @@
   },
   "status.read.synced": {
     "data": {
-      "association_id": "<association-id>",
-      "destination_ref": "fake/default",
-      "last_drift_detected_time": "",
-      "last_error": "",
-      "last_error_class": "",
-      "last_operation_id": "<operation-id>",
-      "last_reconcile_time": "",
-      "last_repair_time": "",
-      "last_success_time": "<timestamp>",
-      "object_id": "secret-path",
       "objects": [
         {
           "association_id": "<association-id>",
@@ -559,11 +523,7 @@
       ],
       "operation_ids": [],
       "path": "app/db",
-      "remote_version": "fake",
-      "repair_count": 0,
-      "resolved_name": "prod/app/db",
       "state": "SYNCED",
-      "verification": "",
       "version": 1
     }
   }

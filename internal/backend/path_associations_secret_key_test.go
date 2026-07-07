@@ -157,11 +157,10 @@ func TestAssociationGitLabSecretKeyRawFormat(t *testing.T) {
 	if got := operation.ObjectID; got != "APP_PASSWORD" {
 		t.Fatalf("gitlab object ID = %s, want APP_PASSWORD", got)
 	}
-	association := resp.Data["association"].(map[string]interface{})
-	if got := association["destination_ref"]; got != "gitlab/prod" {
+	if got := resp.Data["destination_ref"]; got != "gitlab/prod" {
 		t.Fatalf("gitlab destination_ref = %v, want gitlab/prod", got)
 	}
-	if got := association["format"]; got != rawAssociationFormat {
+	if got := resp.Data["format"]; got != rawAssociationFormat {
 		t.Fatalf("gitlab association format = %v, want %s", got, rawAssociationFormat)
 	}
 }

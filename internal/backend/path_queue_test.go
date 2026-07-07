@@ -207,7 +207,6 @@ func TestQueueDrainProcessesDueOperations(t *testing.T) {
 	})
 	assertNoErrorResponse(t, drainResp)
 	assertResponseValue(t, drainResp, "processed", 1)
-	assertResponseValue(t, drainResp, "queue_pending", 0)
 	queue := drainResp.Data["queue"].(map[string]interface{})
 	if got := queue["pending"]; got != 0 {
 		t.Fatalf("pending = %v, want 0", got)
@@ -244,7 +243,10 @@ func TestQueueDrainSkipsUnexpiredCurrentOwnerClaim(t *testing.T) {
 	})
 	assertNoErrorResponse(t, drainResp)
 	assertResponseValue(t, drainResp, "processed", 0)
-	assertResponseValue(t, drainResp, "queue_claimed", 1)
+	queue := drainResp.Data["queue"].(map[string]interface{})
+	if got := queue["claimed"]; got != 1 {
+		t.Fatalf("claimed = %v, want 1", got)
+	}
 	operation = assertOutboxOperation(t, env.storage, operationID, 1, outboxStatePending)
 	if operation.ClaimOwner != claimOwner {
 		t.Fatalf("claim_owner = %q, want %s", operation.ClaimOwner, claimOwner)
@@ -280,7 +282,10 @@ func TestQueueDrainResetsOtherOwnerClaim(t *testing.T) {
 	})
 	assertNoErrorResponse(t, drainResp)
 	assertResponseValue(t, drainResp, "processed", 1)
-	assertResponseValue(t, drainResp, "queue_claimed", 0)
+	queue := drainResp.Data["queue"].(map[string]interface{})
+	if got := queue["claimed"]; got != 0 {
+		t.Fatalf("claimed = %v, want 0", got)
+	}
 	assertOutboxMissing(t, env.storage, operationID)
 	assertStatusObjectState(t, env.b, env.storage, domain.SyncStateSynced)
 }

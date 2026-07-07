@@ -142,14 +142,7 @@ func TestValidateDestinationConfig(t *testing.T) {
 		{
 			name: "unsupported static auth",
 			config: map[string]string{
-				ConfigKeyAuthMode: AuthModeStatic,
-			},
-			errorClass: providers.ErrorClassValidation,
-		},
-		{
-			name: "static fields require static auth",
-			config: map[string]string{
-				ConfigKeyAccessKeyID: "AKIATEST",
+				ConfigKeyAuthMode: "static",
 			},
 			errorClass: providers.ErrorClassValidation,
 		},

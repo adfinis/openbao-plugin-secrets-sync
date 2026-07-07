@@ -24,9 +24,7 @@ func TestPeriodicProcessesFakeOutbox(t *testing.T) {
 	env.createFakeDestination("default")
 	associationResp := env.createDefaultFakeAssociation()
 	operationID := operationIDsFromResponse(t, associationResp)[0]
-	association := associationResp.Data["association"].(map[string]interface{})
-	associationID := association["id"]
-	assertResponseValue(t, associationResp, "association_id", associationID)
+	associationID := associationIDFromResponse(t, associationResp)
 	assertResponseValue(t, associationResp, "destination_ref", "fake/default")
 
 	env.runPeriodicAllowed("periodic")
@@ -38,9 +36,17 @@ func TestPeriodicProcessesFakeOutbox(t *testing.T) {
 	statusResp := env.read("status/app/db")
 	assertNoErrorResponse(t, statusResp)
 	assertResponseValue(t, statusResp, "state", string(domain.SyncStateSynced))
-	assertResponseValue(t, statusResp, "association_id", associationID)
-	assertResponseValue(t, statusResp, "destination_ref", "fake/default")
-	assertResponseValue(t, statusResp, "last_operation_id", operationID)
+	objects := objectsByIDFromRaw(t, statusResp.Data["objects"])
+	statusObject := objects[syncObjectIDSecretPath]
+	if got := statusObject["association_id"]; got != associationID {
+		t.Fatalf("status association_id = %v, want %v", got, associationID)
+	}
+	if got := statusObject["destination_ref"]; got != "fake/default" {
+		t.Fatalf("status destination_ref = %v, want fake/default", got)
+	}
+	if got := statusObject["last_operation_id"]; got != operationID {
+		t.Fatalf("status last_operation_id = %v, want %v", got, operationID)
+	}
 	assertSyncedStatusObject(t, statusResp.Data["objects"], operationID)
 
 	assertOutboxMissing(t, env.storage, operationID)

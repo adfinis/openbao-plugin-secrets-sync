@@ -1,6 +1,11 @@
 package backend
 
-import "testing"
+import (
+	"context"
+	"testing"
+
+	"github.com/openbao/openbao/sdk/v2/logical"
+)
 
 func TestInfoResponse(t *testing.T) {
 	env := newBackendTestEnv(t)
@@ -55,5 +60,43 @@ func TestInfoResponse(t *testing.T) {
 	}
 	if got := capabilities["max_payload_bytes"]; got != 1024*1024 {
 		t.Fatalf("fake max_payload_bytes = %v, want %d", got, 1024*1024)
+	}
+}
+
+func TestProductionInfoResponseOmitsFakeProvider(t *testing.T) {
+	b := Backend(&logical.BackendConfig{})
+	resp := handleRequest(t, b, &logical.InmemStorage{}, logical.ReadOperation, "info", nil)
+	assertNoErrorResponse(t, resp)
+
+	providers, ok := resp.Data["providers"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("providers = %T, want map", resp.Data["providers"])
+	}
+	for _, providerType := range []string{"aws-sm", "gitlab", "k8s"} {
+		if _, ok := providers[providerType]; !ok {
+			t.Fatalf("providers missing %s: %#v", providerType, providers)
+		}
+	}
+	if _, ok := providers["fake"]; ok {
+		t.Fatalf("production providers include fake: %#v", providers)
+	}
+}
+
+func TestProductionBackendRejectsFakeDestination(t *testing.T) {
+	b := Backend(&logical.BackendConfig{})
+	storage := &logical.InmemStorage{}
+	resp, err := b.HandleRequest(context.Background(), &logical.Request{
+		Operation: logical.UpdateOperation,
+		Path:      "destinations/fake/default",
+		Storage:   storage,
+		Data: map[string]interface{}{
+			"description": "test destination",
+		},
+	})
+	if err != nil {
+		t.Fatalf("write fake destination returned backend error: %v", err)
+	}
+	if resp == nil || !resp.IsError() {
+		t.Fatalf("write fake destination response = %#v, want error", resp)
 	}
 }
