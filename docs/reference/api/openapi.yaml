@@ -859,6 +859,7 @@ components:
       properties:
         errors:
           type: array
+          description: Error strings. Diagnostic errors include a CLI-readable hint and first next-action command.
           items:
             type: string
         data:

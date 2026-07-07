@@ -50,12 +50,23 @@ func diagnosticResponseFields(diagnostic diagnostic) []responseEntry {
 }
 
 func errorResponseWithDiagnostic(message string, diagnostic diagnostic) *logical.Response {
-	response := logical.ErrorResponse(message)
+	response := logical.ErrorResponse(cliVisibleDiagnosticError(message, diagnostic))
 	fields := diagnosticResponseFields(diagnostic)
 	if len(fields) > 0 {
 		response.Data["data"] = newResponseData(fields...)
 	}
 	return response
+}
+
+func cliVisibleDiagnosticError(message string, diagnostic diagnostic) string {
+	parts := []string{message}
+	if diagnostic.Hint != "" {
+		parts = append(parts, "Hint: "+diagnostic.Hint)
+	}
+	if len(diagnostic.NextActions) > 0 {
+		parts = append(parts, "Next action: "+diagnosticCommand(diagnostic.NextActions[0]))
+	}
+	return strings.Join(parts, "\n")
 }
 
 func errorResponseForOperationError(err error, mount string) *logical.Response {
