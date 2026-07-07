@@ -28,10 +28,16 @@ bao write secret-sync/destinations/gitlab/prod \
 `base_url` must include a host and must not include userinfo, query strings, or
 fragments. A path prefix is allowed and is kept before `/api/v4`.
 
-Non-local `http://` GitLab URLs are rejected by default. Localhost and loopback
-HTTP URLs are allowed for local development. For a non-local Docker or private
-test network that intentionally uses HTTP, set `allow_insecure_http=true`. Use
-HTTPS for production destinations.
+GitLab base URLs that target localhost, private addresses, link-local
+addresses, multicast, unspecified addresses, or DNS names that resolve to those
+ranges are rejected by default. Set `allow_private_network=true` only for an
+approved self-managed GitLab endpoint on a private or local network.
+
+Non-local `http://` GitLab URLs are rejected by default. For a non-local Docker
+or private test network that intentionally uses HTTP, set both
+`allow_private_network=true` and `allow_insecure_http=true`. Localhost HTTP is
+allowed only when `allow_private_network=true`. Use HTTPS for production
+destinations.
 
 The provider HTTP client uses a 30-second timeout, does not follow redirects,
 and does not use ambient proxy configuration from the OpenBao process

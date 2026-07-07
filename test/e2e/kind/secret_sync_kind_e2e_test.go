@@ -304,11 +304,12 @@ func writeKubernetesTokenDestination(
 ) {
 	t.Helper()
 	write(t, client, mountPath+"/destinations/k8s/"+name, map[string]interface{}{
-		kubernetessecrets.ConfigKeyNamespace: namespace,
-		kubernetessecrets.ConfigKeyAuthMode:  kubernetessecrets.AuthModeToken,
-		kubernetessecrets.ConfigKeyAPIServer: "https://kubernetes.default.svc",
-		kubernetessecrets.ConfigKeyCACertPEM: kubernetesRootCA(t, ctx, kubeClient, namespace),
-		kubernetessecrets.ConfigKeyToken:     serviceAccountToken(t, ctx, kubeClient, namespace),
+		kubernetessecrets.ConfigKeyNamespace:             namespace,
+		kubernetessecrets.ConfigKeyAuthMode:              kubernetessecrets.AuthModeToken,
+		kubernetessecrets.ConfigKeyAPIServer:             "https://kubernetes.default.svc",
+		kubernetessecrets.ConfigKeyAllowPrivateAPIServer: "true",
+		kubernetessecrets.ConfigKeyCACertPEM:             kubernetesRootCA(t, ctx, kubeClient, namespace),
+		kubernetessecrets.ConfigKeyToken:                 serviceAccountToken(t, ctx, kubeClient, namespace),
 	})
 }
 

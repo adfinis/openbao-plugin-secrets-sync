@@ -1097,6 +1097,10 @@ components:
           type: string
           format: uri
           description: Kubernetes API server URL for token auth.
+        allow_private_api_server:
+          type: boolean
+          default: false
+          description: Allow token-auth Kubernetes API server URLs on localhost, private, link-local, multicast, or unspecified networks.
         ca_cert_pem:
           type: string
           description: Optional Kubernetes API PEM CA bundle for token auth.
@@ -1131,6 +1135,10 @@ components:
         allow_insecure_http:
           type: boolean
           default: false
+        allow_private_network:
+          type: boolean
+          default: false
+          description: Allow GitLab base URLs on localhost, private, link-local, multicast, or unspecified networks.
         token:
           type: string
           writeOnly: true

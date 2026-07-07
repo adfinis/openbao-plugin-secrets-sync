@@ -410,13 +410,14 @@ func TestKubernetesTokenDestinationConfigLifecycle(t *testing.T) {
 	env := newBackendTestEnv(t)
 
 	writeResp := env.update("destinations/k8s/prod", map[string]interface{}{
-		"description":                            "kubernetes production",
-		kubernetessecrets.ConfigKeyNamespace:     "apps",
-		kubernetessecrets.ConfigKeyAuthMode:      kubernetessecrets.AuthModeToken,
-		kubernetessecrets.ConfigKeyAPIServer:     "https://kubernetes.example.com",
-		kubernetessecrets.ConfigKeyToken:         "bearer-token",
-		kubernetessecrets.ConfigKeyCACertPEM:     testKubernetesCACertPEM,
-		kubernetessecrets.ConfigKeyTLSServerName: "kubernetes.default.svc",
+		"description":                                    "kubernetes production",
+		kubernetessecrets.ConfigKeyNamespace:             "apps",
+		kubernetessecrets.ConfigKeyAuthMode:              kubernetessecrets.AuthModeToken,
+		kubernetessecrets.ConfigKeyAPIServer:             "https://kubernetes.example.com",
+		kubernetessecrets.ConfigKeyAllowPrivateAPIServer: "true",
+		kubernetessecrets.ConfigKeyToken:                 "bearer-token",
+		kubernetessecrets.ConfigKeyCACertPEM:             testKubernetesCACertPEM,
+		kubernetessecrets.ConfigKeyTLSServerName:         "kubernetes.default.svc",
 	})
 	if writeResp != nil && writeResp.IsError() {
 		t.Fatalf("unexpected destination write error: %v", writeResp.Error())
@@ -432,6 +433,7 @@ func TestKubernetesTokenDestinationConfigLifecycle(t *testing.T) {
 	if got := storedDestination.Config[kubernetessecrets.ConfigKeyAPIServer]; got != "https://kubernetes.example.com" {
 		t.Fatalf("k8s api_server = %v, want https://kubernetes.example.com", got)
 	}
+	assertStringMapValue(t, storedDestination.Config, kubernetessecrets.ConfigKeyAllowPrivateAPIServer, "true")
 
 	storedSensitiveConfig, err := getDestinationSensitiveConfig(
 		context.Background(),
@@ -453,6 +455,7 @@ func TestKubernetesTokenDestinationConfigLifecycle(t *testing.T) {
 		t.Fatal("k8s token must not be returned in config")
 	}
 	assertInterfaceMapValue(t, config, kubernetessecrets.ConfigKeyAPIServer, "https://kubernetes.example.com")
+	assertInterfaceMapValue(t, config, kubernetessecrets.ConfigKeyAllowPrivateAPIServer, "true")
 	sensitiveConfig := readResp.Data["sensitive_config"].(map[string]interface{})
 	if got := sensitiveConfig["configured"]; got != true {
 		t.Fatalf("k8s sensitive_config configured = %v, want true", got)
@@ -471,17 +474,18 @@ func TestGitLabDestinationConfigLifecycle(t *testing.T) {
 	env := newBackendTestEnv(t)
 
 	writeResp := env.update("destinations/gitlab/prod", map[string]interface{}{
-		"description":                     "gitlab production",
-		gitlab.ConfigKeyBaseURL:           "https://gitlab.example.com",
-		gitlab.ConfigKeyProjectID:         "platform/app",
-		gitlab.ConfigKeyEnvironmentScope:  "production",
-		gitlab.ConfigKeyProtected:         "true",
-		gitlab.ConfigKeyMasked:            "false",
-		gitlab.ConfigKeyHidden:            "false",
-		gitlab.ConfigKeyVariableRaw:       "true",
-		gitlab.ConfigKeyVariableType:      gitlab.VariableTypeEnvVar,
-		gitlab.ConfigKeyAllowInsecureHTTP: fmt.Sprint(true),
-		gitlab.ConfigKeyToken:             "glpat-secret",
+		"description":                       "gitlab production",
+		gitlab.ConfigKeyBaseURL:             "https://gitlab.example.com",
+		gitlab.ConfigKeyProjectID:           "platform/app",
+		gitlab.ConfigKeyEnvironmentScope:    "production",
+		gitlab.ConfigKeyProtected:           "true",
+		gitlab.ConfigKeyMasked:              "false",
+		gitlab.ConfigKeyHidden:              "false",
+		gitlab.ConfigKeyVariableRaw:         "true",
+		gitlab.ConfigKeyVariableType:        gitlab.VariableTypeEnvVar,
+		gitlab.ConfigKeyAllowInsecureHTTP:   fmt.Sprint(true),
+		gitlab.ConfigKeyAllowPrivateNetwork: fmt.Sprint(true),
+		gitlab.ConfigKeyToken:               "glpat-secret",
 	})
 	if writeResp != nil && writeResp.IsError() {
 		t.Fatalf("unexpected destination write error: %v", writeResp.Error())
@@ -498,6 +502,7 @@ func TestGitLabDestinationConfigLifecycle(t *testing.T) {
 		t.Fatalf("gitlab project_id = %v, want platform/app", got)
 	}
 	assertStringMapValue(t, storedDestination.Config, gitlab.ConfigKeyAllowInsecureHTTP, fmt.Sprint(true))
+	assertStringMapValue(t, storedDestination.Config, gitlab.ConfigKeyAllowPrivateNetwork, fmt.Sprint(true))
 	storedSensitiveConfig, err := getDestinationSensitiveConfig(
 		context.Background(),
 		env.storage,
@@ -518,6 +523,7 @@ func TestGitLabDestinationConfigLifecycle(t *testing.T) {
 		t.Fatal("gitlab token must not be returned in config")
 	}
 	assertInterfaceMapValue(t, config, gitlab.ConfigKeyAllowInsecureHTTP, fmt.Sprint(true))
+	assertInterfaceMapValue(t, config, gitlab.ConfigKeyAllowPrivateNetwork, fmt.Sprint(true))
 	sensitiveConfig := readResp.Data["sensitive_config"].(map[string]interface{})
 	if got := sensitiveConfig["configured"]; got != true {
 		t.Fatalf("gitlab sensitive_config configured = %v, want true", got)

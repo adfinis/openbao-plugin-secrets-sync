@@ -464,6 +464,8 @@ variable description, validates variable attributes and masked payloads,
 repairs value and attribute drift, supports owned update, owned delete, value
 readback, read-state, health checks, and HTTP error classification.
 
-Non-local `http://` GitLab base URLs are rejected by default and require
-`allow_insecure_http=true`, which is intended for local Docker or private test
-networks rather than production destinations.
+GitLab base URLs reject localhost, private, link-local, multicast, unspecified,
+and DNS-resolved private or local targets by default. Approved self-managed
+private endpoints require `allow_private_network=true`. Non-local `http://`
+GitLab base URLs also require `allow_insecure_http=true`, which is intended
+for local Docker or private test networks rather than production destinations.

@@ -40,10 +40,12 @@ var destinationConfigFieldKeys = []string{
 	gitlab.ConfigKeyVariableRaw,
 	gitlab.ConfigKeyVariableType,
 	gitlab.ConfigKeyAllowInsecureHTTP,
+	gitlab.ConfigKeyAllowPrivateNetwork,
 	kubernetessecrets.ConfigKeyNamespace,
 	kubernetessecrets.ConfigKeyKubeconfigPath,
 	kubernetessecrets.ConfigKeyKubeContext,
 	kubernetessecrets.ConfigKeyAPIServer,
+	kubernetessecrets.ConfigKeyAllowPrivateAPIServer,
 	kubernetessecrets.ConfigKeyCACertPEM,
 	kubernetessecrets.ConfigKeyTLSServerName,
 }
@@ -70,6 +72,7 @@ var destinationConfigFieldKeysByType = map[string][]string{
 		gitlab.ConfigKeyVariableRaw,
 		gitlab.ConfigKeyVariableType,
 		gitlab.ConfigKeyAllowInsecureHTTP,
+		gitlab.ConfigKeyAllowPrivateNetwork,
 	},
 	kubernetessecrets.ProviderType: {
 		kubernetessecrets.ConfigKeyNamespace,
@@ -77,6 +80,7 @@ var destinationConfigFieldKeysByType = map[string][]string{
 		kubernetessecrets.ConfigKeyKubeContext,
 		kubernetessecrets.ConfigKeyAuthMode,
 		kubernetessecrets.ConfigKeyAPIServer,
+		kubernetessecrets.ConfigKeyAllowPrivateAPIServer,
 		kubernetessecrets.ConfigKeyCACertPEM,
 		kubernetessecrets.ConfigKeyTLSServerName,
 	},
@@ -314,6 +318,11 @@ func destinationRequestFields() map[string]*framework.FieldSchema {
 		Description: "Allow non-local http GitLab base URLs for local Docker or private test networks. " +
 			"Defaults to false.",
 	}
+	fields[gitlab.ConfigKeyAllowPrivateNetwork] = &framework.FieldSchema{
+		Type: framework.TypeString,
+		Description: "Allow GitLab base URLs that target localhost, private, link-local, multicast, " +
+			"or unspecified networks. Defaults to false.",
+	}
 	fields[gitlab.ConfigKeyToken] = &framework.FieldSchema{
 		Type: framework.TypeString,
 		Description: "Provider API token. GitLab uses this for project variable management; " +
@@ -338,6 +347,11 @@ func destinationRequestFields() map[string]*framework.FieldSchema {
 	fields[kubernetessecrets.ConfigKeyAPIServer] = &framework.FieldSchema{
 		Type:        framework.TypeString,
 		Description: "Kubernetes API server URL for k8s destinations using auth_mode token.",
+	}
+	fields[kubernetessecrets.ConfigKeyAllowPrivateAPIServer] = &framework.FieldSchema{
+		Type: framework.TypeString,
+		Description: "Allow token auth api_server values that target localhost, private, link-local, " +
+			"multicast, or unspecified networks. Defaults to false.",
 	}
 	fields[kubernetessecrets.ConfigKeyCACertPEM] = &framework.FieldSchema{
 		Type:        framework.TypeString,
