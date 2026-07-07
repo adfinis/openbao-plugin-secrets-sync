@@ -122,6 +122,10 @@ still blocks remote mutation and provider read-state.
 - Queue, status, plan, and reconcile responses can include versions,
   destination names, verification markers, and remote object identifiers, but
   not source values.
+- Non-payload metadata, including source paths, resolved remote names, and
+  Kubernetes data-map key names, can appear in validation and diagnostic
+  responses. Grant plan, reconcile, status, and association read access only to
+  roles that may inspect that metadata.
 - Durable status records can include payload hashes for comparison and drift
   tracking, but payload hashes are not telemetry labels.
 - Tests include canary secret values and assert they do not appear in
@@ -142,6 +146,11 @@ seal-wrapped storage prefixes.
   web-identity auth. Assume-role `external_id` is stored in seal-wrapped
   sensitive config. Web-identity token contents are not stored by the backend;
   the configured token file must be mounted for the plugin process.
+- `web_identity_token_file` and Kubernetes `kubeconfig_path` are public
+  destination config file paths. A caller with `destinations/*` write access can
+  point the plugin process at files that the process can read; contents are not
+  stored or echoed by the backend. Treat destination write access as trusted
+  platform-operator authority over these runtime file inputs.
 - Static access keys and session tokens are recognized as sensitive fields but
   intentionally remain unsupported auth material.
 - GitLab API tokens and Kubernetes bearer tokens are stored in seal-wrapped
@@ -229,7 +238,9 @@ Delete behavior:
 
 OpenBao audit devices capture requests to plugin paths according to normal
 OpenBao audit behavior. The plugin does not add secret values to responses
-beyond the explicit `data/*` read path.
+beyond the explicit `data/*` read path. Requests that write `data/<path>` still
+flow through OpenBao audit devices like other secret-engine writes; configure
+and rotate audit HMAC keys according to the deployment's OpenBao audit policy.
 
 For remote operations, the plugin persists and logs correlation metadata:
 

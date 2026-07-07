@@ -39,7 +39,9 @@ bao write secret-sync/destinations/aws-sm/prod \
 `web_identity_token_file` must be an absolute path readable by the OpenBao
 plugin process. `external_id` is not supported with `web_identity`; use
 `assume_role` when an external ID is required. Role chaining from web identity
-into a second role is intentionally not part of the initial auth surface.
+into a second role is intentionally not part of the initial auth surface. A
+caller with `destinations/*` write access controls this file path; keep that
+capability limited to trusted platform operators.
 
 Static AWS access keys and session tokens are recognized as sensitive fields
 but are not supported auth material. Use workload identity, the AWS SDK default
@@ -108,7 +110,8 @@ them on destination reads.
 
 `web_identity_token_file` stores only the token file path as public destination
 configuration. The OIDC token contents remain on disk and are read by the AWS
-SDK credential provider at runtime.
+SDK credential provider at runtime. The backend does not store or echo the file
+contents.
 
 `access_key_id`, `secret_access_key`, and `session_token` are rejected as auth
 material because static AWS auth is not supported.
