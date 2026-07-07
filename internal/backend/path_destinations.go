@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -248,12 +249,12 @@ func destinationRequestFields() map[string]*framework.FieldSchema {
 			"The file must be readable by the OpenBao plugin process.",
 	}
 	fields[awssecretsmanager.ConfigKeyDeleteRecoveryWindowDays] = &framework.FieldSchema{
-		Type: framework.TypeString,
+		Type: framework.TypeInt,
 		Description: "AWS Secrets Manager scheduled-delete recovery window in days for aws-sm destinations. " +
 			"Defaults to 7; AWS accepts 7 through 30.",
 	}
 	fields[awssecretsmanager.ConfigKeyValueDriftDetection] = &framework.FieldSchema{
-		Type: framework.TypeString,
+		Type: framework.TypeBool,
 		Description: "Opt in to AWS GetSecretValue checks for explicit plan, upsert, and read-state " +
 			"value drift detection. Defaults to false.",
 	}
@@ -270,19 +271,19 @@ func destinationRequestFields() map[string]*framework.FieldSchema {
 		Description: "GitLab variable environment scope. Defaults to *.",
 	}
 	fields[gitlab.ConfigKeyProtected] = &framework.FieldSchema{
-		Type:        framework.TypeString,
+		Type:        framework.TypeBool,
 		Description: "GitLab protected variable flag: true or false.",
 	}
 	fields[gitlab.ConfigKeyMasked] = &framework.FieldSchema{
-		Type:        framework.TypeString,
+		Type:        framework.TypeBool,
 		Description: "GitLab masked variable flag: true or false.",
 	}
 	fields[gitlab.ConfigKeyHidden] = &framework.FieldSchema{
-		Type:        framework.TypeString,
+		Type:        framework.TypeBool,
 		Description: "GitLab hidden variable flag: true or false. Hidden variables are sent as masked_and_hidden.",
 	}
 	fields[gitlab.ConfigKeyVariableRaw] = &framework.FieldSchema{
-		Type:        framework.TypeString,
+		Type:        framework.TypeBool,
 		Description: "GitLab raw variable flag controlling variable reference expansion: true or false.",
 	}
 	fields[gitlab.ConfigKeyVariableType] = &framework.FieldSchema{
@@ -290,12 +291,12 @@ func destinationRequestFields() map[string]*framework.FieldSchema {
 		Description: "GitLab variable type: env_var or file.",
 	}
 	fields[gitlab.ConfigKeyAllowInsecureHTTP] = &framework.FieldSchema{
-		Type: framework.TypeString,
+		Type: framework.TypeBool,
 		Description: "Allow non-local http GitLab base URLs for local Docker or private test networks. " +
 			"Defaults to false.",
 	}
 	fields[gitlab.ConfigKeyAllowPrivateNetwork] = &framework.FieldSchema{
-		Type: framework.TypeString,
+		Type: framework.TypeBool,
 		Description: "Allow GitLab base URLs that target localhost, private, link-local, multicast, " +
 			"or unspecified networks. Defaults to false.",
 	}
@@ -325,7 +326,7 @@ func destinationRequestFields() map[string]*framework.FieldSchema {
 		Description: "Kubernetes API server URL for k8s destinations using auth_mode token.",
 	}
 	fields[kubernetessecrets.ConfigKeyAllowPrivateAPIServer] = &framework.FieldSchema{
-		Type: framework.TypeString,
+		Type: framework.TypeBool,
 		Description: "Allow token auth api_server values that target localhost, private, link-local, " +
 			"multicast, or unspecified networks. Defaults to false.",
 	}
@@ -901,7 +902,10 @@ func destinationConfigMapFromFieldData(
 		if !ok {
 			continue
 		}
-		stringValue := strings.TrimSpace(value.(string))
+		stringValue, err := destinationConfigStringValue(value)
+		if err != nil {
+			return nil, fmt.Errorf("%s: %w", key, err)
+		}
 		if _, allowed := allowedKeys[key]; !allowed {
 			if stringValue == "" {
 				continue
@@ -915,6 +919,21 @@ func destinationConfigMapFromFieldData(
 		config[key] = stringValue
 	}
 	return config, nil
+}
+
+func destinationConfigStringValue(value interface{}) (string, error) {
+	switch typed := value.(type) {
+	case string:
+		return strings.TrimSpace(typed), nil
+	case bool:
+		return strconv.FormatBool(typed), nil
+	case int:
+		return strconv.Itoa(typed), nil
+	case int64:
+		return strconv.FormatInt(typed, 10), nil
+	default:
+		return "", fmt.Errorf("unsupported destination config value type %T", value)
+	}
 }
 
 func destinationConfigFieldKeysForType(destinationType string) []string {

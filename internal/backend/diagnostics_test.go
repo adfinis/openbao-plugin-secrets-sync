@@ -27,3 +27,20 @@ func TestErrorResponseWithDiagnosticPreservesOpenBaoErrorShape(t *testing.T) {
 	assertHintContains(t, data, "Queue capacity is exhausted")
 	assertNextActionCommand(t, data, "read_queue", "bao read secret-sync/queue")
 }
+
+func TestDestinationHealthDiagnosticUsesReadCommand(t *testing.T) {
+	diagnostic := destinationFailureDiagnostic(
+		"secret-sync",
+		"aws-sm/prod",
+		"",
+		"Destination is unavailable. Check destination health.",
+	)
+	data := newResponseData(diagnosticResponseFields(diagnostic)...)
+
+	assertNextActionCommand(
+		t,
+		data,
+		"check_destination_health",
+		"bao read secret-sync/destinations/aws-sm/prod/health",
+	)
+}

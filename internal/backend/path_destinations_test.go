@@ -308,7 +308,7 @@ func TestAWSDestinationConfigLifecycle(t *testing.T) {
 		awssecretsmanager.ConfigKeyRoleARN:                  "arn:aws:iam::123456789012:role/openbao-plugin-secrets-sync",
 		awssecretsmanager.ConfigKeyExternalID:               "tenant-1",
 		awssecretsmanager.ConfigKeySessionName:              "openbao-sync",
-		awssecretsmanager.ConfigKeyDeleteRecoveryWindowDays: "14",
+		awssecretsmanager.ConfigKeyDeleteRecoveryWindowDays: 14,
 	})
 	if writeResp != nil && writeResp.IsError() {
 		t.Fatalf("unexpected destination write error: %v", writeResp.Error())
@@ -448,7 +448,7 @@ func TestKubernetesTokenDestinationConfigLifecycle(t *testing.T) {
 		kubernetessecrets.ConfigKeyNamespace:             "apps",
 		kubernetessecrets.ConfigKeyAuthMode:              kubernetessecrets.AuthModeToken,
 		kubernetessecrets.ConfigKeyAPIServer:             "https://kubernetes.example.com",
-		kubernetessecrets.ConfigKeyAllowPrivateAPIServer: "true",
+		kubernetessecrets.ConfigKeyAllowPrivateAPIServer: true,
 		kubernetessecrets.ConfigKeyToken:                 "bearer-token",
 		kubernetessecrets.ConfigKeyCACertPEM:             testKubernetesCACertPEM,
 		kubernetessecrets.ConfigKeyTLSServerName:         "kubernetes.default.svc",
@@ -512,13 +512,13 @@ func TestGitLabDestinationConfigLifecycle(t *testing.T) {
 		gitlab.ConfigKeyBaseURL:             "https://gitlab.example.com",
 		gitlab.ConfigKeyProjectID:           "platform/app",
 		gitlab.ConfigKeyEnvironmentScope:    "production",
-		gitlab.ConfigKeyProtected:           "true",
-		gitlab.ConfigKeyMasked:              "false",
-		gitlab.ConfigKeyHidden:              "false",
-		gitlab.ConfigKeyVariableRaw:         "true",
+		gitlab.ConfigKeyProtected:           true,
+		gitlab.ConfigKeyMasked:              false,
+		gitlab.ConfigKeyHidden:              false,
+		gitlab.ConfigKeyVariableRaw:         true,
 		gitlab.ConfigKeyVariableType:        gitlab.VariableTypeEnvVar,
-		gitlab.ConfigKeyAllowInsecureHTTP:   fmt.Sprint(true),
-		gitlab.ConfigKeyAllowPrivateNetwork: fmt.Sprint(true),
+		gitlab.ConfigKeyAllowInsecureHTTP:   true,
+		gitlab.ConfigKeyAllowPrivateNetwork: true,
 		gitlab.ConfigKeyToken:               "glpat-secret",
 	})
 	if writeResp != nil && writeResp.IsError() {

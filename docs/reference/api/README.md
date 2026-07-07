@@ -8,6 +8,10 @@ plugin.
   to `/v1/secret-sync`.
 
 The OpenAPI spec is intentionally a design and inspection aid while the plugin
-is pre-release. Use it to review path shape, field names, defaults, response
-structure, and error classes before the API is treated as stable. Use
+is pre-release. It is not the source of truth for backend behavior. Backend
+path schemas, provider validation, and the API golden responses are the freeze
+evidence until this artifact is generated or mechanically validated.
+
+Use it to review path shape, field names, defaults, response structure, and
+error classes before the API is treated as stable. Use
 [API surface](../api-surface.md) for the user-facing API group summary.

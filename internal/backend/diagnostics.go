@@ -413,7 +413,7 @@ func readDestinationAction(mount, destinationRef string) diagnosticAction {
 func destinationHealthAction(mount, destinationRef string) diagnosticAction {
 	return diagnosticAction{
 		Action:    "check_destination_health",
-		Operation: "write",
+		Operation: "read",
 		Path:      fmt.Sprintf("destinations/%s/health", destinationRef),
 		Mount:     mount,
 	}
