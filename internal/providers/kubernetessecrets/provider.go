@@ -16,6 +16,7 @@ import (
 
 	payloadpkg "github.com/adfinis/openbao-plugin-secrets-sync/internal/payload"
 	"github.com/adfinis/openbao-plugin-secrets-sync/internal/providers"
+	"github.com/adfinis/openbao-plugin-secrets-sync/internal/providers/endpointguard"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -40,6 +41,8 @@ const (
 	ConfigKeyKubeContext = "context"
 	// ConfigKeyAPIServer configures the Kubernetes API server for token auth.
 	ConfigKeyAPIServer = "api_server"
+	// ConfigKeyAllowPrivateAPIServer allows token auth api_server on local or private networks.
+	ConfigKeyAllowPrivateAPIServer = "allow_private_api_server"
 	// ConfigKeyToken configures the Kubernetes bearer token for token auth.
 	ConfigKeyToken = "token"
 	// ConfigKeyCACertPEM configures the Kubernetes API CA bundle for token auth.
@@ -316,8 +319,16 @@ func (p Provider) clientFor(ctx context.Context, cfg providers.DestinationConfig
 }
 
 func defaultClientFactory(
-	_ context.Context,
+	ctx context.Context,
 	providerConfig providers.DestinationConfig,
+) (kubernetes.Interface, error) {
+	return defaultClientFactoryWithResolver(ctx, providerConfig, nil)
+}
+
+func defaultClientFactoryWithResolver(
+	ctx context.Context,
+	providerConfig providers.DestinationConfig,
+	resolver endpointguard.Resolver,
 ) (kubernetes.Interface, error) {
 	options, err := kubernetesDestinationOptionsFromConfig(providerConfig)
 	if err != nil {
@@ -335,6 +346,9 @@ func defaultClientFactory(
 			overrides,
 		).ClientConfig()
 	case AuthModeToken:
+		if err := validateAPIServerResolution(ctx, options, resolver); err != nil {
+			return nil, err
+		}
 		restConfig = restConfigForToken(options)
 	default:
 		err = validationError("k8s auth_mode must be in_cluster, kubeconfig, or token")
@@ -346,28 +360,35 @@ func defaultClientFactory(
 }
 
 type kubernetesDestinationOptions struct {
-	namespace      string
-	authMode       string
-	kubeconfigPath string
-	kubeContext    string
-	apiServer      string
-	token          string
-	caCertPEM      string
-	tlsServerName  string
+	namespace       string
+	authMode        string
+	kubeconfigPath  string
+	kubeContext     string
+	apiServer       string
+	allowPrivateAPI bool
+	allowPrivateSet bool
+	token           string
+	caCertPEM       string
+	tlsServerName   string
 }
 
 func kubernetesDestinationOptionsFromConfig(
 	cfg providers.DestinationConfig,
 ) (kubernetesDestinationOptions, error) {
 	options := kubernetesDestinationOptions{
-		namespace:      configValue(cfg, ConfigKeyNamespace),
-		authMode:       normalizedAuthMode(cfg),
-		kubeconfigPath: configValue(cfg, ConfigKeyKubeconfigPath),
-		kubeContext:    configValue(cfg, ConfigKeyKubeContext),
-		apiServer:      configValue(cfg, ConfigKeyAPIServer),
-		token:          configValue(cfg, ConfigKeyToken),
-		caCertPEM:      configValue(cfg, ConfigKeyCACertPEM),
-		tlsServerName:  configValue(cfg, ConfigKeyTLSServerName),
+		namespace:       configValue(cfg, ConfigKeyNamespace),
+		authMode:        normalizedAuthMode(cfg),
+		kubeconfigPath:  configValue(cfg, ConfigKeyKubeconfigPath),
+		kubeContext:     configValue(cfg, ConfigKeyKubeContext),
+		apiServer:       configValue(cfg, ConfigKeyAPIServer),
+		allowPrivateSet: configValue(cfg, ConfigKeyAllowPrivateAPIServer) != "",
+		token:           configValue(cfg, ConfigKeyToken),
+		caCertPEM:       configValue(cfg, ConfigKeyCACertPEM),
+		tlsServerName:   configValue(cfg, ConfigKeyTLSServerName),
+	}
+	var err error
+	if options.allowPrivateAPI, err = boolConfigValue(cfg, ConfigKeyAllowPrivateAPIServer, false); err != nil {
+		return kubernetesDestinationOptions{}, err
 	}
 	if cfg.Name == "" {
 		return kubernetesDestinationOptions{}, validationError("k8s destination name must not be empty")
@@ -418,7 +439,7 @@ func (options kubernetesDestinationOptions) validateTokenAuth() error {
 	if options.apiServer == "" {
 		return validationError("k8s auth_mode token requires api_server")
 	}
-	if err := validateAPIServer(options.apiServer); err != nil {
+	if err := validateAPIServer(options.apiServer, options.allowPrivateAPI); err != nil {
 		return err
 	}
 	if options.token == "" {
@@ -443,6 +464,7 @@ func normalizedAuthMode(cfg providers.DestinationConfig) string {
 
 func (options kubernetesDestinationOptions) hasTokenAuthConfig() bool {
 	return options.apiServer != "" ||
+		options.allowPrivateSet ||
 		options.token != "" ||
 		options.caCertPEM != "" ||
 		options.tlsServerName != ""
@@ -466,6 +488,18 @@ func configValue(cfg providers.DestinationConfig, key string) string {
 	return strings.TrimSpace(cfg.Config[key])
 }
 
+func boolConfigValue(cfg providers.DestinationConfig, key string, fallback bool) (bool, error) {
+	value := configValue(cfg, key)
+	if value == "" {
+		return fallback, nil
+	}
+	parsed, err := strconv.ParseBool(value)
+	if err != nil {
+		return false, validationError(fmt.Sprintf("k8s %s must be true or false", key))
+	}
+	return parsed, nil
+}
+
 func validateNamespace(namespace string) error {
 	if namespace == "" {
 		return validationError("k8s namespace must not be empty")
@@ -476,13 +510,65 @@ func validateNamespace(namespace string) error {
 	return nil
 }
 
-func validateAPIServer(apiServer string) error {
+func validateAPIServer(apiServer string, allowPrivateAPI bool) error {
 	parsed, err := url.Parse(apiServer)
 	if err != nil || parsed.Scheme == "" || parsed.Host == "" {
 		return validationError("k8s api_server must be an absolute URL")
 	}
 	if parsed.Scheme != "https" {
 		return validationError("k8s api_server must use https")
+	}
+	host := endpointguard.NormalizeHost(parsed.Hostname())
+	if host == "" {
+		return validationError("k8s api_server must include a host")
+	}
+	if !allowPrivateAPI && endpointguard.IsRestrictedHost(host) {
+		return validationError(
+			"k8s api_server requires allow_private_api_server=true for localhost, private, link-local, " +
+				"multicast, or unspecified hosts",
+		)
+	}
+	return nil
+}
+
+func validateAPIServerResolution(
+	ctx context.Context,
+	options kubernetesDestinationOptions,
+	resolver endpointguard.Resolver,
+) error {
+	if options.authMode != AuthModeToken || options.allowPrivateAPI {
+		return nil
+	}
+	parsed, err := url.Parse(options.apiServer)
+	if err != nil {
+		return validationError("k8s api_server must be an absolute URL")
+	}
+	host := endpointguard.NormalizeHost(parsed.Hostname())
+	if host == "" {
+		return validationError("k8s api_server must include a host")
+	}
+	if _, ok := endpointguard.ParseAddr(host); ok {
+		return nil
+	}
+	addrs, err := endpointguard.LookupNetIP(ctx, host, resolver)
+	if err != nil {
+		return &providers.Error{
+			Class:   providers.ErrorClassUnavailable,
+			Message: "k8s api_server DNS lookup failed",
+		}
+	}
+	if len(addrs) == 0 {
+		return &providers.Error{
+			Class:   providers.ErrorClassUnavailable,
+			Message: "k8s api_server DNS lookup returned no addresses",
+		}
+	}
+	for _, addr := range addrs {
+		if endpointguard.IsRestrictedAddr(addr) {
+			return validationError(
+				"k8s api_server DNS must not resolve to localhost, private, link-local, multicast, or unspecified addresses",
+			)
+		}
 	}
 	return nil
 }

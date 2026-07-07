@@ -40,6 +40,12 @@ bao write secret-sync/destinations/k8s/apps \
 trust store. Set `tls_server_name` when the API endpoint name and certificate
 name differ.
 
+Token-auth `api_server` values that target localhost, private addresses,
+link-local addresses, multicast, unspecified addresses, or DNS names that
+resolve to those ranges are rejected by default. Set
+`allow_private_api_server=true` only for an approved internal Kubernetes API
+endpoint. In-cluster and kubeconfig auth do not use this field.
+
 Validation is strict about mixing auth fields:
 
 - `namespace` must be a valid DNS-1123 Kubernetes namespace label.
@@ -47,6 +53,8 @@ Validation is strict about mixing auth fields:
 - Kubeconfig auth requires `kubeconfig_path` and rejects token fields.
 - Token auth requires `api_server` and `token`, and rejects kubeconfig fields.
 - Token auth requires an HTTPS `api_server`.
+- Token auth requires `allow_private_api_server=true` for private or local
+  `api_server` hosts.
 - `ca_cert_pem`, when set, must contain at least one PEM certificate.
 
 ## Sensitive fields

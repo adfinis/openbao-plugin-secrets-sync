@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"net/netip"
 	"strconv"
 	"testing"
 
@@ -194,6 +195,46 @@ func TestValidateDestinationConfig(t *testing.T) {
 			},
 		},
 		{
+			name: "token private api server rejected without opt in",
+			config: map[string]string{
+				ConfigKeyNamespace: testNamespace,
+				ConfigKeyAuthMode:  AuthModeToken,
+				ConfigKeyAPIServer: "https://10.0.0.10",
+				ConfigKeyToken:     "bearer-token",
+			},
+			errorClass: providers.ErrorClassValidation,
+		},
+		{
+			name: "token private api server with explicit opt in",
+			config: map[string]string{
+				ConfigKeyNamespace:             testNamespace,
+				ConfigKeyAuthMode:              AuthModeToken,
+				ConfigKeyAPIServer:             "https://10.0.0.10",
+				ConfigKeyAllowPrivateAPIServer: "true",
+				ConfigKeyToken:                 "bearer-token",
+			},
+		},
+		{
+			name: "in cluster rejects private api server opt in",
+			config: map[string]string{
+				ConfigKeyNamespace:             testNamespace,
+				ConfigKeyAuthMode:              AuthModeInCluster,
+				ConfigKeyAllowPrivateAPIServer: "true",
+			},
+			errorClass: providers.ErrorClassValidation,
+		},
+		{
+			name: "invalid private api server opt in",
+			config: map[string]string{
+				ConfigKeyNamespace:             testNamespace,
+				ConfigKeyAuthMode:              AuthModeToken,
+				ConfigKeyAPIServer:             "https://kubernetes.example.com",
+				ConfigKeyToken:                 "bearer-token",
+				ConfigKeyAllowPrivateAPIServer: "sometimes",
+			},
+			errorClass: providers.ErrorClassValidation,
+		},
+		{
 			name:       "missing namespace",
 			config:     map[string]string{},
 			errorClass: providers.ErrorClassValidation,
@@ -300,6 +341,80 @@ func TestValidateDestinationConfig(t *testing.T) {
 			if tt.errorClass == "" {
 				if err != nil {
 					t.Fatalf("validate: %v", err)
+				}
+				return
+			}
+			assertProviderErrorClass(t, err, tt.errorClass)
+		})
+	}
+}
+
+func TestValidateAPIServerResolution(t *testing.T) {
+	tests := []struct {
+		name       string
+		overrides  map[string]string
+		resolve    func(context.Context, string, string) ([]netip.Addr, error)
+		errorClass providers.ErrorClass
+	}{
+		{
+			name: "public DNS allowed",
+			resolve: func(context.Context, string, string) ([]netip.Addr, error) {
+				return []netip.Addr{netip.MustParseAddr("203.0.113.10")}, nil
+			},
+		},
+		{
+			name: "private DNS rejected",
+			resolve: func(context.Context, string, string) ([]netip.Addr, error) {
+				return []netip.Addr{netip.MustParseAddr("10.0.0.10")}, nil
+			},
+			errorClass: providers.ErrorClassValidation,
+		},
+		{
+			name: "link local DNS rejected",
+			resolve: func(context.Context, string, string) ([]netip.Addr, error) {
+				return []netip.Addr{netip.MustParseAddr("169.254.169.254")}, nil
+			},
+			errorClass: providers.ErrorClassValidation,
+		},
+		{
+			name: "DNS error unavailable",
+			resolve: func(context.Context, string, string) ([]netip.Addr, error) {
+				return nil, errors.New("lookup failed")
+			},
+			errorClass: providers.ErrorClassUnavailable,
+		},
+		{
+			name: "private opt in skips DNS guard",
+			overrides: map[string]string{
+				ConfigKeyAllowPrivateAPIServer: "true",
+			},
+			resolve: func(context.Context, string, string) ([]netip.Addr, error) {
+				return []netip.Addr{netip.MustParseAddr("127.0.0.1")}, nil
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			config := map[string]string{
+				ConfigKeyNamespace: testNamespace,
+				ConfigKeyAuthMode:  AuthModeToken,
+				ConfigKeyAPIServer: "https://kubernetes.example.com",
+				ConfigKeyToken:     "bearer-token",
+			}
+			for key, value := range tt.overrides {
+				config[key] = value
+			}
+			options, err := kubernetesDestinationOptionsFromConfig(providers.DestinationConfig{
+				Name:   testDestinationName,
+				Config: config,
+			})
+			if err != nil {
+				t.Fatalf("options from config: %v", err)
+			}
+			err = validateAPIServerResolution(context.Background(), options, tt.resolve)
+			if tt.errorClass == "" {
+				if err != nil {
+					t.Fatalf("validate api server resolution: %v", err)
 				}
 				return
 			}

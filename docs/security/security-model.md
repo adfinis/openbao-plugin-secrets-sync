@@ -165,6 +165,12 @@ validated:
 - AWS private custom endpoints are rechecked at client creation time and DNS
   answers resolving to loopback, link-local, multicast, or unspecified
   addresses are rejected;
+- GitLab `base_url` rejects localhost, private, link-local, multicast, and
+  unspecified hosts by default, and rechecks DNS answers at client creation
+  time unless `allow_private_network=true` is set;
+- Kubernetes token-auth `api_server` rejects localhost, private, link-local,
+  multicast, and unspecified hosts by default, and rechecks DNS answers at
+  client creation time unless `allow_private_api_server=true` is set;
 - optional explicit allowlists are still required for hardened private endpoint
   deployments;
 - AWS and GitLab provider-owned HTTP clients do not inherit ambient proxy

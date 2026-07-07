@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"net/netip"
 	"net/url"
 	"strings"
 	"testing"
@@ -152,10 +153,47 @@ func TestValidateDestinationConfig(t *testing.T) {
 		{
 			name: "local http",
 			config: map[string]string{
+				ConfigKeyBaseURL:             "http://127.0.0.1:8080",
+				ConfigKeyProjectID:           testProjectID,
+				ConfigKeyToken:               testToken,
+				ConfigKeyAllowPrivateNetwork: testBoolTrue,
+			},
+		},
+		{
+			name: "local http rejects implicit private network",
+			config: map[string]string{
 				ConfigKeyBaseURL:   "http://127.0.0.1:8080",
 				ConfigKeyProjectID: testProjectID,
 				ConfigKeyToken:     testToken,
 			},
+			errorClass: providers.ErrorClassValidation,
+		},
+		{
+			name: "private https rejects implicit private network",
+			config: map[string]string{
+				ConfigKeyBaseURL:   "https://10.0.0.10",
+				ConfigKeyProjectID: testProjectID,
+				ConfigKeyToken:     testToken,
+			},
+			errorClass: providers.ErrorClassValidation,
+		},
+		{
+			name: "private https with explicit private network opt in",
+			config: map[string]string{
+				ConfigKeyBaseURL:             "https://10.0.0.10",
+				ConfigKeyProjectID:           testProjectID,
+				ConfigKeyToken:               testToken,
+				ConfigKeyAllowPrivateNetwork: testBoolTrue,
+			},
+		},
+		{
+			name: "invalid private network opt in",
+			config: map[string]string{
+				ConfigKeyProjectID:           testProjectID,
+				ConfigKeyToken:               testToken,
+				ConfigKeyAllowPrivateNetwork: "sometimes",
+			},
+			errorClass: providers.ErrorClassValidation,
 		},
 		{
 			name: "options",
@@ -236,6 +274,75 @@ func TestValidateDestinationConfig(t *testing.T) {
 				Name:   testDestinationName,
 				Config: tt.config,
 			})
+			assertProviderErrorClass(t, err, tt.errorClass)
+		})
+	}
+}
+
+func TestValidateBaseURLResolution(t *testing.T) {
+	tests := []struct {
+		name       string
+		overrides  map[string]string
+		resolve    func(context.Context, string, string) ([]netip.Addr, error)
+		errorClass providers.ErrorClass
+	}{
+		{
+			name: "public DNS allowed",
+			overrides: map[string]string{
+				ConfigKeyBaseURL: "https://gitlab.example.com",
+			},
+			resolve: func(context.Context, string, string) ([]netip.Addr, error) {
+				return []netip.Addr{netip.MustParseAddr("203.0.113.10")}, nil
+			},
+		},
+		{
+			name: "private DNS rejected",
+			overrides: map[string]string{
+				ConfigKeyBaseURL: "https://gitlab.example.com",
+			},
+			resolve: func(context.Context, string, string) ([]netip.Addr, error) {
+				return []netip.Addr{netip.MustParseAddr("10.0.0.10")}, nil
+			},
+			errorClass: providers.ErrorClassValidation,
+		},
+		{
+			name: "loopback DNS rejected",
+			overrides: map[string]string{
+				ConfigKeyBaseURL: "https://gitlab.example.com",
+			},
+			resolve: func(context.Context, string, string) ([]netip.Addr, error) {
+				return []netip.Addr{netip.MustParseAddr("127.0.0.1")}, nil
+			},
+			errorClass: providers.ErrorClassValidation,
+		},
+		{
+			name: "DNS error unavailable",
+			overrides: map[string]string{
+				ConfigKeyBaseURL: "https://gitlab.example.com",
+			},
+			resolve: func(context.Context, string, string) ([]netip.Addr, error) {
+				return nil, errors.New("lookup failed")
+			},
+			errorClass: providers.ErrorClassUnavailable,
+		},
+		{
+			name: "private opt in skips DNS guard",
+			overrides: map[string]string{
+				ConfigKeyBaseURL:             "https://gitlab.example.com",
+				ConfigKeyAllowPrivateNetwork: testBoolTrue,
+			},
+			resolve: func(context.Context, string, string) ([]netip.Addr, error) {
+				return []netip.Addr{netip.MustParseAddr("127.0.0.1")}, nil
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			options, err := gitlabDestinationOptionsFromConfig(destinationConfigWith(tt.overrides))
+			if err != nil {
+				t.Fatalf("options from config: %v", err)
+			}
+			err = validateBaseURLResolution(context.Background(), options, tt.resolve)
 			assertProviderErrorClass(t, err, tt.errorClass)
 		})
 	}
@@ -768,7 +875,13 @@ func TestHTTPClientProjectVariableRequests(t *testing.T) {
 }
 
 func TestDefaultClientFactoryUsesHardenedHTTPClient(t *testing.T) {
-	client, err := defaultClientFactory(context.Background(), defaultDestinationConfig())
+	client, err := defaultClientFactoryWithResolver(
+		context.Background(),
+		defaultDestinationConfig(),
+		func(context.Context, string, string) ([]netip.Addr, error) {
+			return []netip.Addr{netip.MustParseAddr("203.0.113.10")}, nil
+		},
+	)
 	if err != nil {
 		t.Fatalf("default client factory: %v", err)
 	}

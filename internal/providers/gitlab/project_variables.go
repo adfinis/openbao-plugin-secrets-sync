@@ -11,7 +11,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"net/netip"
 	"net/url"
 	"strconv"
 	"strings"
@@ -21,6 +20,7 @@ import (
 
 	payloadpkg "github.com/adfinis/openbao-plugin-secrets-sync/internal/payload"
 	"github.com/adfinis/openbao-plugin-secrets-sync/internal/providers"
+	"github.com/adfinis/openbao-plugin-secrets-sync/internal/providers/endpointguard"
 )
 
 const (
@@ -45,6 +45,8 @@ const (
 	ConfigKeyVariableType = "variable_type"
 	// ConfigKeyAllowInsecureHTTP allows non-local http GitLab URLs for local test networks.
 	ConfigKeyAllowInsecureHTTP = "allow_insecure_http"
+	// ConfigKeyAllowPrivateNetwork allows GitLab base URLs on local or private networks.
+	ConfigKeyAllowPrivateNetwork = "allow_private_network"
 	// ConfigKeyToken configures the GitLab API token.
 	ConfigKeyToken = "token"
 
@@ -306,7 +308,22 @@ func (p Provider) clientFor(
 	return client, nil
 }
 
-func defaultClientFactory(_ context.Context, _ providers.DestinationConfig) (projectVariableClient, error) {
+func defaultClientFactory(ctx context.Context, cfg providers.DestinationConfig) (projectVariableClient, error) {
+	return defaultClientFactoryWithResolver(ctx, cfg, nil)
+}
+
+func defaultClientFactoryWithResolver(
+	ctx context.Context,
+	cfg providers.DestinationConfig,
+	resolver endpointguard.Resolver,
+) (projectVariableClient, error) {
+	options, err := gitlabDestinationOptionsFromConfig(cfg)
+	if err != nil {
+		return nil, err
+	}
+	if err := validateBaseURLResolution(ctx, options, resolver); err != nil {
+		return nil, err
+	}
 	return httpProjectVariableClient{client: defaultGitLabHTTPClient()}, nil
 }
 
@@ -335,6 +352,7 @@ type gitlabDestinationOptions struct {
 	variableRaw       bool
 	variableType      string
 	allowInsecureHTTP bool
+	allowPrivateNet   bool
 	token             string
 }
 
@@ -366,7 +384,10 @@ func gitlabDestinationOptionsFromConfig(cfg providers.DestinationConfig) (gitlab
 	if options.allowInsecureHTTP, err = boolConfigValue(cfg, ConfigKeyAllowInsecureHTTP, false); err != nil {
 		return gitlabDestinationOptions{}, err
 	}
-	if err := validateBaseURL(options.baseURL, options.allowInsecureHTTP); err != nil {
+	if options.allowPrivateNet, err = boolConfigValue(cfg, ConfigKeyAllowPrivateNetwork, false); err != nil {
+		return gitlabDestinationOptions{}, err
+	}
+	if err := validateBaseURL(options.baseURL, options.allowInsecureHTTP, options.allowPrivateNet); err != nil {
 		return gitlabDestinationOptions{}, err
 	}
 	if options.projectID == "" {
@@ -410,7 +431,7 @@ func boolConfigValue(cfg providers.DestinationConfig, key string, fallback bool)
 	return parsed, nil
 }
 
-func validateBaseURL(rawBaseURL string, allowInsecureHTTP bool) error {
+func validateBaseURL(rawBaseURL string, allowInsecureHTTP bool, allowPrivateNetwork bool) error {
 	parsed, err := url.Parse(rawBaseURL)
 	if err != nil {
 		return validationError("gitlab base_url must be a valid URL")
@@ -418,11 +439,21 @@ func validateBaseURL(rawBaseURL string, allowInsecureHTTP bool) error {
 	if parsed.Host == "" || parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" {
 		return validationError("gitlab base_url must include a host and no userinfo, query, or fragment")
 	}
+	host := endpointguard.NormalizeHost(parsed.Hostname())
+	if host == "" {
+		return validationError("gitlab base_url must include a host")
+	}
+	if !allowPrivateNetwork && endpointguard.IsRestrictedHost(host) {
+		return validationError(
+			"gitlab base_url requires allow_private_network=true for localhost, private, link-local, " +
+				"multicast, or unspecified hosts",
+		)
+	}
 	switch parsed.Scheme {
 	case "https":
 		return nil
 	case "http":
-		if isLocalHost(parsed.Hostname()) || allowInsecureHTTP {
+		if endpointguard.IsLocalHost(host) || allowInsecureHTTP {
 			return nil
 		}
 		return validationError("gitlab http base_url requires allow_insecure_http=true unless it targets localhost")
@@ -431,13 +462,46 @@ func validateBaseURL(rawBaseURL string, allowInsecureHTTP bool) error {
 	}
 }
 
-func isLocalHost(host string) bool {
-	normalized := strings.TrimSuffix(strings.ToLower(strings.TrimSpace(host)), ".")
-	if normalized == "localhost" || strings.HasSuffix(normalized, ".localhost") {
-		return true
+func validateBaseURLResolution(
+	ctx context.Context,
+	options gitlabDestinationOptions,
+	resolver endpointguard.Resolver,
+) error {
+	if options.allowPrivateNet {
+		return nil
 	}
-	addr, err := netip.ParseAddr(normalized)
-	return err == nil && addr.IsLoopback()
+	parsed, err := url.Parse(options.baseURL)
+	if err != nil {
+		return validationError("gitlab base_url must be a valid URL")
+	}
+	host := endpointguard.NormalizeHost(parsed.Hostname())
+	if host == "" {
+		return validationError("gitlab base_url must include a host")
+	}
+	if _, ok := endpointguard.ParseAddr(host); ok {
+		return nil
+	}
+	addrs, err := endpointguard.LookupNetIP(ctx, host, resolver)
+	if err != nil {
+		return &providers.Error{
+			Class:   providers.ErrorClassUnavailable,
+			Message: "gitlab base_url DNS lookup failed",
+		}
+	}
+	if len(addrs) == 0 {
+		return &providers.Error{
+			Class:   providers.ErrorClassUnavailable,
+			Message: "gitlab base_url DNS lookup returned no addresses",
+		}
+	}
+	for _, addr := range addrs {
+		if endpointguard.IsRestrictedAddr(addr) {
+			return validationError(
+				"gitlab base_url DNS must not resolve to localhost, private, link-local, multicast, or unspecified addresses",
+			)
+		}
+	}
+	return nil
 }
 
 func validateVariableKey(key string) error {
