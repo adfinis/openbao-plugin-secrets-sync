@@ -192,8 +192,8 @@ delete with `delete_mode=delete` when owned remote deletion is required.
 
 - Use [Secret shapes](secret-shapes.md) to choose between JSON objects,
   Kubernetes data maps, and GitLab per-key variables.
-- Use [Delegated use](delegated-use.md) for strict source opt-in and destination
-  prefix constraints.
+- Use [Delegated use](delegated-use.md) for delegated mode, strict source
+  opt-in, and destination prefix constraints.
 - Use [Runtime configuration](../operations/runtime-configuration.md) for
   mount-wide pause, restore guard, drift repair, queue capacity, and dispatch
   tuning.

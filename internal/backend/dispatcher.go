@@ -266,19 +266,16 @@ func (b *secretSyncBackend) processUpsert(
 	if failure != nil {
 		return b.markClaimedOperationFailed(ctx, storage, record, *failure, now)
 	}
-	if err := validateDestinationPolicyForObject(
-		*upsertContext.destination,
-		*upsertContext.association,
-		record.ObjectID,
+	if handled, err := b.failClaimedUpsertForDestinationPolicy(
+		ctx,
+		storage,
+		record,
+		upsertContext,
 		resolvedName,
-	); err != nil {
-		failure := operationFailure{
-			class:         providers.ErrorClassValidation,
-			message:       err.Error(),
-			resolvedName:  resolvedName,
-			payloadSHA256: preparedPayload.SHA256,
-		}
-		return b.markClaimedOperationFailed(ctx, storage, record, failure, now)
+		preparedPayload,
+		now,
+	); err != nil || handled {
+		return err
 	}
 
 	resolvedDestinationConfig, err := destinationConfig(ctx, storage, *upsertContext.destination)
@@ -299,14 +296,8 @@ func (b *secretSyncBackend) processUpsert(
 		resolvedName,
 		preparedPayload,
 	)
-	if isDispatchContextCanceled(ctx, err) {
-		if ctxErr := ctx.Err(); ctxErr != nil {
-			return ctxErr
-		}
+	if err := dispatchProviderContextError(ctx, err); err != nil {
 		return err
-	}
-	if ctxErr := ctx.Err(); ctxErr != nil {
-		return ctxErr
 	}
 	b.recordProviderRequest(
 		ctx,
@@ -329,6 +320,47 @@ func (b *secretSyncBackend) processUpsert(
 	}
 
 	return b.commitClaimedUpsertSuccess(ctx, storage, record, resolvedName, preparedPayload, result, now)
+}
+
+func dispatchProviderContextError(ctx context.Context, providerErr error) error {
+	if providerErr != nil && isDispatchContextCanceled(ctx, providerErr) {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return ctxErr
+		}
+		return providerErr
+	}
+	return ctx.Err()
+}
+
+func (b *secretSyncBackend) failClaimedUpsertForDestinationPolicy(
+	ctx context.Context,
+	storage logical.Storage,
+	record outboxRecord,
+	upsertContext *upsertContext,
+	resolvedName string,
+	preparedPayload payloadpkg.CanonicalPayload,
+	now time.Time,
+) (bool, error) {
+	cfg, err := readGlobalConfig(ctx, storage)
+	if err != nil {
+		return false, err
+	}
+	if err := validateDestinationPolicyForObject(
+		*upsertContext.destination,
+		*upsertContext.association,
+		record.ObjectID,
+		resolvedName,
+		cfg,
+	); err != nil {
+		failure := operationFailure{
+			class:         providers.ErrorClassValidation,
+			message:       err.Error(),
+			resolvedName:  resolvedName,
+			payloadSHA256: preparedPayload.SHA256,
+		}
+		return true, b.markClaimedOperationFailed(ctx, storage, record, failure, now)
+	}
+	return false, nil
 }
 
 func markUpsertSuccessStatus(
@@ -436,11 +468,16 @@ func (b *secretSyncBackend) processDelete(
 	if failure != nil {
 		return b.markClaimedOperationFailed(ctx, storage, record, *failure, now)
 	}
+	cfg, err := readGlobalConfig(ctx, storage)
+	if err != nil {
+		return err
+	}
 	if err := validateDestinationPolicyForObject(
 		*deleteContext.destination,
 		*deleteContext.association,
 		record.ObjectID,
 		resolvedName,
+		cfg,
 	); err != nil {
 		failure := operationFailure{
 			class:        providers.ErrorClassValidation,
@@ -466,14 +503,8 @@ func (b *secretSyncBackend) processDelete(
 		record,
 		resolvedName,
 	)
-	if isDispatchContextCanceled(ctx, err) {
-		if ctxErr := ctx.Err(); ctxErr != nil {
-			return ctxErr
-		}
+	if err := dispatchProviderContextError(ctx, err); err != nil {
 		return err
-	}
-	if ctxErr := ctx.Err(); ctxErr != nil {
-		return ctxErr
 	}
 	b.recordProviderRequest(
 		ctx,

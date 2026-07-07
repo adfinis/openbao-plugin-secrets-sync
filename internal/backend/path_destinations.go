@@ -555,10 +555,15 @@ func (b *secretSyncBackend) pathDestinationCheck(
 	if err != nil {
 		return nil, err
 	}
+	cfg, err := readGlobalConfig(ctx, req.Storage)
+	if err != nil {
+		return nil, err
+	}
 	blockers := []string{}
 	if record.Disabled {
 		blockers = append(blockers, "destination_disabled")
 	}
+	blockers = append(blockers, destinationDelegationConstraintBlockers(*record, cfg)...)
 	valid := true
 	validationErrorClass := ""
 	validationMessage := ""

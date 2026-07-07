@@ -17,6 +17,12 @@ Platform operators manage destinations, associations, queue operations,
 restore guard acknowledgement, reconcile, and status. This policy does not
 grant source payload reads.
 
+This role combines `destinations/*` and `associations/*`. That combination is
+full exfiltration authority for source paths the role can associate, because it
+can create a destination and bind sources to it. Use it only for trusted
+platform operators, or split destination administration from association
+administration when the deployment requires two-person control.
+
 ```hcl
 path "secret-sync/info" {
   capabilities = ["read"]
@@ -52,6 +58,42 @@ path "secret-sync/queue/*" {
 
 path "secret-sync/reconcile/*" {
   capabilities = ["read", "update"]
+}
+
+path "secret-sync/status/*" {
+  capabilities = ["read"]
+}
+
+path "secret-sync/metadata/*" {
+  capabilities = ["read", "list"]
+}
+```
+
+## Split platform roles
+
+Destination administrators can manage destination config without binding source
+paths:
+
+```hcl
+path "secret-sync/info" {
+  capabilities = ["read"]
+}
+
+path "secret-sync/destinations/*" {
+  capabilities = ["create", "read", "update", "delete", "list"]
+}
+```
+
+Association administrators can bind approved destinations to source paths but
+cannot create new destinations:
+
+```hcl
+path "secret-sync/info" {
+  capabilities = ["read"]
+}
+
+path "secret-sync/associations/*" {
+  capabilities = ["create", "read", "update", "delete", "list"]
 }
 
 path "secret-sync/status/*" {
@@ -120,9 +162,17 @@ Delegated association owners create and manage associations for their own
 source prefix. Combine this policy with app reader or app writer access when
 the delegated owner also needs source payload access.
 
-Constrain the destination itself with `allowed_source_path_prefixes` and
+Before granting this policy, enable delegated mode and strict source opt-in:
+
+```sh
+bao write secret-sync/config require_source_opt_in=true delegated_mode=true
+```
+
+Constrain every delegated destination with `allowed_source_path_prefixes` and
 `allowed_resolved_name_prefixes` so delegated owners cannot use a shared
-destination for unrelated source paths or remote names.
+destination for unrelated source paths or remote names. In delegated mode, the
+backend rejects association create, enable, manual sync, reconcile, and queued
+dispatch through unconstrained destinations.
 
 ```hcl
 path "secret-sync/info" {
@@ -194,7 +244,8 @@ path "secret-sync/metadata/*" {
 
 ## Destination constraints
 
-Use destination constraints with delegated association owners:
+Use destination constraints with delegated association owners. In delegated
+mode, both lists are required:
 
 ```sh
 bao write secret-sync/destinations/PROVIDER_TYPE/NAME \
@@ -215,3 +266,10 @@ bao write secret-sync/associations/apps/team-a/db \
 The backend checks these constraints during association plan, association
 activation, manual sync, enable, manual reconcile, background drift read-state,
 and queued dispatch.
+
+Destination checks report `destination_unconstrained` when delegated mode is
+enabled and either constraint list is empty:
+
+```sh
+bao read secret-sync/destinations/PROVIDER_TYPE/NAME/check
+```

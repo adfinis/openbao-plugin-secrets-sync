@@ -65,6 +65,7 @@ func (b *secretSyncBackend) periodicDriftReconcile(
 			candidate.metadata,
 			candidate.version,
 			candidate.objectID,
+			cfg,
 		)
 		b.recordReconcileRun(ctx, result)
 		if err := putReconcileStatus(ctx, storage, result, nowString); err != nil {
@@ -270,6 +271,7 @@ func (b *secretSyncBackend) reconcileAssociationObjectFromStorage(
 	metadata metadataRecord,
 	version versionRecord,
 	objectID string,
+	cfg globalConfig,
 ) reconcileObjectResult {
 	if !association.Enabled {
 		return newReconcileObjectResult(
@@ -362,6 +364,7 @@ func (b *secretSyncBackend) reconcileAssociationObjectFromStorage(
 		metadata.CurrentVersion,
 		version,
 		objectID,
+		cfg,
 	)
 }
 

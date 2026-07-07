@@ -343,7 +343,7 @@ func associationRecordForEnable(
 			validationDiagnosticForAssociation(mount, record, err.Error()),
 		), nil
 	}
-	if err := validateAssociationDestination(ctx, storage, record); err != nil {
+	if err := validateAssociationDestination(ctx, storage, record, cfg); err != nil {
 		return associationRecord{}, errorResponseWithDiagnostic(
 			err.Error(),
 			validationDiagnosticForAssociation(mount, record, err.Error()),
@@ -424,7 +424,7 @@ func (b *secretSyncBackend) pathAssociationSync(
 	if err := validateAssociationActivation(*record, metadata, cfg); err != nil {
 		return errorResponseWithDiagnostic(err.Error(), validationDiagnosticForAssociation(mount, *record, err.Error())), nil
 	}
-	if err := validateAssociationDestination(ctx, req.Storage, *record); err != nil {
+	if err := validateAssociationDestination(ctx, req.Storage, *record, cfg); err != nil {
 		return errorResponseWithDiagnostic(err.Error(), validationDiagnosticForAssociation(mount, *record, err.Error())), nil
 	}
 	now := nowUTC().Format(timeFormatRFC3339)
@@ -593,7 +593,7 @@ func associationWritePreflight(
 			validationDiagnosticForAssociation(mount, record, err.Error()),
 		), nil
 	}
-	if err := validateAssociationDestination(ctx, storage, record); err != nil {
+	if err := validateAssociationDestination(ctx, storage, record, cfg); err != nil {
 		return associationRecord{}, nil, nil, errorResponseWithDiagnostic(
 			err.Error(),
 			validationDiagnosticForAssociation(mount, record, err.Error()),
@@ -655,11 +655,12 @@ func (b *secretSyncBackend) pathAssociationPlan(
 			provider,
 			runtimeIdentity,
 			sourceEligible,
+			cfg,
 		)
 	}
 	preflightErr := eligibilityErr
 	if preflightErr == nil {
-		preflightErr = validateAssociationDestinationPolicy(*destination, record, version.Data)
+		preflightErr = validateAssociationDestinationPolicy(*destination, record, version.Data, cfg)
 	}
 	return b.pathAssociationSecretPathPlan(
 		ctx,
@@ -824,6 +825,7 @@ func (b *secretSyncBackend) pathAssociationSecretKeyPlan(
 	provider providers.Provider,
 	runtimeIdentity providers.RuntimeIdentity,
 	sourceEligible bool,
+	cfg globalConfig,
 ) (*logical.Response, error) {
 	resolvedDestinationConfig, err := destinationConfig(ctx, storage, destination)
 	if err != nil {
@@ -846,6 +848,7 @@ func (b *secretSyncBackend) pathAssociationSecretKeyPlan(
 			version.Data,
 			objectID,
 			sourceEligible,
+			cfg,
 		)
 		if err != nil {
 			return nil, err
@@ -871,6 +874,7 @@ func (b *secretSyncBackend) planSecretKeyObject(
 	data secretPayload,
 	objectID string,
 	sourceEligible bool,
+	cfg globalConfig,
 ) (secretKeyPlanObject, error) {
 	payload, err := buildCanonicalPayloadForObject(record, data, objectID)
 	if err != nil {
@@ -902,6 +906,7 @@ func (b *secretSyncBackend) planSecretKeyObject(
 		record,
 		objectID,
 		resolvedName,
+		cfg,
 	); policyErr != nil {
 		object.Action = providers.PlanActionBlocked
 		object.ErrorClass = providers.ErrorClassValidation
@@ -1243,7 +1248,12 @@ func metadataForAssociationActivation(
 	return metadata, nil, nil
 }
 
-func validateAssociationDestination(ctx context.Context, storage logical.Storage, record associationRecord) error {
+func validateAssociationDestination(
+	ctx context.Context,
+	storage logical.Storage,
+	record associationRecord,
+	cfg globalConfig,
+) error {
 	destination, err := getDestination(ctx, storage, record.DestinationType, record.DestinationName)
 	if err != nil {
 		return err
@@ -1268,7 +1278,7 @@ func validateAssociationDestination(ctx context.Context, storage logical.Storage
 	if version == nil || version.Destroyed || version.DeletionTime != "" {
 		return fmt.Errorf("current source version is unavailable")
 	}
-	if err := validateAssociationDestinationPolicy(*destination, record, version.Data); err != nil {
+	if err := validateAssociationDestinationPolicy(*destination, record, version.Data, cfg); err != nil {
 		return err
 	}
 	return nil
@@ -1278,7 +1288,11 @@ func validateAssociationDestinationPolicy(
 	destination destinationRecord,
 	record associationRecord,
 	data secretPayload,
+	cfg globalConfig,
 ) error {
+	if err := validateDestinationDelegationConstraints(destination, record, cfg); err != nil {
+		return err
+	}
 	if !sourcePathAllowed(record.Path, destination.AllowedSourcePathPrefixes) {
 		return fmt.Errorf(
 			"destination %s does not allow source path %q",
@@ -1295,7 +1309,7 @@ func validateAssociationDestinationPolicy(
 		if err != nil {
 			return err
 		}
-		if err := validateDestinationPolicyForObject(destination, record, objectID, resolvedName); err != nil {
+		if err := validateDestinationPolicyForObject(destination, record, objectID, resolvedName, cfg); err != nil {
 			return err
 		}
 	}
@@ -1307,7 +1321,11 @@ func validateDestinationPolicyForObject(
 	record associationRecord,
 	objectID string,
 	resolvedName string,
+	cfg globalConfig,
 ) error {
+	if err := validateDestinationDelegationConstraints(destination, record, cfg); err != nil {
+		return err
+	}
 	if !sourcePathAllowed(record.Path, destination.AllowedSourcePathPrefixes) {
 		return fmt.Errorf(
 			"destination %s does not allow source path %q",
@@ -1324,6 +1342,35 @@ func validateDestinationPolicyForObject(
 		)
 	}
 	return nil
+}
+
+const destinationUnconstrainedBlocker = "destination_unconstrained"
+
+func destinationDelegationConstraintBlockers(destination destinationRecord, cfg globalConfig) []string {
+	if !cfg.DelegatedMode || destinationHasDelegationConstraints(destination) {
+		return nil
+	}
+	return []string{destinationUnconstrainedBlocker}
+}
+
+func destinationHasDelegationConstraints(destination destinationRecord) bool {
+	return len(destination.AllowedSourcePathPrefixes) > 0 &&
+		len(destination.AllowedResolvedNamePrefixes) > 0
+}
+
+func validateDestinationDelegationConstraints(
+	destination destinationRecord,
+	record associationRecord,
+	cfg globalConfig,
+) error {
+	if len(destinationDelegationConstraintBlockers(destination, cfg)) == 0 {
+		return nil
+	}
+	return fmt.Errorf(
+		"%s: delegated_mode requires destination %s to set allowed_source_path_prefixes and allowed_resolved_name_prefixes",
+		destinationUnconstrainedBlocker,
+		record.DestinationRef,
+	)
 }
 
 func sourcePathAllowed(path string, prefixes []string) bool {

@@ -9,16 +9,27 @@ For OpenBao policy snippets, use [Policy examples](../security/policies.md).
 
 ## Enable strict source opt-in
 
-Fresh mounts default `require_source_opt_in=false`, so creating an enabled
-association is the source authorization step. In delegated deployments, enable
-strict source opt-in:
+Fresh mounts default to platform-operated mode:
+
+```text
+require_source_opt_in=false
+delegated_mode=false
+```
+
+In that mode, a trusted platform operator is expected to own both
+`destinations/*` and `associations/*`. Unconstrained destinations are allowed
+for simple onboarding and operator-managed sync.
+
+When application owners can manage their own `associations/<path>` prefixes,
+enable delegated mode and strict source opt-in together:
 
 ```sh
-bao write secret-sync/config require_source_opt_in=true
+bao write secret-sync/config require_source_opt_in=true delegated_mode=true
 ```
 
 When strict opt-in is enabled, an enabled association can enqueue or dispatch
 remote mutation only if the source metadata has `custom_metadata.syncable=true`.
+`delegated_mode=true` requires `require_source_opt_in=true`.
 
 Application owners can mark their own source path syncable when policy grants
 the source enable endpoint:
@@ -44,8 +55,11 @@ bao read secret-sync/sources/apps/team-a/db/check
 ## Constrain destination use
 
 Destinations can restrict which source paths and remote object names may use
-them. These fields are useful when delegated app owners can create
-associations that only sync their own path and remote prefix.
+them. In delegated mode, both constraint lists are required before an
+association can sync through the destination:
+
+- `allowed_source_path_prefixes`
+- `allowed_resolved_name_prefixes`
 
 Add these fields when you configure a destination. This fragment omits
 provider-specific required fields:
@@ -67,6 +81,16 @@ Non-empty fields from another provider type are rejected.
 `openbao-plugin-secrets-sync/team-a` allows
 `openbao-plugin-secrets-sync/team-a/db` but not
 `openbao-plugin-secrets-sync/team-alpha/db`.
+
+Check destination readiness after enabling delegated mode:
+
+```sh
+bao read secret-sync/destinations/PROVIDER_TYPE/NAME/check
+```
+
+If either constraint list is empty, readiness reports
+`destination_unconstrained` and association create, enable, manual sync,
+reconcile, and queued dispatch refuse to use that destination.
 
 ## Split responsibilities
 

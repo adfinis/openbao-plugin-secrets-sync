@@ -50,6 +50,25 @@ bao write secret-sync/config require_source_opt_in=true
 Use [Delegated use](../guides/delegated-use.md) for the full source opt-in and
 destination-prefix workflow.
 
+## Delegated mode
+
+Fresh mounts default `delegated_mode=false`. Use that default when a trusted
+platform operator owns both destination configuration and association
+management.
+
+Set `delegated_mode=true` only when application owners can manage their own
+association prefixes. Delegated mode requires strict source opt-in and
+destination constraints:
+
+```sh
+bao write secret-sync/config require_source_opt_in=true delegated_mode=true
+```
+
+When delegated mode is enabled, association create, enable, manual sync,
+reconcile, and queued dispatch reject destinations that do not set both
+`allowed_source_path_prefixes` and `allowed_resolved_name_prefixes`.
+Destination checks report `destination_unconstrained` for that condition.
+
 ## Queue capacity
 
 `queue_capacity` limits the number of pending outbox operations accepted by the

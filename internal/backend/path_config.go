@@ -32,6 +32,11 @@ func pathConfig(b *secretSyncBackend) *framework.Path {
 				Description: "Require custom_metadata.syncable=true before enabled associations " +
 					"can enqueue or dispatch remote mutation.",
 			},
+			"delegated_mode": {
+				Type: framework.TypeBool,
+				Description: "Require delegation guardrails for association-driven sync. " +
+					"Requires require_source_opt_in=true and constrained destinations.",
+			},
 			"drift_repair": {
 				Type: framework.TypeString,
 				Description: "Background drift policy: off disables background drift work, detect records " +
@@ -107,6 +112,7 @@ func (b *secretSyncBackend) pathConfigRead(
 		responseField("storage_schema_min_compatible_version", state.Schema.MinCompatibleVersion),
 		responseField("queue_capacity", cfg.QueueCapacity),
 		responseField("require_source_opt_in", cfg.RequireSourceOptIn),
+		responseField("delegated_mode", cfg.DelegatedMode),
 		responseField("drift_repair", cfg.DriftRepair),
 		responseField("drift_reconcile_interval", cfg.DriftReconcileInterval),
 		responseField("drift_reconcile_batch", cfg.DriftReconcileBatch),
@@ -151,8 +157,8 @@ func (b *secretSyncBackend) pathConfigWrite(
 		}
 		cfg.QueueCapacity = queueCapacity
 	}
-	if value, ok := data.GetOk("require_source_opt_in"); ok {
-		cfg.RequireSourceOptIn = value.(bool)
+	if err := applyDelegationConfigFields(data, &cfg); err != nil {
+		return logical.ErrorResponse(err.Error()), nil
 	}
 	if err := applyDriftConfigFields(data, &cfg); err != nil {
 		return logical.ErrorResponse(err.Error()), nil
@@ -174,6 +180,16 @@ func (b *secretSyncBackend) pathConfigWrite(
 		b.signalEventDispatch()
 	}
 	return nil, nil
+}
+
+func applyDelegationConfigFields(data *framework.FieldData, cfg *globalConfig) error {
+	if value, ok := data.GetOk("require_source_opt_in"); ok {
+		cfg.RequireSourceOptIn = value.(bool)
+	}
+	if value, ok := data.GetOk("delegated_mode"); ok {
+		cfg.DelegatedMode = value.(bool)
+	}
+	return validateDelegatedModeConfig(*cfg)
 }
 
 func applyDriftConfigFields(data *framework.FieldData, cfg *globalConfig) error {
@@ -265,6 +281,7 @@ func (b *secretSyncBackend) pathConfigRestoreGuardAcknowledgeWrite(
 		responseField("storage_schema_min_compatible_version", state.Schema.MinCompatibleVersion),
 		responseField("queue_capacity", cfg.QueueCapacity),
 		responseField("require_source_opt_in", cfg.RequireSourceOptIn),
+		responseField("delegated_mode", cfg.DelegatedMode),
 		responseField("drift_repair", cfg.DriftRepair),
 		responseField("drift_reconcile_interval", cfg.DriftReconcileInterval),
 		responseField("drift_reconcile_batch", cfg.DriftReconcileBatch),
@@ -326,24 +343,15 @@ func decodeGlobalConfigEntry(entry *logical.StorageEntry) (globalConfig, bool, e
 		UpdatedTime:                  stored.UpdatedTime,
 	}
 	changed := false
-	if stored.RestoreGuard == nil {
-		cfg.RestoreGuard = false
-		changed = true
-	} else {
-		cfg.RestoreGuard = *stored.RestoreGuard
-	}
+	cfg.RestoreGuard, changed = optionalBoolConfigValue(stored.RestoreGuard, false, changed)
 	if stored.QueueCapacity == nil {
 		cfg.QueueCapacity = defaultQueueCapacity
 		changed = true
 	} else {
 		cfg.QueueCapacity = *stored.QueueCapacity
 	}
-	if stored.RequireSourceOptIn == nil {
-		cfg.RequireSourceOptIn = false
-		changed = true
-	} else {
-		cfg.RequireSourceOptIn = *stored.RequireSourceOptIn
-	}
+	cfg.RequireSourceOptIn, changed = optionalBoolConfigValue(stored.RequireSourceOptIn, false, changed)
+	cfg.DelegatedMode, changed = optionalBoolConfigValue(stored.DelegatedMode, false, changed)
 	if stored.DriftRepair == nil {
 		cfg.DriftRepair = defaultDriftRepair
 		changed = true
@@ -362,12 +370,7 @@ func decodeGlobalConfigEntry(entry *logical.StorageEntry) (globalConfig, bool, e
 	} else {
 		cfg.DriftReconcileBatch = *stored.DriftReconcileBatch
 	}
-	if stored.EventDispatchEnabled == nil {
-		cfg.EventDispatchEnabled = true
-		changed = true
-	} else {
-		cfg.EventDispatchEnabled = *stored.EventDispatchEnabled
-	}
+	cfg.EventDispatchEnabled, changed = optionalBoolConfigValue(stored.EventDispatchEnabled, true, changed)
 	if stored.EventDispatchMaxOperations == nil {
 		cfg.EventDispatchMaxOperations = defaultEventDispatchMaxOperations
 		changed = true
@@ -389,7 +392,17 @@ func decodeGlobalConfigEntry(entry *logical.StorageEntry) (globalConfig, bool, e
 	if cfg.EventDispatchMaxOperations < 1 {
 		return globalConfig{}, false, fmt.Errorf("stored event_dispatch_max_operations must be greater than or equal to one")
 	}
+	if err := validateDelegatedModeConfig(cfg); err != nil {
+		return globalConfig{}, false, fmt.Errorf("stored %w", err)
+	}
 	return cfg, changed, nil
+}
+
+func optionalBoolConfigValue(value *bool, fallback bool, changed bool) (bool, bool) {
+	if value == nil {
+		return fallback, true
+	}
+	return *value, changed
 }
 
 func initialGlobalConfig(now string) globalConfig {
@@ -404,6 +417,7 @@ func defaultGlobalConfig() globalConfig {
 		RestoreGuard:               false,
 		QueueCapacity:              defaultQueueCapacity,
 		RequireSourceOptIn:         false,
+		DelegatedMode:              false,
 		DriftRepair:                defaultDriftRepair,
 		DriftReconcileInterval:     defaultDriftInterval,
 		DriftReconcileBatch:        defaultDriftBatch,
@@ -418,6 +432,7 @@ type storedGlobalConfig struct {
 	RestoreGuardAcknowledgedTime string  `json:"restore_guard_acknowledged_time"`
 	QueueCapacity                *int    `json:"queue_capacity"`
 	RequireSourceOptIn           *bool   `json:"require_source_opt_in"`
+	DelegatedMode                *bool   `json:"delegated_mode"`
 	DriftRepair                  *string `json:"drift_repair"`
 	DriftReconcileInterval       *string `json:"drift_reconcile_interval"`
 	DriftReconcileBatch          *int    `json:"drift_reconcile_batch"`
@@ -432,6 +447,7 @@ type globalConfig struct {
 	RestoreGuardAcknowledgedTime string `json:"restore_guard_acknowledged_time"`
 	QueueCapacity                int    `json:"queue_capacity"`
 	RequireSourceOptIn           bool   `json:"require_source_opt_in"`
+	DelegatedMode                bool   `json:"delegated_mode"`
 	DriftRepair                  string `json:"drift_repair"`
 	DriftReconcileInterval       string `json:"drift_reconcile_interval"`
 	DriftReconcileBatch          int    `json:"drift_reconcile_batch"`
@@ -441,6 +457,13 @@ type globalConfig struct {
 }
 
 const timeFormatRFC3339 = "2006-01-02T15:04:05Z07:00"
+
+func validateDelegatedModeConfig(cfg globalConfig) error {
+	if cfg.DelegatedMode && !cfg.RequireSourceOptIn {
+		return fmt.Errorf("delegated_mode requires require_source_opt_in=true")
+	}
+	return nil
+}
 
 func validateDriftRepairMode(mode string) error {
 	switch mode {
