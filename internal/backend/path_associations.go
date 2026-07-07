@@ -262,7 +262,6 @@ func (b *secretSyncBackend) pathAssociationDisable(
 	}
 	return &logical.Response{Data: associationLifecycleResponse(
 		*record,
-		responseField("association", associationResponse(*record)),
 		responseField("canceled_operation_ids", canceledOperationIDs),
 	)}, nil
 }
@@ -437,7 +436,6 @@ func (b *secretSyncBackend) pathAssociationSync(
 	}
 	return &logical.Response{Data: associationLifecycleResponse(
 		*record,
-		responseField("association", associationResponse(*record)),
 		responseField("sync_operation_ids", operationIDs),
 	)}, nil
 }
@@ -1056,7 +1054,6 @@ func associationSyncLifecycleFields(
 	includeManualSyncHint bool,
 ) []responseEntry {
 	fields := []responseEntry{
-		responseField("association", associationResponse(record)),
 		responseField("sync_operation_ids", operationIDs),
 	}
 	if includeManualSyncHint {

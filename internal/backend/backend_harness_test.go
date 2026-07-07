@@ -343,11 +343,7 @@ func assertOperationIDs(t *testing.T, metadata map[string]interface{}, expected 
 func assertAssociationEnabled(t *testing.T, resp *logical.Response, want bool) {
 	t.Helper()
 	assertNoErrorResponse(t, resp)
-	association, ok := resp.Data["association"].(map[string]interface{})
-	if !ok {
-		t.Fatalf("association = %T, want map[string]interface{}", resp.Data["association"])
-	}
-	if got := association["enabled"]; got != want {
+	if got := resp.Data["enabled"]; got != want {
 		t.Fatalf("association enabled = %v, want %v", got, want)
 	}
 }
@@ -745,13 +741,9 @@ func operationIDsFromResponse(t *testing.T, resp *logical.Response) []string {
 func associationIDFromResponse(t *testing.T, resp *logical.Response) string {
 	t.Helper()
 	assertNoErrorResponse(t, resp)
-	association, ok := resp.Data["association"].(map[string]interface{})
-	if !ok {
-		t.Fatalf("association = %T, want map[string]interface{}", resp.Data["association"])
-	}
-	id, ok := association["id"].(string)
+	id, ok := resp.Data["association_id"].(string)
 	if !ok || id == "" {
-		t.Fatalf("association id = %v, want non-empty string", association["id"])
+		t.Fatalf("association_id = %v, want non-empty string", resp.Data["association_id"])
 	}
 	return id
 }

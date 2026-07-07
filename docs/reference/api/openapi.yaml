@@ -1616,8 +1616,6 @@ components:
               type: array
               items:
                 type: string
-            association:
-              $ref: "#/components/schemas/Association"
             hint:
               type: string
             next_actions:
@@ -1793,30 +1791,6 @@ components:
               type: array
               items:
                 type: string
-            association_id:
-              type: string
-            object_id:
-              type: string
-            destination_ref:
-              type: string
-            resolved_name:
-              type: string
-            remote_version:
-              type: string
-            last_operation_id:
-              type: string
-            last_success_time:
-              type: string
-            last_error_class:
-              $ref: "#/components/schemas/ProviderErrorClass"
-            last_error:
-              type: string
-            hint:
-              type: string
-            next_actions:
-              type: array
-              items:
-                $ref: "#/components/schemas/DiagnosticAction"
             objects:
               type: array
               items:
@@ -1881,21 +1855,6 @@ components:
               type: integer
             max_operations:
               type: integer
-            queue_pending:
-              type: integer
-            queue_retry_wait:
-              type: integer
-            queue_claimed:
-              type: integer
-            queue_terminal:
-              type: integer
-            queue_oldest_age_seconds:
-              type: integer
-            queue_capacity:
-              type: integer
-            queue_utilization:
-              type: number
-              format: double
             queue:
               $ref: "#/components/schemas/QueueSummary"
       required: [data]

@@ -155,13 +155,6 @@ func TestStatusReadIncludesActionableHintForRemoteOwnershipLost(t *testing.T) {
 	resp := env.read("status/app/db")
 	assertNoErrorResponse(t, resp)
 	assertResponseValue(t, resp, "state", string(domain.SyncStateRemoteOwnershipLost))
-	assertHintContains(t, resp.Data, "Inspect or remove the remote object first")
-	assertNextActionCommand(
-		t,
-		resp.Data,
-		"manual_sync",
-		"bao write <mount>/associations/app/db/sync destination=fake/default",
-	)
 	objects := resp.Data["objects"].([]map[string]interface{})
 	if len(objects) != 1 {
 		t.Fatalf("status objects = %d, want 1", len(objects))

@@ -72,16 +72,13 @@ func pathStatusRead(ctx context.Context, req *logical.Request, data *framework.F
 	for _, record := range statusRecords {
 		objects = append(objects, statusResponseObject(mount, record))
 	}
-	summaryFields := statusSummaryFields(mount, statusRecords)
-	fields := make([]responseEntry, 0, 5+len(summaryFields))
-	fields = append(fields,
+	fields := []responseEntry{
 		responseField("path", path),
 		responseField("version", metadata.CurrentVersion),
 		responseField("state", string(state)),
 		responseField("operation_ids", operationIDs),
 		responseField("objects", objects),
-	)
-	fields = append(fields, summaryFields...)
+	}
 	return &logical.Response{Data: newResponseData(fields...)}, nil
 }
 
@@ -110,30 +107,4 @@ func statusResponseObject( //nolint:forbidigo // OpenBao response boundary.
 	)
 	fields = append(fields, diagnosticResponseFields(statusDiagnosticForRecord(mount, record))...)
 	return newResponseData(fields...)
-}
-
-func statusSummaryFields(mount string, statusRecords []statusRecord) []responseEntry {
-	if len(statusRecords) != 1 {
-		return nil
-	}
-	record := statusRecords[0]
-	fields := make([]responseEntry, 0, 16)
-	fields = append(fields,
-		responseField("association_id", record.AssociationID),
-		responseField("object_id", record.ObjectID),
-		responseField("destination_ref", record.DestinationRef),
-		responseField("resolved_name", record.ResolvedName),
-		responseField("remote_version", record.RemoteVersion),
-		responseField("verification", record.Verification),
-		responseField("last_operation_id", record.LastOperationID),
-		responseField("last_success_time", record.LastSuccessTime),
-		responseField("last_reconcile_time", record.LastReconcileTime),
-		responseField("last_drift_detected_time", record.LastDriftDetectedTime),
-		responseField("last_repair_time", record.LastRepairTime),
-		responseField("repair_count", record.RepairCount),
-		responseField("last_error_class", record.LastErrorClass),
-		responseField("last_error", record.LastError),
-	)
-	fields = append(fields, diagnosticResponseFields(statusDiagnosticForRecord(mount, record))...)
-	return fields
 }
