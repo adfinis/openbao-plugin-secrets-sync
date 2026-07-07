@@ -124,6 +124,14 @@ func validationDiagnostic(mount, sourcePath, destinationRef, message string) dia
 				enableSourceAction(mount, sourcePath),
 			},
 		}
+	case strings.Contains(normalized, destinationUnconstrainedBlocker):
+		return diagnostic{
+			Hint: "Delegated mode requires destination source-path and resolved-name constraints " +
+				"before this association can sync.",
+			NextActions: []diagnosticAction{
+				readDestinationAction(mount, destinationRef),
+			},
+		}
 	case strings.Contains(normalized, "destination") && strings.Contains(normalized, "disabled"):
 		return diagnostic{
 			Hint: "Destination is disabled. Enable the destination before syncing this association.",

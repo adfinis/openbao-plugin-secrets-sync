@@ -54,6 +54,41 @@ func TestDestinationCheckReportsReady(t *testing.T) {
 	assertStringSlice(t, readyResp.Data["blockers"].([]string), []string{})
 }
 
+func TestDestinationCheckReportsDelegatedModeUnconstrained(t *testing.T) {
+	env := newBackendTestEnv(t)
+
+	cfgResp := env.update(configPath, map[string]interface{}{
+		"require_source_opt_in": true,
+		"delegated_mode":        true,
+	})
+	if cfgResp != nil && cfgResp.IsError() {
+		t.Fatalf("unexpected config write error: %v", cfgResp.Error())
+	}
+	env.createFakeDestination("primary")
+
+	readyResp := env.read("destinations/fake/primary/check")
+	assertNoErrorResponse(t, readyResp)
+	assertResponseValue(t, readyResp, "ready", false)
+	assertResponseValue(t, readyResp, "valid", true)
+	assertResponseValue(t, readyResp, "healthy", true)
+	assertStringSlice(t, readyResp.Data["blockers"].([]string), []string{destinationUnconstrainedBlocker})
+
+	updateResp := env.update(
+		"destinations/fake/primary",
+		map[string]interface{}{
+			destinationAllowedSourcePathPrefixesField:   "app",
+			destinationAllowedResolvedNamePrefixesField: "prod/app/",
+		},
+	)
+	if updateResp != nil && updateResp.IsError() {
+		t.Fatalf("unexpected destination constraint update error: %v", updateResp.Error())
+	}
+	constrainedResp := env.read("destinations/fake/primary/check")
+	assertNoErrorResponse(t, constrainedResp)
+	assertResponseValue(t, constrainedResp, "ready", true)
+	assertStringSlice(t, constrainedResp.Data["blockers"].([]string), []string{})
+}
+
 func TestDestinationCheckReportsValidationFailure(t *testing.T) {
 	env := newBackendTestEnv(t)
 

@@ -964,6 +964,9 @@ components:
         require_source_opt_in:
           type: boolean
           description: Require custom_metadata.syncable=true before enabled associations can enqueue or dispatch remote mutation.
+        delegated_mode:
+          type: boolean
+          description: Require delegated-mode guardrails. Requires require_source_opt_in=true and constrained destinations.
         event_dispatch_enabled:
           type: boolean
           default: true
@@ -1005,6 +1008,9 @@ components:
         require_source_opt_in:
           type: boolean
           description: Whether source syncable metadata is required before enabled associations can enqueue or dispatch remote mutation.
+        delegated_mode:
+          type: boolean
+          description: Whether delegated association guardrails are enforced for destination constraints.
         event_dispatch_enabled:
           type: boolean
           description: Whether enqueue-producing writes wake the event-triggered dispatcher.
@@ -1213,7 +1219,7 @@ components:
               type: array
               items:
                 type: string
-                enum: [destination_disabled, validation_failed, health_failed]
+                enum: [destination_disabled, destination_unconstrained, validation_failed, health_failed]
             validation_error_class:
               $ref: "#/components/schemas/ProviderErrorClass"
             validation_message:

@@ -841,6 +841,97 @@ func TestAssociationDestinationPolicyConstraints(t *testing.T) {
 	assertNoErrorResponse(t, allowedResp)
 }
 
+func TestDelegatedModeRejectsUnconstrainedDestinationForAssociation(t *testing.T) {
+	env := newBackendTestEnv(t)
+
+	cfgResp := env.update(configPath, map[string]interface{}{
+		"require_source_opt_in": true,
+		"delegated_mode":        true,
+	})
+	if cfgResp != nil && cfgResp.IsError() {
+		t.Fatalf("unexpected config write error: %v", cfgResp.Error())
+	}
+	env.writeAppDBSecret("initial")
+	env.markAppDBSyncable()
+	env.createFakeDestination("default")
+
+	planResp := env.planDefaultFakeAssociation("prod/app/db")
+	assertNoErrorResponse(t, planResp)
+	assertResponseValue(t, planResp, "source_eligible", true)
+	assertResponseValue(t, planResp, "action", providers.PlanActionBlocked)
+	assertResponseValue(t, planResp, "error_class", string(providers.ErrorClassValidation))
+	if !strings.Contains(planResp.Data["message"].(string), destinationUnconstrainedBlocker) {
+		t.Fatalf("plan message = %q, want %s", planResp.Data["message"], destinationUnconstrainedBlocker)
+	}
+
+	writeResp := env.update("associations/app/db", map[string]interface{}{
+		"destination":   destinationRef(providerTypeFake, "default"),
+		"resolved_name": "prod/app/db",
+		"granularity":   syncObjectIDSecretPath,
+		"format":        defaultAssociationFormat,
+	})
+	if writeResp == nil || !writeResp.IsError() {
+		t.Fatalf("delegated association write response = %#v, want error", writeResp)
+	}
+	if !strings.Contains(writeResp.Error().Error(), destinationUnconstrainedBlocker) {
+		t.Fatalf("write error = %q, want %s", writeResp.Error().Error(), destinationUnconstrainedBlocker)
+	}
+
+	constrainResp := env.update(
+		"destinations/fake/default",
+		map[string]interface{}{
+			destinationAllowedSourcePathPrefixesField:   "app",
+			destinationAllowedResolvedNamePrefixesField: "prod/app/",
+		},
+	)
+	if constrainResp != nil && constrainResp.IsError() {
+		t.Fatalf("unexpected destination constraint update error: %v", constrainResp.Error())
+	}
+	allowedResp := env.update("associations/app/db", map[string]interface{}{
+		"destination":   destinationRef(providerTypeFake, "default"),
+		"resolved_name": "prod/app/db",
+		"granularity":   syncObjectIDSecretPath,
+		"format":        defaultAssociationFormat,
+	})
+	assertNoErrorResponse(t, allowedResp)
+}
+
+func TestDelegatedModeRejectsUnconstrainedDestinationLifecycle(t *testing.T) {
+	env := newBackendTestEnv(t)
+
+	env.writeAppDBSecret("initial")
+	env.createFakeDestination("default")
+	associationResp := env.createDefaultFakeAssociation()
+	associationID := associationIDFromResponse(t, associationResp)
+
+	cfgResp := env.update(configPath, map[string]interface{}{
+		"require_source_opt_in": true,
+		"delegated_mode":        true,
+	})
+	if cfgResp != nil && cfgResp.IsError() {
+		t.Fatalf("unexpected config write error: %v", cfgResp.Error())
+	}
+
+	syncResp := env.update("associations/app/db/"+associationID+"/sync", nil)
+	if syncResp == nil || !syncResp.IsError() {
+		t.Fatalf("delegated manual sync response = %#v, want error", syncResp)
+	}
+	if !strings.Contains(syncResp.Error().Error(), destinationUnconstrainedBlocker) {
+		t.Fatalf("manual sync error = %q, want %s", syncResp.Error().Error(), destinationUnconstrainedBlocker)
+	}
+
+	disableResp := env.update("associations/app/db/"+associationID+"/disable", nil)
+	assertNoErrorResponse(t, disableResp)
+
+	enableResp := env.update("associations/app/db/"+associationID+"/enable", nil)
+	if enableResp == nil || !enableResp.IsError() {
+		t.Fatalf("delegated enable response = %#v, want error", enableResp)
+	}
+	if !strings.Contains(enableResp.Error().Error(), destinationUnconstrainedBlocker) {
+		t.Fatalf("enable error = %q, want %s", enableResp.Error().Error(), destinationUnconstrainedBlocker)
+	}
+}
+
 func TestAssociationPlan(t *testing.T) {
 	env := newBackendTestEnv(t)
 

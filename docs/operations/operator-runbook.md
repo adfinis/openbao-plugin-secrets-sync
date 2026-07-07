@@ -107,6 +107,10 @@ bao write -force secret-sync/sources/app/db/enable
 This is required only when `require_source_opt_in=true`. Mounts default to
 `require_source_opt_in=false`.
 
+When `delegated_mode=true`, destination checks also report
+`destination_unconstrained` until the destination has both source-path and
+resolved-name prefix constraints.
+
 To inspect the underlying metadata:
 
 ```sh

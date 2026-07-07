@@ -56,6 +56,13 @@ Association creation is the highest-risk authorization operation because it
 causes a secret to leave OpenBao. It requires destination authority and, when
 `require_source_opt_in=true`, source eligibility.
 
+Fresh mounts start in platform-operated mode with `delegated_mode=false`. In
+that mode, a trusted platform operator may own both `destinations/*` and
+`associations/*`, and unconstrained destinations are valid for operator-managed
+sync. When application owners receive association-management policy for their
+own source prefixes, operators should enable `delegated_mode=true` and
+`require_source_opt_in=true`.
+
 Source eligibility is local source metadata, not an implicit source-read
 permission check. When strict source opt-in is enabled, the backend requires
 `custom_metadata.syncable=true` before an enabled association can enqueue or
@@ -65,6 +72,10 @@ dispatch sync work. OpenBao policy must therefore control who can update
 Delegated association owners do not need source payload read access unless the
 deployment also wants them to inspect the secret value. Combine delegated
 association access with app reader or writer policy only when that is intended.
+`delegated_mode=true` makes this self-service model enforceable: association
+create, enable, manual sync, reconcile, and queued dispatch refuse destinations
+whose `allowed_source_path_prefixes` or `allowed_resolved_name_prefixes` are
+empty, returning the `destination_unconstrained` blocker.
 
 Destination authority can be proven through:
 
@@ -87,6 +98,8 @@ Implemented controls:
 
 - optional `custom_metadata.syncable=true` before enabled association
   activation when `require_source_opt_in=true`;
+- opt-in `delegated_mode=true`, which requires strict source opt-in and
+  constrained destinations for delegated association use;
 - destination-level allowed source path prefixes;
 - destination-level allowed resolved remote-name prefixes;
 - required ownership metadata;
@@ -94,10 +107,11 @@ Implemented controls:
 
 Delegated app owners must not be able to use a broad platform destination to
 write arbitrary remote names. Destination records can constrain source paths and
-resolved remote-name prefixes. These constraints are checked during association
-plan, association activation, manual sync, enable, manual reconcile, background
-drift read-state, and queued dispatch, so a destination policy tightened after
-enqueue still blocks remote mutation and provider read-state.
+resolved remote-name prefixes. In delegated mode, both constraint lists must be
+present. The configured constraints are checked during association plan,
+association activation, manual sync, enable, manual reconcile, background drift
+read-state, and queued dispatch, so a destination policy tightened after enqueue
+still blocks remote mutation and provider read-state.
 
 ## Source secret protection
 

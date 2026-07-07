@@ -119,8 +119,9 @@ Metadata writes support:
 }
 ```
 
-Mounts default `require_source_opt_in=false`, so creating an enabled
-association is the source authorization step.
+Mounts default `require_source_opt_in=false` and `delegated_mode=false`, so
+creating an enabled association is the source authorization step in the
+platform-operated default mode.
 
 When strict source opt-in is enabled, enabled associations require:
 
@@ -132,6 +133,12 @@ When strict source opt-in is enabled, enabled associations require:
 }
 ```
 
-This makes sync opt-in at the source path and keeps destination mutation from
-being triggered by arbitrary local secret writes in delegated strict-mode
-deployments.
+Delegated deployments should enable both strict source opt-in and delegated
+mode:
+
+```sh
+bao write secret-sync/config require_source_opt_in=true delegated_mode=true
+```
+
+This makes sync opt-in at the source path and requires constrained destinations
+before delegated association owners can trigger destination mutation.

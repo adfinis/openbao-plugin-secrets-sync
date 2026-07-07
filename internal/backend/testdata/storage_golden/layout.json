@@ -29,6 +29,7 @@
   {
     "key": "config",
     "value": {
+      "delegated_mode": false,
       "disabled": false,
       "drift_reconcile_batch": 16,
       "drift_reconcile_interval": "1h",

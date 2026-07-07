@@ -17,6 +17,7 @@ enqueue, and operators can explicitly drain due work with `queue/drain`.
 - Destination mutation requires destination authority, an enabled association,
   queue capacity, and an allowed OpenBao replication state. When
   `require_source_opt_in=true`, it also requires source eligibility metadata.
+  When `delegated_mode=true`, it also requires constrained destinations.
 - The mount-wide `disabled` flag blocks background provider traffic and remote
   mutation. Manual reconcile remains available.
 - Restore guard blocks remote mutation. Background drift detection and manual
@@ -34,7 +35,7 @@ enqueue, and operators can explicitly drain due work with `queue/drain`.
 | Path | Purpose |
 | --- | --- |
 | `info` | Read static plugin version, association defaults, and provider capability flags. |
-| `config` | Read or update mount-wide sync settings for pause, queue capacity, source opt-in, drift work, and event dispatch. |
+| `config` | Read or update mount-wide sync settings for pause, queue capacity, source opt-in, delegated mode, drift work, and event dispatch. |
 | `config/restore-guard/acknowledge` | Acknowledge restore or clone review and resume remote mutation. |
 
 `info` is the stable place for clients and operators to discover static
@@ -60,6 +61,12 @@ coalesced dispatcher after durable queue commit, bounded by
 `event_dispatch_max_operations` (`16` default). This reduces normal sync latency
 without changing the asynchronous API contract; periodic processing remains the
 fallback for missed wakeups, retries, and restart recovery.
+
+`delegated_mode` defaults to `false` for platform-operated mounts. When set to
+`true`, it requires `require_source_opt_in=true` and rejects association use of
+destinations whose `allowed_source_path_prefixes` or
+`allowed_resolved_name_prefixes` are empty. Destination checks report
+`destination_unconstrained` for that blocker.
 
 ## Source data and metadata
 
@@ -99,9 +106,10 @@ bao write secret-sync/data/app/db username=app password=initial cas=1
 In shorthand mode, `data`, `options`, `cas`, and `version` are reserved field
 names. Use the wrapped body when the source payload needs one of those literal
 top-level keys.
-Mounts default `require_source_opt_in=false`. When strict opt-in is enabled,
-`sources/<path>/enable` sets `custom_metadata.syncable=true` and source checks
-report `source_not_syncable` until that metadata is present.
+Mounts default `require_source_opt_in=false` and `delegated_mode=false`. When
+strict opt-in is enabled, `sources/<path>/enable` sets
+`custom_metadata.syncable=true` and source checks report `source_not_syncable`
+until that metadata is present.
 Source paths cannot end with reserved association route segments such as
 `plan`, `disable`, `enable`, or `sync`.
 

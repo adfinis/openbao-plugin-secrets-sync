@@ -193,6 +193,17 @@ func (b *secretSyncBackend) reconcileAssociation(
 			"destination is disabled",
 		)
 	}
+	cfg, err := readGlobalConfig(ctx, storage)
+	if err != nil {
+		return reconcileStaticResults(
+			association,
+			metadata.CurrentVersion,
+			objectIDs,
+			domain.SyncStateInternalError,
+			providers.ErrorClassInternal,
+			"config lookup failed",
+		)
+	}
 	resolvedDestinationConfig, err := destinationConfig(ctx, storage, *destination)
 	if err != nil {
 		return reconcileStaticResults(
@@ -227,6 +238,7 @@ func (b *secretSyncBackend) reconcileAssociation(
 			metadata.CurrentVersion,
 			version,
 			objectID,
+			cfg,
 		))
 	}
 	return results
@@ -242,6 +254,7 @@ func (b *secretSyncBackend) reconcileAssociationObject(
 	sourceVersion int,
 	version versionRecord,
 	objectID string,
+	cfg globalConfig,
 ) reconcileObjectResult {
 	resolvedName, err := associationResolvedNameForObject(association, objectID)
 	if err != nil {
@@ -264,7 +277,7 @@ func (b *secretSyncBackend) reconcileAssociationObject(
 		"",
 		"",
 	)
-	if err := validateDestinationPolicyForObject(destination, association, objectID, resolvedName); err != nil {
+	if err := validateDestinationPolicyForObject(destination, association, objectID, resolvedName, cfg); err != nil {
 		result.state = domain.SyncStateValidationError
 		result.errorClass = providers.ErrorClassValidation
 		result.message = err.Error()

@@ -19,8 +19,8 @@ page when you need to choose the right detailed document.
   status.
 - [Secret shapes](guides/secret-shapes.md) explains how source paths become
   AWS, Kubernetes, or GitLab remote objects.
-- [Delegated use](guides/delegated-use.md) explains strict source opt-in and
-  destination prefix constraints.
+- [Delegated use](guides/delegated-use.md) explains delegated mode, strict
+  source opt-in, and destination prefix constraints.
 - [Provider guides](providers/README.md) explain destination-specific
   configuration for AWS Secrets Manager, Kubernetes Secrets, and GitLab project
   variables.
@@ -49,8 +49,8 @@ page when you need to choose the right detailed document.
 
 - [Operations](operations/README.md) collects operator-facing procedures.
 - [Runtime configuration](operations/runtime-configuration.md) explains
-  mount-wide pause, restore guard, queue capacity, drift work, and dispatch
-  tuning.
+  mount-wide pause, restore guard, delegated mode, queue capacity, drift work,
+  and dispatch tuning.
 - [Operator runbook](operations/operator-runbook.md) gives operational checks,
   troubleshooting flows, restore-guard handling, and failure response guidance.
 - [Observability](operations/observability.md) describes the OpenTelemetry
@@ -125,8 +125,8 @@ When behavior changes, update docs at the same ownership level as the code:
 - Runtime, queue, convergence, drift, reconcile, restore, or dispatch changes:
   update runtime configuration, concepts, and the runbook when recovery behavior
   changes.
-- Delegated authorization or source opt-in changes: update delegated use,
-  security policy examples, and the security model.
+- Delegated authorization, delegated mode, or source opt-in changes: update
+  delegated use, security policy examples, and the security model.
 - Provider configuration, naming, ownership, or capability changes: update the
   affected provider guide.
 - Provider interface or capability changes: update the provider contract and
