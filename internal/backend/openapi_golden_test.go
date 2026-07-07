@@ -105,14 +105,7 @@ func loadAPIGoldenResponses(t *testing.T) map[string]interface{} {
 func loadOpenAPIComponentSchemas(t *testing.T) map[string]interface{} {
 	t.Helper()
 
-	raw, err := os.ReadFile(openAPISpecFile)
-	if err != nil {
-		t.Fatalf("read OpenAPI spec: %v", err)
-	}
-	var spec map[string]interface{}
-	if err := yaml.Unmarshal(raw, &spec); err != nil {
-		t.Fatalf("decode OpenAPI spec: %v", err)
-	}
+	spec := loadOpenAPISpec(t)
 	components, ok := openAPIObject(spec["components"])
 	if !ok {
 		t.Fatal("OpenAPI spec is missing components")
@@ -122,6 +115,20 @@ func loadOpenAPIComponentSchemas(t *testing.T) map[string]interface{} {
 		t.Fatal("OpenAPI spec is missing components.schemas")
 	}
 	return schemas
+}
+
+func loadOpenAPISpec(t *testing.T) map[string]interface{} {
+	t.Helper()
+
+	raw, err := os.ReadFile(openAPISpecFile)
+	if err != nil {
+		t.Fatalf("read OpenAPI spec: %v", err)
+	}
+	var spec map[string]interface{}
+	if err := yaml.Unmarshal(raw, &spec); err != nil {
+		t.Fatalf("decode OpenAPI spec: %v", err)
+	}
+	return spec
 }
 
 func openAPIComponentSchema(schemas map[string]interface{}, name string) (map[string]interface{}, bool) {
