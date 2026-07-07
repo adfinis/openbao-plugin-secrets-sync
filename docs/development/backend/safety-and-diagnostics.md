@@ -128,5 +128,10 @@ tokens, provider secret values, or unredacted provider request bodies into:
 - reconcile responses;
 - plan responses.
 
+Source paths, resolved remote names, object IDs, source versions, payload
+hashes, and destination-native key names are operational metadata, not payload
+values. Keep them scoped to the documented plan, status, reconcile, queue, and
+audit surfaces, and never include the corresponding source values.
+
 Redaction tests should cover every response path that reads provider state or
 includes failure context.

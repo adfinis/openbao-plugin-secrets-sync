@@ -64,7 +64,10 @@ redacts it on destination reads.
 
 `ca_cert_pem` is certificate material and is not a bearer credential.
 `kubeconfig_path` points to a file that must be readable by the OpenBao plugin
-process when the provider opens the destination.
+process when the provider opens the destination. A caller with
+`destinations/*` write access controls this file path; keep that capability
+limited to trusted platform operators. The backend stores only the path and
+does not store or echo kubeconfig file contents.
 
 ## Validation and check commands
 
