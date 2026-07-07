@@ -103,13 +103,15 @@ or CLI shorthand where top-level fields become source payload keys:
 bao write secret-sync/data/app/db username=app password=initial cas=1
 ```
 
-In shorthand mode, `data`, `options`, `cas`, and `version` are reserved field
-names. Use the wrapped body when the source payload needs one of those literal
-top-level keys.
+In shorthand mode, `path`, `data`, `options`, `cas`, and `version` are reserved
+field names. `cas` remains the CLI alias for `options.cas`; `version` is
+rejected on writes because it is only meaningful for reads. Use the wrapped
+body when the source payload needs one of those literal top-level keys.
 Mounts default `require_source_opt_in=false` and `delegated_mode=false`. When
 strict opt-in is enabled, `sources/<path>/enable` sets
-`custom_metadata.syncable=true` and source checks report `source_not_syncable`
-until that metadata is present.
+`custom_metadata.syncable=true`; source checks report
+`source_opt_in_present` for that metadata and block with
+`source_not_syncable` only when opt-in is required and missing.
 Source paths cannot end with reserved association route segments such as
 `plan`, `disable`, `enable`, or `sync`.
 
@@ -158,8 +160,8 @@ stable response identifiers and exact-addressing escape hatches.
 Updates that resolve exactly one existing association may change non-identity
 fields in place. Changes to `granularity` or the remote-name reservation
 (`resolved_name` for `secret-path`; rendered name pattern and current concrete
-rendered names for `secret-key`) require an explicit new association plus
-deletion of the old one.
+rendered names for `secret-key`) require deleting the existing association
+first, then creating the new association explicitly.
 Updating an already-enabled association does not enqueue sync work. The response
 returns `sync_operation_ids=[]` with a `hint` and `next_actions` pointing to
 `associations/<path>/sync` when an operator wants to push or retry the current

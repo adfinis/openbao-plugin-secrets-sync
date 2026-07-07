@@ -2,6 +2,7 @@ package backend
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 )
@@ -194,6 +195,20 @@ func TestMetadataWriteEnforcesCASRequiredAndCustomMetadata(t *testing.T) {
 	allowedMetadata := allowedResp.Data["metadata"].(map[string]interface{})
 	if got := allowedMetadata["version"]; got != 2 {
 		t.Fatalf("allowed write version = %v, want 2", got)
+	}
+}
+
+func TestMetadataWriteRejectsNonZeroDeleteVersionAfter(t *testing.T) {
+	env := newBackendTestEnv(t)
+
+	resp := env.update("metadata/app/db", map[string]interface{}{
+		"delete_version_after": "1h",
+	})
+	if resp == nil || !resp.IsError() {
+		t.Fatalf("delete_version_after response = %#v, want error", resp)
+	}
+	if !strings.Contains(resp.Error().Error(), "delete_version_after is not enforced yet") {
+		t.Fatalf("delete_version_after error = %q", resp.Error().Error())
 	}
 }
 

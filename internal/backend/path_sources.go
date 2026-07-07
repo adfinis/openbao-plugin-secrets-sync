@@ -25,7 +25,7 @@ func pathSources(b *secretSyncBackend) []*framework.Path {
 				},
 			},
 			HelpSynopsis:    "Check source sync readiness.",
-			HelpDescription: "Reports whether a source path has a current version and, when required, is marked syncable.",
+			HelpDescription: "Reports whether a source path has a current version and whether source opt-in metadata is present.",
 		},
 		{
 			Pattern: "sources/(?P<path>.+)/enable",
@@ -101,7 +101,7 @@ func (b *secretSyncBackend) pathSourceCheck(
 	return &logical.Response{Data: newResponseData(
 		responseField("path", path),
 		responseField("ready", len(blockers) == 0),
-		responseField("syncable", syncable),
+		responseField("source_opt_in_present", syncable),
 		responseField("source_opt_in_required", cfg.RequireSourceOptIn),
 		responseField("current_version", currentVersion),
 		responseField("current_version_available", currentVersionAvailable),

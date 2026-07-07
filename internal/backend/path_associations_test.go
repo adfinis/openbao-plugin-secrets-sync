@@ -422,7 +422,7 @@ func assertAssociationIdentityGuardError(
 	for _, want := range []string{
 		field + " change would create a new association identity",
 		"delete " + associationID + " first",
-		"create the new association and delete the old one explicitly",
+		"then create the new association explicitly",
 	} {
 		if !strings.Contains(message, want) {
 			t.Fatalf("identity guard error = %q, want substring %q", message, want)

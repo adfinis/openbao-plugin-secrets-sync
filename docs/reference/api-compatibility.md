@@ -99,9 +99,11 @@ field names, use the wrapped body:
 }
 ```
 
-In shorthand mode, `data`, `options`, `cas`, and `version` are reserved field
-names. Wrapped `data` writes reject extra top-level source payload fields so
-mixed request bodies do not silently discard input.
+In shorthand mode, `path`, `data`, `options`, `cas`, and `version` are reserved
+field names. `cas` remains the CLI alias for `options.cas`; `version` is
+rejected on writes because it is only meaningful for reads. Wrapped `data`
+writes reject extra top-level source payload fields so mixed request bodies do
+not silently discard input.
 
 ## Metadata policy
 
@@ -118,6 +120,9 @@ Metadata writes support:
   }
 }
 ```
+
+`delete_version_after` must be omitted or set to `0s`. Non-zero timed deletion
+policy is rejected until the backend enforces it.
 
 Mounts default `require_source_opt_in=false` and `delegated_mode=false`, so
 creating an enabled association is the source authorization step in the

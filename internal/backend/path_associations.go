@@ -1772,7 +1772,7 @@ func associationReservationIdentityField(record associationRecord) string {
 func associationIdentityChangeError(field string, associationID string) error {
 	return fmt.Errorf(
 		"%s change would create a new association identity; delete %s first, "+
-			"or create the new association and delete the old one explicitly",
+			"then create the new association explicitly",
 		field,
 		associationID,
 	)

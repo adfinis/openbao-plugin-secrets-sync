@@ -223,10 +223,14 @@ func updateMetadataFromFieldData(metadata *metadataRecord, data *framework.Field
 		if deleteAfter == "" {
 			deleteAfter = defaultDeleteVersionAfter
 		}
-		if _, err := time.ParseDuration(deleteAfter); err != nil {
+		duration, err := time.ParseDuration(deleteAfter)
+		if err != nil {
 			return false, fmt.Errorf("delete_version_after must be a Go duration string: %w", err)
 		}
-		metadata.DeleteVersionAfter = deleteAfter
+		if duration != 0 {
+			return false, fmt.Errorf("delete_version_after is not enforced yet; set it to 0s or omit it")
+		}
+		metadata.DeleteVersionAfter = defaultDeleteVersionAfter
 		changed = true
 	}
 	if rawCustomMetadata, ok := data.GetOk("custom_metadata"); ok {

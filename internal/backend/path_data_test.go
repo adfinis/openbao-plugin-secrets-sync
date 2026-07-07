@@ -74,6 +74,38 @@ func TestDataWriteShorthandPayload(t *testing.T) {
 	}
 }
 
+func TestDataWriteShorthandRejectsReservedVersionPayloadKey(t *testing.T) {
+	env := newBackendTestEnv(t)
+
+	resp := env.update("data/app/db", map[string]interface{}{
+		"password": "secret",
+		"version":  5,
+	})
+	if resp == nil || !resp.IsError() {
+		t.Fatalf("reserved shorthand response = %#v, want error", resp)
+	}
+	if !strings.Contains(resp.Error().Error(), "reserved data write field version") {
+		t.Fatalf("reserved shorthand error = %q", resp.Error().Error())
+	}
+}
+
+func TestDataWriteShorthandRejectsReservedOptionsPayloadKey(t *testing.T) {
+	env := newBackendTestEnv(t)
+
+	resp := env.update("data/app/db", map[string]interface{}{
+		"password": "secret",
+		"options": map[string]interface{}{
+			"cas": 0,
+		},
+	})
+	if resp == nil || !resp.IsError() {
+		t.Fatalf("reserved shorthand response = %#v, want error", resp)
+	}
+	if !strings.Contains(resp.Error().Error(), "reserved data write field options") {
+		t.Fatalf("reserved shorthand error = %q", resp.Error().Error())
+	}
+}
+
 func TestDataWriteHonorsStrictSourceOptInBeforeEnqueue(t *testing.T) {
 	env := newBackendTestEnv(t)
 
@@ -216,7 +248,9 @@ func TestDataWriteRejectsConflictingCASForms(t *testing.T) {
 	env := newBackendTestEnv(t)
 
 	resp := env.update("data/app/db", map[string]interface{}{
-		"password": "initial",
+		"data": map[string]interface{}{
+			"password": "initial",
+		},
 		"options": map[string]interface{}{
 			"cas": 0,
 		},

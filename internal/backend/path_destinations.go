@@ -793,8 +793,8 @@ func destinationResponse(
 		responseField("name", record.Name),
 		responseField("description", record.Description),
 		responseField("disabled", record.Disabled),
-		responseField("allowed_source_path_prefixes", copyStringSlice(record.AllowedSourcePathPrefixes)),
-		responseField("allowed_resolved_name_prefixes", copyStringSlice(record.AllowedResolvedNamePrefixes)),
+		responseField("allowed_source_path_prefixes", responseStringSlice(record.AllowedSourcePathPrefixes)),
+		responseField("allowed_resolved_name_prefixes", responseStringSlice(record.AllowedResolvedNamePrefixes)),
 		responseField("config", destinationConfigResponse(record.Type, record.Config)),
 		responseField("created_time", record.CreatedTime),
 		responseField("updated_time", record.UpdatedTime),
@@ -1105,6 +1105,13 @@ func copyStringSlice(input []string) []string {
 	output := make([]string, len(input))
 	copy(output, input)
 	return output
+}
+
+func responseStringSlice(input []string) []string {
+	if len(input) == 0 {
+		return []string{}
+	}
+	return copyStringSlice(input)
 }
 
 func uniqueSortedStrings(input []string) []string {
