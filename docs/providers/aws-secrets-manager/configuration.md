@@ -104,17 +104,18 @@ bao write secret-sync/destinations/aws-sm/prod \
 
 ## Sensitive fields
 
-The backend stores `external_id`, `access_key_id`, `secret_access_key`, and
-`session_token` under the seal-wrapped destination secret prefix and redacts
-them on destination reads.
+The backend stores `external_id` under the seal-wrapped destination secret
+prefix and redacts it on destination reads.
 
 `web_identity_token_file` stores only the token file path as public destination
 configuration. The OIDC token contents remain on disk and are read by the AWS
 SDK credential provider at runtime. The backend does not store or echo the file
 contents.
 
-`access_key_id`, `secret_access_key`, and `session_token` are rejected as auth
-material because static AWS auth is not supported.
+Static AWS credential fields such as `access_key_id`, `secret_access_key`, and
+`session_token` are not part of the destination API. Use OpenBao runtime
+environment credentials with `auth_mode=default`, or use `assume_role` or
+`web_identity`.
 
 ## Validation and check commands
 

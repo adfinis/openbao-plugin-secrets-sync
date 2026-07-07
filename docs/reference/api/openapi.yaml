@@ -803,7 +803,7 @@ components:
       required: true
       schema:
         type: string
-        enum: [fake, aws-sm, k8s, gitlab]
+        enum: [aws-sm, k8s, gitlab]
       description: Destination provider type.
     DestinationName:
       name: name
@@ -1048,8 +1048,8 @@ components:
           enum: [local, private]
         auth_mode:
           type: string
-          enum: [default, assume_role, web_identity, static]
-          description: Provider auth mode. Static AWS auth is reserved and not supported yet.
+          enum: [default, assume_role, web_identity]
+          description: Provider auth mode.
         role_arn:
           type: string
           description: AWS IAM role ARN for assume-role and web-identity auth.
@@ -1073,18 +1073,6 @@ components:
           type: boolean
           default: false
           description: Opt in to AWS GetSecretValue checks for explicit plan, upsert, and read-state value drift detection.
-        access_key_id:
-          type: string
-          writeOnly: true
-          description: Reserved AWS static auth field. Static auth is not supported yet.
-        secret_access_key:
-          type: string
-          writeOnly: true
-          description: Reserved AWS static auth field. Static auth is not supported yet.
-        session_token:
-          type: string
-          writeOnly: true
-          description: Reserved AWS static auth field. Static auth is not supported yet.
         namespace:
           type: string
           description: Kubernetes namespace.

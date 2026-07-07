@@ -56,6 +56,8 @@ func TestOpenBaoPluginSyncsToLocalStackSecretsManager(t *testing.T) {
 		forceDeleteSecret(ctx, awsClient, remoteName)
 	})
 
+	// compose.yaml provides dummy AWS credentials to the OpenBao container.
+	// LocalStack should exercise the SDK default chain, not destination static auth.
 	write(t, baoClient, mountPath+"/destinations/aws-sm/prod", map[string]interface{}{
 		awssecretsmanager.ConfigKeyRegion:              awsRegion,
 		awssecretsmanager.ConfigKeyEndpointURL:         localstackInBao,

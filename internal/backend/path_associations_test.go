@@ -683,7 +683,7 @@ func TestAssociationDeleteRejectsClaimedOperation(t *testing.T) {
 }
 
 func TestOperationMetricsUseGranularityLabels(t *testing.T) {
-	b := Backend(&logical.BackendConfig{})
+	b := newBackendForTest(&logical.BackendConfig{})
 	recorder := &recordingObserver{}
 	b.observer = recorder
 	storage := &logical.InmemStorage{}

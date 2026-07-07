@@ -3,6 +3,7 @@ package backend
 import (
 	"context"
 	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/adfinis/openbao-plugin-secrets-sync/internal/providers"
@@ -367,6 +368,39 @@ func TestAWSWebIdentityDestinationConfigLifecycle(t *testing.T) {
 	assertResponseValue(t, validateResp, "valid", true)
 }
 
+func TestAWSDestinationRejectsStaticAuthSurface(t *testing.T) {
+	env := newBackendTestEnv(t)
+
+	staticModeResp := env.update("destinations/aws-sm/prod", map[string]interface{}{
+		awssecretsmanager.ConfigKeyRegion:   "eu-central-1",
+		awssecretsmanager.ConfigKeyAuthMode: "static",
+	})
+	if staticModeResp == nil || !staticModeResp.IsError() {
+		t.Fatalf("static auth response = %#v, want error", staticModeResp)
+	}
+	if !strings.Contains(
+		staticModeResp.Error().Error(),
+		"aws-sm auth_mode must be default, assume_role, or web_identity",
+	) {
+		t.Fatalf("static auth error = %q, want supported auth mode error", staticModeResp.Error().Error())
+	}
+
+	staticFieldResp := env.update("destinations/aws-sm/prod", map[string]interface{}{
+		awssecretsmanager.ConfigKeyRegion: "eu-central-1",
+		"access_key_id":                   "redaction-canary-access-key",
+	})
+	if staticFieldResp == nil || !staticFieldResp.IsError() {
+		t.Fatalf("static credential field response = %#v, want error", staticFieldResp)
+	}
+	if !strings.Contains(staticFieldResp.Error().Error(), `unsupported destination field "access_key_id"`) {
+		t.Fatalf("static credential field error = %q, want unsupported field error", staticFieldResp.Error().Error())
+	}
+	if strings.Contains(staticFieldResp.Error().Error(), "redaction-canary-access-key") {
+		t.Fatalf("static credential field error leaked value: %q", staticFieldResp.Error().Error())
+	}
+	assertNoStoredAWSDestination(t, env.storage)
+}
+
 func TestKubernetesDestinationConfigLifecycle(t *testing.T) {
 	env := newBackendTestEnv(t)
 
@@ -576,18 +610,14 @@ func TestDestinationSensitiveConfigDeletion(t *testing.T) {
 
 func TestDestinationConfigResponseFiltersSensitiveKeys(t *testing.T) {
 	response := destinationConfigResponse(awssecretsmanager.ProviderType, map[string]string{
-		awssecretsmanager.ConfigKeyRegion:          "eu-central-1",
-		awssecretsmanager.ConfigKeyExternalID:      "tenant-1",
-		awssecretsmanager.ConfigKeySecretAccessKey: "secret",
+		awssecretsmanager.ConfigKeyRegion:     "eu-central-1",
+		awssecretsmanager.ConfigKeyExternalID: "tenant-1",
 	})
 	if got := response[awssecretsmanager.ConfigKeyRegion]; got != "eu-central-1" {
 		t.Fatalf("region = %v, want eu-central-1", got)
 	}
 	if _, ok := response[awssecretsmanager.ConfigKeyExternalID]; ok {
 		t.Fatal("response must not include external_id")
-	}
-	if _, ok := response[awssecretsmanager.ConfigKeySecretAccessKey]; ok {
-		t.Fatal("response must not include secret_access_key")
 	}
 
 	k8sResponse := destinationConfigResponse(kubernetessecrets.ProviderType, map[string]string{

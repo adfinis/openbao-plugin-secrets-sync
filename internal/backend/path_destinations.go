@@ -89,9 +89,6 @@ var destinationConfigFieldKeysByType = map[string][]string{
 var destinationSensitiveConfigFieldKeysByType = map[string][]string{
 	awssecretsmanager.ProviderType: {
 		awssecretsmanager.ConfigKeyExternalID,
-		awssecretsmanager.ConfigKeyAccessKeyID,
-		awssecretsmanager.ConfigKeySecretAccessKey,
-		awssecretsmanager.ConfigKeySessionToken,
 	},
 	gitlab.ProviderType: {
 		gitlab.ConfigKeyToken,
@@ -227,7 +224,7 @@ func destinationRequestFields() map[string]*framework.FieldSchema {
 	}
 	fields[awssecretsmanager.ConfigKeyAuthMode] = &framework.FieldSchema{
 		Type: framework.TypeString,
-		Description: "Provider auth mode. aws-sm: default, assume_role, web_identity, or reserved static. " +
+		Description: "Provider auth mode. aws-sm: default, assume_role, or web_identity. " +
 			"k8s: in_cluster, kubeconfig, or token.",
 	}
 	fields[awssecretsmanager.ConfigKeyRoleARN] = &framework.FieldSchema{
@@ -259,27 +256,6 @@ func destinationRequestFields() map[string]*framework.FieldSchema {
 		Type: framework.TypeString,
 		Description: "Opt in to AWS GetSecretValue checks for explicit plan, upsert, and read-state " +
 			"value drift detection. Defaults to false.",
-	}
-	fields[awssecretsmanager.ConfigKeyAccessKeyID] = &framework.FieldSchema{
-		Type:        framework.TypeString,
-		Description: "Static AWS access key ID. Static auth is intentionally unsupported until a later slice.",
-		DisplayAttrs: &framework.DisplayAttributes{
-			Sensitive: true,
-		},
-	}
-	fields[awssecretsmanager.ConfigKeySecretAccessKey] = &framework.FieldSchema{
-		Type:        framework.TypeString,
-		Description: "Static AWS secret access key. Static auth is intentionally unsupported until a later slice.",
-		DisplayAttrs: &framework.DisplayAttributes{
-			Sensitive: true,
-		},
-	}
-	fields[awssecretsmanager.ConfigKeySessionToken] = &framework.FieldSchema{
-		Type:        framework.TypeString,
-		Description: "Static AWS session token. Static auth is intentionally unsupported until a later slice.",
-		DisplayAttrs: &framework.DisplayAttributes{
-			Sensitive: true,
-		},
 	}
 	fields[gitlab.ConfigKeyBaseURL] = &framework.FieldSchema{
 		Type:        framework.TypeString,
@@ -387,6 +363,9 @@ func (b *secretSyncBackend) pathDestinationWrite(
 	if err := b.validateDestinationType(destinationType); err != nil {
 		return logical.ErrorResponse(err.Error()), nil
 	}
+	if err := validateDestinationWriteFields(data); err != nil {
+		return logical.ErrorResponse(err.Error()), nil
+	}
 	provider, err := b.providerRegistry.MustGet(destinationType)
 	if err != nil {
 		return logical.ErrorResponse(err.Error()), nil
@@ -414,6 +393,23 @@ func (b *secretSyncBackend) pathDestinationWrite(
 	}
 	b.invalidateDestinationRuntime(ctx, destinationRef(record.Type, record.Name))
 	return nil, nil
+}
+
+func validateDestinationWriteFields(data *framework.FieldData) error {
+	unsupportedFields := []string{}
+	for field := range data.Raw {
+		if _, ok := data.Schema[field]; !ok {
+			unsupportedFields = append(unsupportedFields, field)
+		}
+	}
+	if len(unsupportedFields) == 0 {
+		return nil
+	}
+	sort.Strings(unsupportedFields)
+	if len(unsupportedFields) == 1 {
+		return fmt.Errorf("unsupported destination field %q", unsupportedFields[0])
+	}
+	return fmt.Errorf("unsupported destination fields %q", strings.Join(unsupportedFields, ", "))
 }
 
 func destinationWriteRecordFromFieldData(
