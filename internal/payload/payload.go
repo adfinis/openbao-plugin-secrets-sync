@@ -28,18 +28,14 @@ func BuildJSON(data map[string]interface{}) (CanonicalPayload, error) {
 	if len(data) == 0 {
 		return CanonicalPayload{}, fmt.Errorf("payload data must contain at least one key")
 	}
-	var buffer bytes.Buffer
-	encoder := json.NewEncoder(&buffer)
-	encoder.SetEscapeHTML(false)
-	if err := encoder.Encode(data); err != nil {
+	payloadBytes, payloadHash, err := canonicalJSON(data)
+	if err != nil {
 		return CanonicalPayload{}, err
 	}
-	payloadBytes := bytes.TrimSuffix(buffer.Bytes(), []byte("\n"))
-	sum := sha256.Sum256(payloadBytes)
 	return CanonicalPayload{
 		Format: FormatJSON,
 		Bytes:  payloadBytes,
-		SHA256: "sha256:" + hex.EncodeToString(sum[:]),
+		SHA256: payloadHash,
 	}, nil
 }
 
@@ -49,11 +45,10 @@ func BuildRaw(value interface{}) (CanonicalPayload, error) {
 	if err != nil {
 		return CanonicalPayload{}, err
 	}
-	sum := sha256.Sum256(payloadBytes)
 	return CanonicalPayload{
 		Format: FormatRaw,
 		Bytes:  payloadBytes,
-		SHA256: "sha256:" + hex.EncodeToString(sum[:]),
+		SHA256: payloadSHA256(payloadBytes),
 	}, nil
 }
 
@@ -63,20 +58,32 @@ func BuildDataMap(data map[string][]byte) (CanonicalPayload, error) {
 		return CanonicalPayload{}, fmt.Errorf("data-map payload must contain at least one key")
 	}
 	copied := copyDataMap(data)
-	var buffer bytes.Buffer
-	encoder := json.NewEncoder(&buffer)
-	encoder.SetEscapeHTML(false)
-	if err := encoder.Encode(copied); err != nil {
+	payloadBytes, payloadHash, err := canonicalJSON(copied)
+	if err != nil {
 		return CanonicalPayload{}, err
 	}
-	payloadBytes := bytes.TrimSuffix(buffer.Bytes(), []byte("\n"))
-	sum := sha256.Sum256(payloadBytes)
 	return CanonicalPayload{
 		Format: FormatDataMap,
 		Bytes:  payloadBytes,
-		SHA256: "sha256:" + hex.EncodeToString(sum[:]),
+		SHA256: payloadHash,
 		Data:   copied,
 	}, nil
+}
+
+func canonicalJSON(value interface{}) ([]byte, string, error) {
+	var buffer bytes.Buffer
+	encoder := json.NewEncoder(&buffer)
+	encoder.SetEscapeHTML(false)
+	if err := encoder.Encode(value); err != nil {
+		return nil, "", err
+	}
+	payloadBytes := bytes.TrimSuffix(buffer.Bytes(), []byte("\n"))
+	return payloadBytes, payloadSHA256(payloadBytes), nil
+}
+
+func payloadSHA256(payloadBytes []byte) string {
+	sum := sha256.Sum256(payloadBytes)
+	return "sha256:" + hex.EncodeToString(sum[:])
 }
 
 // RawBytes returns the exact bytes accepted by raw and data-map payload modes.
