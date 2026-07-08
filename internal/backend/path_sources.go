@@ -24,8 +24,9 @@ func pathSources(b *secretSyncBackend) []*framework.Path {
 					Summary:  "Check source readiness.",
 				},
 			},
-			HelpSynopsis:    "Check source sync readiness.",
-			HelpDescription: "Reports whether a source path has a current version and whether source opt-in metadata is present.",
+			HelpSynopsis: "Check source sync readiness.",
+			HelpDescription: "Reports whether a source path has a current version and whether " +
+				"source opt-in metadata is present.",
 		},
 		{
 			Pattern: "sources/(?P<path>.+)/enable",

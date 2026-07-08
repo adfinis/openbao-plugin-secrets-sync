@@ -415,8 +415,8 @@ func assertSourceReadyWithoutOptIn(t *testing.T, client *api.Client) {
 	if got := secret.Data["source_opt_in_required"]; got != false {
 		t.Fatalf("source_opt_in_required = %v, want false", got)
 	}
-	if got := secret.Data["syncable"]; got != false {
-		t.Fatalf("syncable = %v, want false", got)
+	if got := secret.Data["source_opt_in_present"]; got != false {
+		t.Fatalf("source_opt_in_present = %v, want false", got)
 	}
 	if got := secret.Data["ready"]; got != true {
 		t.Fatalf("ready = %v, want true", got)
