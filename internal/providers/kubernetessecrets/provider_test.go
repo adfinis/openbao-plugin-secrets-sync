@@ -2,11 +2,19 @@ package kubernetessecrets
 
 import (
 	"context"
+	"crypto/ed25519"
+	"crypto/rand"
+	"crypto/x509"
+	"crypto/x509/pkix"
 	"encoding/json"
+	"encoding/pem"
 	"errors"
+	"math/big"
 	"net/netip"
 	"strconv"
+	"strings"
 	"testing"
+	"time"
 
 	payloadpkg "github.com/adfinis/openbao-plugin-secrets-sync/internal/payload"
 	"github.com/adfinis/openbao-plugin-secrets-sync/internal/providers"
@@ -35,25 +43,34 @@ const (
 	testRestoreEpoch    = "epoch-test"
 )
 
-const testCACertPEM = `-----BEGIN CERTIFICATE-----
-MIIDIzCCAgugAwIBAgIUE5FUmToiQv3bNaxE1dI9jJj8bsIwDQYJKoZIhvcNAQEL
-BQAwITEfMB0GA1UEAwwWa3ViZXJuZXRlcy5kZWZhdWx0LnN2YzAeFw0yNjA3MDIx
-NjE0MDdaFw0yNjA3MDMxNjE0MDdaMCExHzAdBgNVBAMMFmt1YmVybmV0ZXMuZGVm
-YXVsdC5zdmMwggEiMA0GCSqGSIb3DQEBAQUAA4IBDwAwggEKAoIBAQCwKLu09rvV
-i57nXOwK7W6iDMM1X606UQrfTb/T5pyjFE1g6DajO/QMZqC4n1+b86uDwpiCjobb
-p+Iu3FaMHEJyoejKQbd2d6VvEjfHHCAson/XZEWgCVwk03L7YCu55zYzaC4tyc/u
-5hsdgnJGvi6TGpxFvhRUkMQcnAwsUBZ7YVV1pc6B81UTWkGYQdo1mIdqHcx1ngQ3
-A7bjmfEtPxVM51DEYc9DJSCmbmXShXAs1kdc424mhBng4hNzAv6hLLFL9DqD6Wmn
-KEcAFi4SrG3IxsC3i8ph1uRQrgZX5ASVj+gwNPhp4937AYU+kJjg2VOY3iQQkOYo
-+fy4dIch/zuNAgMBAAGjUzBRMB0GA1UdDgQWBBTxoSmRj83w0WIpKC2cpjZ1U8qI
-aDAfBgNVHSMEGDAWgBTxoSmRj83w0WIpKC2cpjZ1U8qIaDAPBgNVHRMBAf8EBTAD
-AQH/MA0GCSqGSIb3DQEBCwUAA4IBAQCt16lTmsc2/nHqI0Zi77AxPN+XfXdm+oW7
-bdUeOzL1ZhwvXbcbXRzV19mnRM3oAkYQIA5+XDNN63AMm3QQ0sdC9exya+mbGokz
-dh4uSM/A2qc5e08acV9VkRD8aPMBjdYXuKmfeCAkVq3y86EOEYe0Uh+sBVfU2Q+a
-1G+M56JnByoz+zAwI4yUMfqJ5tGvUsB99DuWWzSAtgNKC2mtV9rG7OhEi2hAx42T
-ONdZhbrc5TmwV7TpNa0pSjVsBOjaavQSGw9UN3p4oXoSKaZoFVYN8bbarZM19g5v
-T459I6FRYgo1Ut0HO2F/8edsZ5cAIgn4gVlqDQkMvWK1zNlp59CF
------END CERTIFICATE-----`
+var testCACertPEM = mustTestCACertPEM()
+
+func mustTestCACertPEM() string {
+	serialLimit := new(big.Int).Lsh(big.NewInt(1), 128)
+	serial, err := rand.Int(rand.Reader, serialLimit)
+	if err != nil {
+		panic(err)
+	}
+	publicKey, privateKey, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		panic(err)
+	}
+	now := time.Now().UTC()
+	template := &x509.Certificate{
+		SerialNumber:          serial,
+		Subject:               pkix.Name{CommonName: "kubernetes.default.svc"},
+		NotBefore:             now.Add(-time.Hour),
+		NotAfter:              now.AddDate(10, 0, 0),
+		KeyUsage:              x509.KeyUsageCertSign | x509.KeyUsageDigitalSignature,
+		BasicConstraintsValid: true,
+		IsCA:                  true,
+	}
+	certDER, err := x509.CreateCertificate(rand.Reader, template, template, publicKey, privateKey)
+	if err != nil {
+		panic(err)
+	}
+	return strings.TrimSpace(string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: certDER})))
+}
 
 var secretsResource = schema.GroupResource{Resource: "secrets"}
 

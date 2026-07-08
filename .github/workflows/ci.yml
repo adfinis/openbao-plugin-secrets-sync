@@ -184,7 +184,7 @@ jobs:
           failures=()
           while IFS='=' read -r job result; do
             case "${result}" in
-              success|skipped)
+              success)
                 ;;
               *)
                 failures+=("${job}:${result}")
