@@ -1378,7 +1378,7 @@ func TestVariableMetadataDescriptionEscapesReadableFields(t *testing.T) {
 		t.Fatalf("description = %q, want escaped source path", input.Description)
 	}
 	metadata, owned := ownershipMetadata(&gitlabVariable{Description: input.Description})
-	if !ownedByRequest(metadata, owned, ownershipIdentityFromUpsert(request)) {
+	if !ownedByRequest(metadata, owned, request.OwnershipIdentity()) {
 		t.Fatalf("metadata does not match request identity: %#v", metadata)
 	}
 	if metadata.SourcePath != request.SourcePath {
@@ -1452,11 +1452,11 @@ func TestOwnedByRequestRejectsRuntimeIdentityMismatch(t *testing.T) {
 		PayloadSHA256:    request.PayloadSHA256,
 		PayloadFormat:    request.Format,
 	}))
-	if !ownedByRequest(metadata, owned, ownershipIdentityFromUpsert(request)) {
+	if !ownedByRequest(metadata, owned, request.OwnershipIdentity()) {
 		t.Fatal("ownedByRequest returned false for matching runtime identity")
 	}
 	metadata.PluginInstanceID = "inst-other"
-	if ownedByRequest(metadata, owned, ownershipIdentityFromUpsert(request)) {
+	if ownedByRequest(metadata, owned, request.OwnershipIdentity()) {
 		t.Fatal("ownedByRequest returned true for mismatched plugin instance")
 	}
 }
@@ -1478,7 +1478,7 @@ func TestVariableMetadataDescriptionFitsGitLabLimit(t *testing.T) {
 	}
 
 	metadata, owned := ownershipMetadata(&gitlabVariable{Description: input.Description})
-	if !ownedByRequest(metadata, owned, ownershipIdentityFromUpsert(request)) {
+	if !ownedByRequest(metadata, owned, request.OwnershipIdentity()) {
 		t.Fatalf("metadata does not match request identity: %#v", metadata)
 	}
 	if metadata.PayloadSHA256 != testPayloadSHANew {
@@ -1517,7 +1517,7 @@ func TestVariableMetadataDescriptionFitsGitLabLimitWithRuntimeIdentity(t *testin
 	if metadata.PluginInstanceIDHash == "" && metadata.RestoreEpochHash == "" {
 		t.Fatalf("metadata runtime identity was not compacted: %#v", metadata)
 	}
-	if !ownedByRequest(metadata, owned, ownershipIdentityFromUpsert(request)) {
+	if !ownedByRequest(metadata, owned, request.OwnershipIdentity()) {
 		t.Fatalf("compacted metadata does not match request identity: %#v", metadata)
 	}
 }

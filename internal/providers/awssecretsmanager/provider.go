@@ -6,7 +6,6 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
-	"net"
 	"net/http"
 	"net/netip"
 	"net/url"
@@ -16,6 +15,7 @@ import (
 	"time"
 
 	"github.com/adfinis/openbao-plugin-secrets-sync/internal/providers"
+	"github.com/adfinis/openbao-plugin-secrets-sync/internal/providers/endpointguard"
 	"github.com/aws/aws-sdk-go-v2/aws"
 	awsconfig "github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/credentials/stscreds"
@@ -69,7 +69,6 @@ const (
 	minDeleteRecoveryWindowDays     = 7
 	maxDeleteRecoveryWindowDays     = 30
 	defaultHTTPTimeout              = 30 * time.Second
-	endpointResolutionTimeout       = 5 * time.Second
 
 	tagManaged        = "openbao-sync"
 	tagAssociationID  = "openbao-sync-association"
@@ -80,8 +79,6 @@ const (
 	tagPluginInstance = "openbao-sync-plugin-instance"
 	tagRestoreEpoch   = "openbao-sync-restore-epoch"
 )
-
-type endpointResolver func(context.Context, string, string) ([]netip.Addr, error)
 
 type secretsManagerClient interface {
 	DescribeSecret(
@@ -210,7 +207,7 @@ func (r destinationRuntime) Plan(ctx context.Context, req providers.PlanRequest)
 	if err != nil {
 		return blockedPlan(classifyAWSError(err)), nil
 	}
-	if !ownedByRequest(describe.Tags, ownershipIdentityFromPlan(req)) {
+	if !ownedByRequest(describe.Tags, req.OwnershipIdentity()) {
 		message := "aws-sm secret exists but is not owned by this association"
 		if describe.DeletedDate != nil {
 			message = "aws-sm secret is scheduled for deletion but is not owned by this association"
@@ -270,7 +267,7 @@ func (r destinationRuntime) Upsert(ctx context.Context, req providers.UpsertRequ
 	if err != nil {
 		return nil, providerError(classifyAWSError(err))
 	}
-	if !ownedByRequest(describe.Tags, ownershipIdentityFromUpsert(req)) {
+	if !ownedByRequest(describe.Tags, req.OwnershipIdentity()) {
 		return nil, providerError(providers.ErrorClassOwnership)
 	}
 	if remoteSourceVersionNewer(describe.Tags, req.SourceVersion) {
@@ -327,7 +324,7 @@ func (r destinationRuntime) Delete(ctx context.Context, req providers.DeleteRequ
 	if err != nil {
 		return nil, providerError(classifyAWSError(err))
 	}
-	if !ownedByRequest(describe.Tags, ownershipIdentityFromDelete(req)) {
+	if !ownedByRequest(describe.Tags, req.OwnershipIdentity()) {
 		return nil, providerError(providers.ErrorClassOwnership)
 	}
 	if describe.DeletedDate != nil {
@@ -362,7 +359,7 @@ func (r destinationRuntime) ReadState(
 	if describe.DeletedDate != nil {
 		return &providers.RemoteState{Exists: false}, nil
 	}
-	owned := ownedByRequest(describe.Tags, ownershipIdentityFromReadState(req))
+	owned := ownedByRequest(describe.Tags, req.OwnershipIdentity())
 	payloadSHA256 := tagValue(describe.Tags, tagPayloadSHA256)
 	verification := providers.RemoteStateVerificationMetadata
 	if owned && r.options.valueDriftDetection {
@@ -376,7 +373,7 @@ func (r destinationRuntime) ReadState(
 	sourceVersion, _ := strconv.Atoi(tagValue(describe.Tags, tagSourceVersion))
 	return &providers.RemoteState{
 		Exists:         true,
-		OwnershipKnown: hasOwnershipIdentityFromReadState(req),
+		OwnershipKnown: req.OwnershipIdentity().Complete(),
 		Owned:          owned,
 		PayloadSHA256:  payloadSHA256,
 		SourceVersion:  sourceVersion,
@@ -424,7 +421,7 @@ func defaultClientFactory(
 	if err != nil {
 		return nil, err
 	}
-	if err := validateEndpointResolution(ctx, options, net.DefaultResolver.LookupNetIP); err != nil {
+	if err := validateEndpointResolution(ctx, options, nil); err != nil {
 		return nil, err
 	}
 	loadOptions := []func(*awsconfig.LoadOptions) error{}
@@ -650,7 +647,7 @@ func validateEndpointURL(rawEndpoint string, endpointPolicy string) error {
 		parsedEndpoint.RawQuery != "" || parsedEndpoint.Fragment != "" {
 		return validationError("aws-sm endpoint_url must include a host and no userinfo, query, or fragment")
 	}
-	host := normalizeEndpointHost(parsedEndpoint.Hostname())
+	host := endpointguard.NormalizeHost(parsedEndpoint.Hostname())
 	if host == "" {
 		return validationError("aws-sm endpoint_url must include a host")
 	}
@@ -667,23 +664,20 @@ func validateEndpointURL(rawEndpoint string, endpointPolicy string) error {
 func validateEndpointResolution(
 	ctx context.Context,
 	options awsDestinationOptions,
-	resolver endpointResolver,
+	resolver endpointguard.Resolver,
 ) error {
 	if options.endpointURL == "" || options.endpointPolicy != EndpointPolicyPrivate {
 		return nil
-	}
-	if resolver == nil {
-		resolver = net.DefaultResolver.LookupNetIP
 	}
 	parsedEndpoint, err := url.Parse(options.endpointURL)
 	if err != nil {
 		return validationError("aws-sm endpoint_url must be a valid URL")
 	}
-	host := normalizeEndpointHost(parsedEndpoint.Hostname())
+	host := endpointguard.NormalizeHost(parsedEndpoint.Hostname())
 	if host == "" {
 		return validationError("aws-sm endpoint_url must include a host")
 	}
-	if addr, ok := parseEndpointAddr(host); ok {
+	if addr, ok := endpointguard.ParseAddr(host); ok {
 		if isUnsafeEndpointAddr(addr) {
 			return validationError(
 				"aws-sm private endpoint_url DNS must not resolve to loopback, link-local, multicast, or unspecified addresses",
@@ -691,9 +685,7 @@ func validateEndpointResolution(
 		}
 		return nil
 	}
-	resolveCtx, cancel := context.WithTimeout(ctx, endpointResolutionTimeout)
-	defer cancel()
-	addrs, err := resolver(resolveCtx, "ip", host)
+	addrs, err := endpointguard.LookupNetIP(ctx, host, resolver)
 	if err != nil {
 		return &providers.Error{
 			Class:   providers.ErrorClassUnavailable,
@@ -733,7 +725,7 @@ func validatePrivateEndpointURL(scheme string, host string) error {
 	if isLocalEndpointHost(host) {
 		return validationError("aws-sm private endpoint_url must not target local development hosts")
 	}
-	if addr, ok := parseEndpointAddr(host); ok && isUnsafeEndpointAddr(addr) {
+	if addr, ok := endpointguard.ParseAddr(host); ok && isUnsafeEndpointAddr(addr) {
 		return validationError(
 			"aws-sm private endpoint_url must not target loopback, link-local, multicast, or unspecified addresses",
 		)
@@ -741,27 +733,15 @@ func validatePrivateEndpointURL(scheme string, host string) error {
 	return nil
 }
 
-func normalizeEndpointHost(host string) string {
-	return strings.TrimSuffix(strings.ToLower(strings.TrimSpace(host)), ".")
-}
-
 func isLocalEndpointHost(host string) bool {
-	if host == "localhost" || host == "localstack" || strings.HasSuffix(host, ".localhost") {
+	if endpointguard.NormalizeHost(host) == "localstack" {
 		return true
 	}
-	addr, ok := parseEndpointAddr(host)
-	return ok && addr.IsLoopback()
-}
-
-func parseEndpointAddr(host string) (netip.Addr, bool) {
-	addr, err := netip.ParseAddr(host)
-	if err != nil {
-		return netip.Addr{}, false
-	}
-	return addr, true
+	return endpointguard.IsLocalHost(host)
 }
 
 func isUnsafeEndpointAddr(addr netip.Addr) bool {
+	addr = addr.Unmap()
 	return addr.IsLoopback() ||
 		addr.IsLinkLocalUnicast() ||
 		addr.IsMulticast() ||
@@ -838,58 +818,6 @@ func payloadSHA256(payload []byte) string {
 	return "sha256:" + hex.EncodeToString(sum[:])
 }
 
-type ownershipIdentity struct {
-	AssociationID    string
-	SourcePath       string
-	ObjectID         string
-	PluginInstanceID string
-	RestoreEpoch     string
-}
-
-func ownershipIdentityFromPlan(req providers.PlanRequest) ownershipIdentity {
-	return ownershipIdentity{
-		AssociationID:    req.AssociationID,
-		SourcePath:       req.SourcePath,
-		ObjectID:         req.ObjectID,
-		PluginInstanceID: req.Runtime.PluginInstanceID,
-		RestoreEpoch:     req.Runtime.RestoreEpoch,
-	}
-}
-
-func ownershipIdentityFromUpsert(req providers.UpsertRequest) ownershipIdentity {
-	return ownershipIdentity{
-		AssociationID:    req.AssociationID,
-		SourcePath:       req.SourcePath,
-		ObjectID:         req.ObjectID,
-		PluginInstanceID: req.Runtime.PluginInstanceID,
-		RestoreEpoch:     req.Runtime.RestoreEpoch,
-	}
-}
-
-func ownershipIdentityFromDelete(req providers.DeleteRequest) ownershipIdentity {
-	return ownershipIdentity{
-		AssociationID:    req.AssociationID,
-		SourcePath:       req.SourcePath,
-		ObjectID:         req.ObjectID,
-		PluginInstanceID: req.Runtime.PluginInstanceID,
-		RestoreEpoch:     req.Runtime.RestoreEpoch,
-	}
-}
-
-func ownershipIdentityFromReadState(req providers.ReadStateRequest) ownershipIdentity {
-	return ownershipIdentity{
-		AssociationID:    req.AssociationID,
-		SourcePath:       req.SourcePath,
-		ObjectID:         req.ObjectID,
-		PluginInstanceID: req.Runtime.PluginInstanceID,
-		RestoreEpoch:     req.Runtime.RestoreEpoch,
-	}
-}
-
-func hasOwnershipIdentityFromReadState(req providers.ReadStateRequest) bool {
-	return req.AssociationID != "" && req.SourcePath != "" && req.ObjectID != ""
-}
-
 func ownershipTagsFromUpsert(req providers.UpsertRequest) []smtypes.Tag {
 	tags := []smtypes.Tag{
 		tag(tagManaged, "true"),
@@ -908,7 +836,7 @@ func ownershipTagsFromUpsert(req providers.UpsertRequest) []smtypes.Tag {
 	return tags
 }
 
-func ownedByRequest(tags []smtypes.Tag, identity ownershipIdentity) bool {
+func ownedByRequest(tags []smtypes.Tag, identity providers.RequestIdentity) bool {
 	if tagValue(tags, tagManaged) != "true" {
 		return false
 	}

@@ -159,7 +159,7 @@ func (r destinationRuntime) Plan(ctx context.Context, req providers.PlanRequest)
 	if err != nil {
 		return blockedPlan(classifyKubernetesError(err)), nil
 	}
-	if !ownedByRequest(secret, ownershipIdentityFromPlan(req)) {
+	if !ownedByRequest(secret, req.OwnershipIdentity()) {
 		return &providers.PlanResult{
 			Action:     providers.PlanActionConflict,
 			ErrorClass: providers.ErrorClassCollision,
@@ -222,7 +222,7 @@ func (r destinationRuntime) Upsert(ctx context.Context, req providers.UpsertRequ
 	if err != nil {
 		return nil, providerError(classifyKubernetesError(err))
 	}
-	if !ownedByRequest(secret, ownershipIdentityFromUpsert(req)) {
+	if !ownedByRequest(secret, req.OwnershipIdentity()) {
 		return nil, providerError(providers.ErrorClassOwnership)
 	}
 	if remoteSourceVersionNewer(secret.Annotations, req.SourceVersion) {
@@ -237,7 +237,7 @@ func (r destinationRuntime) Upsert(ctx context.Context, req providers.UpsertRequ
 	updated := secret.DeepCopy()
 	updated.Type = corev1.SecretTypeOpaque
 	updated.Data = map[string][]byte{dataKeyPayload: req.Payload}
-	applyOwnershipMetadata(updated, ownershipIdentityFromUpsert(req), req.SourceVersion, req.PayloadSHA256, req.Format)
+	applyOwnershipMetadata(updated, req.OwnershipIdentity(), req.SourceVersion, req.PayloadSHA256, req.Format)
 	result, err := secretClient.Update(ctx, updated, metav1.UpdateOptions{})
 	if err != nil {
 		return nil, providerError(classifyKubernetesError(err))
@@ -257,7 +257,7 @@ func (r destinationRuntime) Delete(ctx context.Context, req providers.DeleteRequ
 	if err != nil {
 		return nil, providerError(classifyKubernetesError(err))
 	}
-	if !ownedByRequest(secret, ownershipIdentityFromDelete(req)) {
+	if !ownedByRequest(secret, req.OwnershipIdentity()) {
 		return nil, providerError(providers.ErrorClassOwnership)
 	}
 	if remoteSourceVersionNewer(secret.Annotations, req.SourceVersion) {
@@ -290,8 +290,8 @@ func (r destinationRuntime) ReadState(
 	sourceVersion, _ := strconv.Atoi(annotationValue(secret.Annotations, annotationSourceVersion))
 	return &providers.RemoteState{
 		Exists:         true,
-		OwnershipKnown: hasOwnershipIdentityFromReadState(req),
-		Owned:          ownedByRequest(secret, ownershipIdentityFromReadState(req)),
+		OwnershipKnown: req.OwnershipIdentity().Complete(),
+		Owned:          ownedByRequest(secret, req.OwnershipIdentity()),
 		PayloadSHA256:  payloadSHA256ForMode(secret, req.DataMap),
 		SourceVersion:  sourceVersion,
 		RemoteVersion:  secret.ResourceVersion,
@@ -608,7 +608,7 @@ func createSecret(
 		Type: corev1.SecretTypeOpaque,
 		Data: map[string][]byte{dataKeyPayload: req.Payload},
 	}
-	applyOwnershipMetadata(secret, ownershipIdentityFromUpsert(req), req.SourceVersion, req.PayloadSHA256, req.Format)
+	applyOwnershipMetadata(secret, req.OwnershipIdentity(), req.SourceVersion, req.PayloadSHA256, req.Format)
 	result, err := secretClient.Create(ctx, secret, metav1.CreateOptions{})
 	if err != nil {
 		return nil, providerError(classifyKubernetesError(err))
@@ -631,7 +631,7 @@ func (r destinationRuntime) upsertDataMap(
 	if err != nil {
 		return nil, providerError(classifyKubernetesError(err))
 	}
-	if !ownedByRequest(secret, ownershipIdentityFromUpsert(req)) {
+	if !ownedByRequest(secret, req.OwnershipIdentity()) {
 		return nil, providerError(providers.ErrorClassOwnership)
 	}
 	if remoteSourceVersionNewer(secret.Annotations, req.SourceVersion) {
@@ -654,7 +654,7 @@ func (r destinationRuntime) upsertDataMap(
 	updated := secret.DeepCopy()
 	updated.Type = corev1.SecretTypeOpaque
 	updated.Data = mergedDataMap(secret.Data, managedKeys, req.DataMap)
-	applyOwnershipMetadata(updated, ownershipIdentityFromUpsert(req), req.SourceVersion, req.PayloadSHA256, req.Format)
+	applyOwnershipMetadata(updated, req.OwnershipIdentity(), req.SourceVersion, req.PayloadSHA256, req.Format)
 	applyDataMapMetadata(updated, dataMapKeys(req.DataMap))
 	result, err := secretClient.Update(ctx, updated, metav1.UpdateOptions{})
 	if err != nil {
@@ -677,7 +677,7 @@ func createDataMapSecret(
 		Type: corev1.SecretTypeOpaque,
 		Data: copyDataMap(req.DataMap),
 	}
-	applyOwnershipMetadata(secret, ownershipIdentityFromUpsert(req), req.SourceVersion, req.PayloadSHA256, req.Format)
+	applyOwnershipMetadata(secret, req.OwnershipIdentity(), req.SourceVersion, req.PayloadSHA256, req.Format)
 	applyDataMapMetadata(secret, dataMapKeys(req.DataMap))
 	result, err := secretClient.Create(ctx, secret, metav1.CreateOptions{})
 	if err != nil {
@@ -713,61 +713,9 @@ func (r destinationRuntime) deleteDataMap(
 	return &providers.SyncResult{RemoteVersion: result.ResourceVersion}, nil
 }
 
-type ownershipIdentity struct {
-	AssociationID    string
-	SourcePath       string
-	ObjectID         string
-	PluginInstanceID string
-	RestoreEpoch     string
-}
-
-func ownershipIdentityFromPlan(req providers.PlanRequest) ownershipIdentity {
-	return ownershipIdentity{
-		AssociationID:    req.AssociationID,
-		SourcePath:       req.SourcePath,
-		ObjectID:         req.ObjectID,
-		PluginInstanceID: req.Runtime.PluginInstanceID,
-		RestoreEpoch:     req.Runtime.RestoreEpoch,
-	}
-}
-
-func ownershipIdentityFromUpsert(req providers.UpsertRequest) ownershipIdentity {
-	return ownershipIdentity{
-		AssociationID:    req.AssociationID,
-		SourcePath:       req.SourcePath,
-		ObjectID:         req.ObjectID,
-		PluginInstanceID: req.Runtime.PluginInstanceID,
-		RestoreEpoch:     req.Runtime.RestoreEpoch,
-	}
-}
-
-func ownershipIdentityFromDelete(req providers.DeleteRequest) ownershipIdentity {
-	return ownershipIdentity{
-		AssociationID:    req.AssociationID,
-		SourcePath:       req.SourcePath,
-		ObjectID:         req.ObjectID,
-		PluginInstanceID: req.Runtime.PluginInstanceID,
-		RestoreEpoch:     req.Runtime.RestoreEpoch,
-	}
-}
-
-func ownershipIdentityFromReadState(req providers.ReadStateRequest) ownershipIdentity {
-	return ownershipIdentity{
-		AssociationID:    req.AssociationID,
-		SourcePath:       req.SourcePath,
-		ObjectID:         req.ObjectID,
-		PluginInstanceID: req.Runtime.PluginInstanceID,
-		RestoreEpoch:     req.Runtime.RestoreEpoch,
-	}
-}
-
-func hasOwnershipIdentityFromReadState(req providers.ReadStateRequest) bool {
-	return req.AssociationID != "" && req.SourcePath != "" && req.ObjectID != ""
-}
-
 func applyOwnershipMetadata(
 	secret *corev1.Secret,
-	identity ownershipIdentity,
+	identity providers.RequestIdentity,
 	sourceVersion int,
 	payloadSHA256 string,
 	format string,
@@ -827,7 +775,7 @@ func removeOwnershipMetadata(secret *corev1.Secret) {
 	}
 }
 
-func ownedByRequest(secret *corev1.Secret, identity ownershipIdentity) bool {
+func ownedByRequest(secret *corev1.Secret, identity providers.RequestIdentity) bool {
 	if secret == nil || secret.Labels[labelManaged] != "true" {
 		return false
 	}

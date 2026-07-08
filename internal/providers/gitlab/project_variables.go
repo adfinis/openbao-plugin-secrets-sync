@@ -162,7 +162,7 @@ func (r destinationRuntime) Plan(ctx context.Context, req providers.PlanRequest)
 		return blockedPlan(classifyGitLabError(err)), nil
 	}
 	metadata, owned := ownershipMetadata(variable)
-	if !ownedByRequest(metadata, owned, ownershipIdentityFromPlan(req)) {
+	if !ownedByRequest(metadata, owned, req.OwnershipIdentity()) {
 		return &providers.PlanResult{
 			Action:     providers.PlanActionConflict,
 			ErrorClass: providers.ErrorClassCollision,
@@ -214,7 +214,7 @@ func (r destinationRuntime) Upsert(ctx context.Context, req providers.UpsertRequ
 		return nil, providerError(classifyGitLabError(err))
 	}
 	metadata, owned := ownershipMetadata(variable)
-	if !ownedByRequest(metadata, owned, ownershipIdentityFromUpsert(req)) {
+	if !ownedByRequest(metadata, owned, req.OwnershipIdentity()) {
 		return nil, providerError(providers.ErrorClassOwnership)
 	}
 	if remoteSourceVersionNewer(metadata, req.SourceVersion) {
@@ -248,7 +248,7 @@ func (r destinationRuntime) Delete(ctx context.Context, req providers.DeleteRequ
 		return nil, providerError(classifyGitLabError(err))
 	}
 	metadata, owned := ownershipMetadata(variable)
-	if !ownedByRequest(metadata, owned, ownershipIdentityFromDelete(req)) {
+	if !ownedByRequest(metadata, owned, req.OwnershipIdentity()) {
 		return nil, providerError(providers.ErrorClassOwnership)
 	}
 	if remoteSourceVersionNewer(metadata, req.SourceVersion) {
@@ -278,7 +278,7 @@ func (r destinationRuntime) ReadState(
 	return &providers.RemoteState{
 		Exists:         true,
 		OwnershipKnown: true,
-		Owned:          ownedByRequest(metadata, owned, ownershipIdentityFromReadState(req)),
+		Owned:          ownedByRequest(metadata, owned, req.OwnershipIdentity()),
 		PayloadSHA256:  variablePayloadSHA256(variable),
 		SourceVersion:  metadata.SourceVersion,
 		RemoteVersion:  remoteVersion(variable),
@@ -596,54 +596,6 @@ func variableMatchesInput(variable *gitlabVariable, input gitlabVariableInput) b
 		variable.VariableRaw == input.VariableRaw &&
 		variable.VariableType == input.VariableType &&
 		variable.Description == input.Description
-}
-
-type ownershipIdentity struct {
-	AssociationID    string
-	SourcePath       string
-	ObjectID         string
-	PluginInstanceID string
-	RestoreEpoch     string
-}
-
-func ownershipIdentityFromPlan(req providers.PlanRequest) ownershipIdentity {
-	return ownershipIdentity{
-		AssociationID:    req.AssociationID,
-		SourcePath:       req.SourcePath,
-		ObjectID:         req.ObjectID,
-		PluginInstanceID: req.Runtime.PluginInstanceID,
-		RestoreEpoch:     req.Runtime.RestoreEpoch,
-	}
-}
-
-func ownershipIdentityFromUpsert(req providers.UpsertRequest) ownershipIdentity {
-	return ownershipIdentity{
-		AssociationID:    req.AssociationID,
-		SourcePath:       req.SourcePath,
-		ObjectID:         req.ObjectID,
-		PluginInstanceID: req.Runtime.PluginInstanceID,
-		RestoreEpoch:     req.Runtime.RestoreEpoch,
-	}
-}
-
-func ownershipIdentityFromDelete(req providers.DeleteRequest) ownershipIdentity {
-	return ownershipIdentity{
-		AssociationID:    req.AssociationID,
-		SourcePath:       req.SourcePath,
-		ObjectID:         req.ObjectID,
-		PluginInstanceID: req.Runtime.PluginInstanceID,
-		RestoreEpoch:     req.Runtime.RestoreEpoch,
-	}
-}
-
-func ownershipIdentityFromReadState(req providers.ReadStateRequest) ownershipIdentity {
-	return ownershipIdentity{
-		AssociationID:    req.AssociationID,
-		SourcePath:       req.SourcePath,
-		ObjectID:         req.ObjectID,
-		PluginInstanceID: req.Runtime.PluginInstanceID,
-		RestoreEpoch:     req.Runtime.RestoreEpoch,
-	}
 }
 
 type variableMetadata struct {
@@ -1073,7 +1025,7 @@ func unescapeMetadataDescriptionValue(value string) (string, error) {
 	return builder.String(), nil
 }
 
-func ownedByRequest(metadata variableMetadata, metadataOwned bool, identity ownershipIdentity) bool {
+func ownedByRequest(metadata variableMetadata, metadataOwned bool, identity providers.RequestIdentity) bool {
 	if !metadataOwned {
 		return false
 	}

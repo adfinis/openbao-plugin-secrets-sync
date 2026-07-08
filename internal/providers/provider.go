@@ -66,6 +66,20 @@ type RuntimeIdentity struct {
 	RestoreEpoch     string
 }
 
+// RequestIdentity identifies the OpenBao association that owns a provider object.
+type RequestIdentity struct {
+	AssociationID    string
+	SourcePath       string
+	ObjectID         string
+	PluginInstanceID string
+	RestoreEpoch     string
+}
+
+// Complete reports whether the required ownership fields are present.
+func (i RequestIdentity) Complete() bool {
+	return i.AssociationID != "" && i.SourcePath != "" && i.ObjectID != ""
+}
+
 // ErrorClass is a stable class for provider and provider-boundary failures.
 type ErrorClass string
 
@@ -133,6 +147,11 @@ type PlanRequest struct {
 	ObjectID      string
 }
 
+// OwnershipIdentity returns the association identity used for provider ownership checks.
+func (r PlanRequest) OwnershipIdentity() RequestIdentity {
+	return requestIdentity(r.Runtime, r.AssociationID, r.SourcePath, r.ObjectID)
+}
+
 // PlanResult describes the provider action that would be taken.
 type PlanResult struct {
 	Action     string
@@ -155,6 +174,11 @@ type UpsertRequest struct {
 	ObjectID       string
 }
 
+// OwnershipIdentity returns the association identity used for provider ownership checks.
+func (r UpsertRequest) OwnershipIdentity() RequestIdentity {
+	return requestIdentity(r.Runtime, r.AssociationID, r.SourcePath, r.ObjectID)
+}
+
 // DeleteRequest describes a remote delete operation.
 type DeleteRequest struct {
 	Runtime        RuntimeIdentity
@@ -167,6 +191,11 @@ type DeleteRequest struct {
 	ObjectID       string
 }
 
+// OwnershipIdentity returns the association identity used for provider ownership checks.
+func (r DeleteRequest) OwnershipIdentity() RequestIdentity {
+	return requestIdentity(r.Runtime, r.AssociationID, r.SourcePath, r.ObjectID)
+}
+
 // ReadStateRequest describes a remote state lookup.
 type ReadStateRequest struct {
 	Runtime       RuntimeIdentity
@@ -177,6 +206,26 @@ type ReadStateRequest struct {
 	SourceVersion int
 	AssociationID string
 	ObjectID      string
+}
+
+// OwnershipIdentity returns the association identity used for provider ownership checks.
+func (r ReadStateRequest) OwnershipIdentity() RequestIdentity {
+	return requestIdentity(r.Runtime, r.AssociationID, r.SourcePath, r.ObjectID)
+}
+
+func requestIdentity(
+	runtime RuntimeIdentity,
+	associationID string,
+	sourcePath string,
+	objectID string,
+) RequestIdentity {
+	return RequestIdentity{
+		AssociationID:    associationID,
+		SourcePath:       sourcePath,
+		ObjectID:         objectID,
+		PluginInstanceID: runtime.PluginInstanceID,
+		RestoreEpoch:     runtime.RestoreEpoch,
+	}
 }
 
 // RemoteState is the provider's view of one remote object.
