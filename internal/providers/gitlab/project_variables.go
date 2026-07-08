@@ -609,21 +609,6 @@ type variableMetadata struct {
 	PayloadFormat        string
 }
 
-type variableMetadataWire struct {
-	AssociationID        string
-	SourcePath           string
-	SourcePathHash       string
-	ObjectID             string
-	ObjectIDHash         string
-	PluginInstanceID     string
-	PluginInstanceIDHash string
-	RestoreEpoch         string
-	RestoreEpochHash     string
-	SourceVersion        int
-	PayloadSHA256        string
-	PayloadFormat        string
-}
-
 func variableInputFromUpsert(options gitlabDestinationOptions, req providers.UpsertRequest) gitlabVariableInput {
 	metadata := variableMetadata{
 		AssociationID:    req.AssociationID,
@@ -662,16 +647,7 @@ func variableDescriptionFromPlan(req providers.PlanRequest) string {
 }
 
 func metadataDescription(metadata variableMetadata) string {
-	wire := variableMetadataWire{
-		AssociationID:    metadata.AssociationID,
-		SourcePath:       metadata.SourcePath,
-		ObjectID:         metadata.ObjectID,
-		PluginInstanceID: metadata.PluginInstanceID,
-		RestoreEpoch:     metadata.RestoreEpoch,
-		SourceVersion:    metadata.SourceVersion,
-		PayloadSHA256:    metadata.PayloadSHA256,
-		PayloadFormat:    metadata.PayloadFormat,
-	}
+	wire := metadata
 	compactWireIdentity(&wire.PluginInstanceID, &wire.PluginInstanceIDHash)
 	compactWireIdentity(&wire.RestoreEpoch, &wire.RestoreEpochHash)
 	payload := humanMetadataDescription(wire, false)
@@ -698,7 +674,7 @@ type metadataDescriptionField struct {
 	value string
 }
 
-func humanMetadataDescription(wire variableMetadataWire, compact bool) string {
+func humanMetadataDescription(wire variableMetadata, compact bool) string {
 	fields := metadataDescriptionFields(wire, compact)
 	parts := make([]string, 0, len(fields))
 	for _, field := range fields {
@@ -710,7 +686,7 @@ func humanMetadataDescription(wire variableMetadataWire, compact bool) string {
 	return metadataDescriptionPrefix + metadataDescriptionSummary(wire) + "; " + strings.Join(parts, "; ")
 }
 
-func metadataDescriptionFields(wire variableMetadataWire, compact bool) []metadataDescriptionField {
+func metadataDescriptionFields(wire variableMetadata, compact bool) []metadataDescriptionField {
 	if compact {
 		return []metadataDescriptionField{
 			{key: "a", value: wire.AssociationID},
@@ -733,7 +709,7 @@ func metadataDescriptionFields(wire variableMetadataWire, compact bool) []metada
 	}
 }
 
-func metadataDescriptionSummary(wire variableMetadataWire) string {
+func metadataDescriptionSummary(wire variableMetadata) string {
 	source := wire.SourcePath
 	if source == "" && wire.SourcePathHash != "" {
 		source = metadataDescriptionCompactedPath + wire.SourcePathHash
@@ -850,18 +826,18 @@ func metadataDescriptionFieldValue(fields map[string]string, keys ...string) str
 	return ""
 }
 
-func parseMetadataDescriptionSummary(payload string) (variableMetadataWire, string, error) {
+func parseMetadataDescriptionSummary(payload string) (variableMetadata, string, error) {
 	summary, rest, ok := cutEscapedDescriptionSummary(payload)
 	if !ok {
-		return variableMetadataWire{}, "", fmt.Errorf("metadata description summary is missing fields")
+		return variableMetadata{}, "", fmt.Errorf("metadata description summary is missing fields")
 	}
 	parts := splitEscapedSummaryFields(summary)
 	if len(parts) != 3 {
-		return variableMetadataWire{}, "", fmt.Errorf("metadata description summary must contain source, object, and version")
+		return variableMetadata{}, "", fmt.Errorf("metadata description summary must contain source, object, and version")
 	}
 	sourcePath, err := unescapeMetadataDescriptionValue(parts[0])
 	if err != nil {
-		return variableMetadataWire{}, "", err
+		return variableMetadata{}, "", err
 	}
 	sourcePathHash := ""
 	if hash, ok := strings.CutPrefix(sourcePath, metadataDescriptionCompactedPath); ok {
@@ -870,7 +846,7 @@ func parseMetadataDescriptionSummary(payload string) (variableMetadataWire, stri
 	}
 	objectID, err := unescapeMetadataDescriptionValue(parts[1])
 	if err != nil {
-		return variableMetadataWire{}, "", err
+		return variableMetadata{}, "", err
 	}
 	objectIDHash := ""
 	if hash, ok := strings.CutPrefix(objectID, metadataDescriptionCompactedObject); ok {
@@ -879,13 +855,13 @@ func parseMetadataDescriptionSummary(payload string) (variableMetadataWire, stri
 	}
 	version, ok := strings.CutPrefix(parts[2], metadataDescriptionCompactedVersion)
 	if !ok {
-		return variableMetadataWire{}, "", fmt.Errorf("metadata description summary version must start with v")
+		return variableMetadata{}, "", fmt.Errorf("metadata description summary version must start with v")
 	}
 	sourceVersion, err := strconv.Atoi(version)
 	if err != nil {
-		return variableMetadataWire{}, "", err
+		return variableMetadata{}, "", err
 	}
-	return variableMetadataWire{
+	return variableMetadata{
 		SourcePath:     sourcePath,
 		SourcePathHash: sourcePathHash,
 		ObjectID:       objectID,
