@@ -17,6 +17,9 @@ verify-fmt: ## Verify Go formatting without modifying files.
 		if command -v "$(GOFUMPT)" >/dev/null 2>&1; then \
 			unformatted="$$("$(GOFUMPT)" -l $(GO_SOURCE_DIRS))"; \
 			if [ -n "$$unformatted" ]; then printf '%s\n' "$$unformatted"; exit 1; fi; \
+		elif [ "$(LINT_STRICT)" = "1" ]; then \
+			printf '%s\n' 'gofumpt not installed; run make install-go-tools or set LINT_STRICT=0 to skip.'; \
+			exit 1; \
 		else \
 			printf '%s\n' 'gofumpt not installed; skipping gofumpt verification.'; \
 		fi; \
@@ -32,14 +35,22 @@ vet: ## Run go vet.
 workflow-lint: ## Validate GitHub Actions workflows when actionlint is installed.
 	@if command -v "$(ACTIONLINT)" >/dev/null 2>&1; then \
 		"$(ACTIONLINT)" .github/workflows/*.yml; \
+	elif [ "$(LINT_STRICT)" = "1" ]; then \
+		printf '%s\n' 'actionlint not installed; run make install-go-tools or set LINT_STRICT=0 to skip.'; \
+		exit 1; \
 	else \
 		printf '%s\n' 'actionlint not installed; skipping workflow lint.'; \
 	fi
 
 .PHONY: lint
+lint: LINT_STRICT = 1
 lint: docs-check versions-check verify-fmt workflow-lint semgrep-ci vet ## Run lint checks.
-	@if command -v "$(STATICCHECK)" >/dev/null 2>&1; then "$(STATICCHECK)" ./...; else printf '%s\n' 'staticcheck not installed; skipping staticcheck.'; fi
-	@if command -v "$(GOLANGCI_LINT)" >/dev/null 2>&1; then "$(GOLANGCI_LINT)" run; else printf '%s\n' 'golangci-lint not installed; skipping golangci-lint.'; fi
+	@if command -v "$(GOLANGCI_LINT)" >/dev/null 2>&1; then \
+		"$(GOLANGCI_LINT)" run; \
+	else \
+		printf '%s\n' 'golangci-lint not installed; run make install-go-tools.'; \
+		exit 1; \
+	fi
 
 .PHONY: lint-ci
 lint-ci: lint vulncheck ## Run lint plus vulnerability checks.

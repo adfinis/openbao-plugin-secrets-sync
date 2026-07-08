@@ -10,6 +10,7 @@ ACTIONLINT ?= $(if $(wildcard $(GOBIN)/actionlint),$(GOBIN)/actionlint,actionlin
 TRIVY ?= trivy
 DOCKER ?= docker
 SEMGREP ?= semgrep
+LINT_STRICT ?= 0
 SEMGREP_CONFIG_FLAGS ?= --config .semgrep/rules
 SEMGREP_TARGETS ?= cmd internal .github
 SEMGREP_ARTIFACT_DIR ?= dist/semgrep
