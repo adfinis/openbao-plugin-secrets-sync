@@ -27,7 +27,6 @@ func TestStorageGoldenLayout(t *testing.T) {
 	assertNoStorageGoldenError(t, env.update(configPath, map[string]interface{}{
 		"event_dispatch_enabled": false,
 		"queue_capacity":         10,
-		"require_source_opt_in":  false,
 	}))
 	assertNoErrorResponse(t, env.writeAppDBSecretData(map[string]interface{}{
 		"setting":  "enabled",

@@ -395,8 +395,8 @@ func assertFreshConfigDefaults(t *testing.T, client *api.Client) {
 	if got := secret.Data["restore_guard"]; got != false {
 		t.Fatalf("restore_guard = %v, want false", got)
 	}
-	if got := secret.Data["require_source_opt_in"]; got != false {
-		t.Fatalf("require_source_opt_in = %v, want false", got)
+	if got := secret.Data["security_posture"]; got != "standard" {
+		t.Fatalf("security_posture = %v, want standard", got)
 	}
 	if got := secret.Data["restore_guard_acknowledged_time"]; got == "" {
 		t.Fatal("restore_guard_acknowledged_time must be set")

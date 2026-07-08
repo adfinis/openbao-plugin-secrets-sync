@@ -97,13 +97,14 @@ func (b *secretSyncBackend) pathSourceCheck(
 		currentVersion = metadata.CurrentVersion
 		syncable = sourceMetadataSyncable(*metadata)
 	}
-	blockers := sourceReadinessBlockers(metadata, syncable, currentVersionAvailable, cfg.RequireSourceOptIn)
+	optInRequired := sourceOptInRequired(cfg)
+	blockers := sourceReadinessBlockers(metadata, syncable, currentVersionAvailable, optInRequired)
 	b.recordReadinessCheck(ctx, observability.CheckSource, "", blockers)
 	return &logical.Response{Data: newResponseData(
 		responseField("path", path),
 		responseField("ready", len(blockers) == 0),
 		responseField("source_opt_in_present", syncable),
-		responseField("source_opt_in_required", cfg.RequireSourceOptIn),
+		responseField("source_opt_in_required", optInRequired),
 		responseField("current_version", currentVersion),
 		responseField("current_version_available", currentVersionAvailable),
 		responseField("association_count", len(associations)),

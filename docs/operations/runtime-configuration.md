@@ -38,36 +38,30 @@ Manual reconcile remains available while disabled because it does not write
 destination secrets. Manual queue drains and remote mutation remain blocked
 until the mount is enabled again.
 
-## Source opt-in
+## Security posture
 
-Set `require_source_opt_in=true` when enabled associations should require
-source metadata `custom_metadata.syncable=true` before enqueue or dispatch:
+Fresh mounts default `security_posture=standard`. This keeps onboarding simple:
+unconstrained destinations are accepted, and source metadata
+`custom_metadata.syncable=true` is not required before sync.
 
-```sh
-bao write secret-sync/config require_source_opt_in=true
-```
-
-Use [Delegated use](../guides/delegated-use.md) for the full source opt-in and
-destination-prefix workflow.
-
-## Delegated mode
-
-Fresh mounts default `delegated_mode=false`. Use that default when a trusted
-platform operator owns both destination configuration and association
-management.
-
-Set `delegated_mode=true` only when application owners can manage their own
-association prefixes. Delegated mode requires strict source opt-in and
-destination constraints:
+Set `security_posture=hardened` when application owners can manage their own
+source paths or associations:
 
 ```sh
-bao write secret-sync/config require_source_opt_in=true delegated_mode=true
+bao write secret-sync/config security_posture=hardened
 ```
 
-When delegated mode is enabled, association create, enable, manual sync,
-reconcile, and queued dispatch reject destinations that do not set both
+Hardened posture requires source metadata `custom_metadata.syncable=true`
+before enabled associations can enqueue or dispatch remote mutation. It also
+rejects destination writes that do not set both
+`allowed_source_path_prefixes` and `allowed_resolved_name_prefixes`.
+Association create, enable, manual sync, reconcile, and queued dispatch reject
+destinations that do not set both
 `allowed_source_path_prefixes` and `allowed_resolved_name_prefixes`.
 Destination checks report `destination_unconstrained` for that condition.
+
+Changing back to `security_posture=standard` relaxes those posture checks for
+future operations.
 
 ## Queue capacity
 

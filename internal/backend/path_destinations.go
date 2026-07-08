@@ -386,7 +386,11 @@ func (b *secretSyncBackend) pathDestinationWrite(
 	if response != nil || err != nil {
 		return response, err
 	}
-	if response := b.validateDestinationWrite(ctx, provider, record, sensitiveConfig); response != nil {
+	cfg, err := readGlobalConfig(ctx, req.Storage)
+	if err != nil {
+		return nil, err
+	}
+	if response := b.validateDestinationWrite(ctx, provider, record, sensitiveConfig, cfg); response != nil {
 		return response, nil
 	}
 	if err := storeDestinationWrite(ctx, req.Storage, record, sensitiveConfig, sensitiveCreatedTime, now); err != nil {
@@ -472,7 +476,15 @@ func (b *secretSyncBackend) validateDestinationWrite(
 	provider providers.Provider,
 	record destinationRecord,
 	sensitiveConfig map[string]string,
+	cfg globalConfig,
 ) *logical.Response {
+	if cfg.SecurityPosture == securityPostureHardened && !destinationHasDelegationConstraints(record) {
+		return logical.ErrorResponse(
+			"security_posture=hardened requires destination %s to set "+
+				"allowed_source_path_prefixes and allowed_resolved_name_prefixes",
+			destinationRef(record.Type, record.Name),
+		)
+	}
 	resolvedConfig := destinationConfigFromParts(record, sensitiveConfig)
 	providerStart := time.Now()
 	validationErr := provider.ValidateConfig(ctx, resolvedConfig)

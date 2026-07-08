@@ -55,13 +55,13 @@ the new version is stored.
 ## Source Metadata
 
 Source metadata controls local version policy and can carry custom metadata.
-When strict source opt-in is enabled with `require_source_opt_in=true`, enabled
-associations require `custom_metadata.syncable=true` before they can enqueue or
-dispatch remote mutation.
+In hardened posture, enabled associations require
+`custom_metadata.syncable=true` before they can enqueue or dispatch remote
+mutation.
 
-Fresh mounts default `require_source_opt_in=false` and `delegated_mode=false`.
-In that platform-operated mode, creating or enabling an association is the
-authorization step that permits sync for the source path.
+Fresh mounts default `security_posture=standard`. In that platform-operated
+mode, creating or enabling an association is the authorization step that
+permits sync for the source path.
 
 Use [Delegated use](../guides/delegated-use.md) when application owners manage
 their own source paths or associations.

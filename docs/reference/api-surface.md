@@ -15,9 +15,9 @@ enqueue, and operators can explicitly drain due work with `queue/drain`.
 - Plan, queue, status, reconcile, metrics, and logs do not expose source
   payload values.
 - Destination mutation requires destination authority, an enabled association,
-  queue capacity, and an allowed OpenBao replication state. When
-  `require_source_opt_in=true`, it also requires source eligibility metadata.
-  When `delegated_mode=true`, it also requires constrained destinations.
+  queue capacity, and an allowed OpenBao replication state. In hardened
+  posture, it also requires source eligibility metadata and constrained
+  destinations.
 - The mount-wide `disabled` flag blocks background provider traffic and remote
   mutation. Manual reconcile remains available.
 - Restore guard blocks remote mutation. Background drift detection and manual
@@ -35,7 +35,7 @@ enqueue, and operators can explicitly drain due work with `queue/drain`.
 | Path | Purpose |
 | --- | --- |
 | `info` | Read static plugin version, association defaults, and provider capability flags. |
-| `config` | Read or update mount-wide sync settings for pause, queue capacity, source opt-in, delegated mode, drift work, and event dispatch. |
+| `config` | Read or update mount-wide sync settings for security posture, pause, queue capacity, drift work, and event dispatch. |
 | `config/restore-guard/acknowledge` | Acknowledge restore or clone review and resume remote mutation. |
 
 `info` is the stable place for clients and operators to discover static
@@ -62,11 +62,15 @@ coalesced dispatcher after durable queue commit, bounded by
 without changing the asynchronous API contract; periodic processing remains the
 fallback for missed wakeups, retries, and restart recovery.
 
-`delegated_mode` defaults to `false` for platform-operated mounts. When set to
-`true`, it requires `require_source_opt_in=true` and rejects association use of
-destinations whose `allowed_source_path_prefixes` or
-`allowed_resolved_name_prefixes` are empty. Destination checks report
-`destination_unconstrained` for that blocker.
+`security_posture` defaults to `standard` for platform-operated mounts. In
+that posture, unconstrained destinations remain valid for trusted
+operator-managed sync and source metadata opt-in is not required.
+
+`security_posture=hardened` requires `custom_metadata.syncable=true` before an
+enabled association can enqueue or dispatch remote mutation. It also rejects
+destination writes and association use of destinations that omit
+`allowed_source_path_prefixes` or `allowed_resolved_name_prefixes`.
+Destination checks report `destination_unconstrained` for that blocker.
 
 ## Source data and metadata
 
@@ -107,8 +111,8 @@ In shorthand mode, `path`, `data`, `options`, `cas`, and `version` are reserved
 field names. `cas` remains the CLI alias for `options.cas`; `version` is
 rejected on writes because it is only meaningful for reads. Use the wrapped
 body when the source payload needs one of those literal top-level keys.
-Mounts default `require_source_opt_in=false` and `delegated_mode=false`. When
-strict opt-in is enabled, `sources/<path>/enable` sets
+Mounts default `security_posture=standard`. In hardened posture,
+`sources/<path>/enable` sets
 `custom_metadata.syncable=true`; source checks report
 `source_opt_in_present` for that metadata and block with
 `source_not_syncable` only when opt-in is required and missing.

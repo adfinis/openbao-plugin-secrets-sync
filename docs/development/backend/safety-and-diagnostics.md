@@ -14,8 +14,8 @@ Preserve these invariants:
   metadata and is redacted on reads.
 - Providers mutate only through prepared payloads and resolved destination
   config.
-- Association activation requires destination authority and source eligibility
-  when strict source opt-in is enabled.
+- Association activation requires destination authority and, in hardened
+  posture, source eligibility.
 - Association activation rolls back persisted enabled state when initial enqueue
   fails, so an error response does not leave a newly active association behind.
 - Queue capacity errors occur before a new source version is accepted.
@@ -109,7 +109,7 @@ Common diagnostics include:
 - remote missing;
 - remote drift;
 - remote ownership loss;
-- source opt-in failure;
+- source opt-in failure in hardened posture;
 - destination policy or validation failure.
 
 ## Redaction

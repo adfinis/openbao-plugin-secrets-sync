@@ -30,7 +30,7 @@ The source API is not a strict client compatibility layer:
   sync state;
 - metadata deletion is blocked while associations exist;
 - association activation may require source eligibility metadata when
-  `require_source_opt_in=true`;
+  `security_posture=hardened`;
 - sync-specific paths such as `destinations/*`, `associations/*`, `queue/*`,
   and `status/*` are part of the engine contract;
 - exact KV-v2 wire compatibility must be proven by golden tests before it is
@@ -124,11 +124,10 @@ Metadata writes support:
 `delete_version_after` must be omitted or set to `0s`. Non-zero timed deletion
 policy is rejected until the backend enforces it.
 
-Mounts default `require_source_opt_in=false` and `delegated_mode=false`, so
-creating an enabled association is the source authorization step in the
-platform-operated default mode.
+Mounts default `security_posture=standard`, so creating an enabled association
+is the source authorization step in the platform-operated default mode.
 
-When strict source opt-in is enabled, enabled associations require:
+In hardened posture, enabled associations require:
 
 ```json
 {
@@ -138,11 +137,10 @@ When strict source opt-in is enabled, enabled associations require:
 }
 ```
 
-Delegated deployments should enable both strict source opt-in and delegated
-mode:
+Delegated deployments should enable hardened posture:
 
 ```sh
-bao write secret-sync/config require_source_opt_in=true delegated_mode=true
+bao write secret-sync/config security_posture=hardened
 ```
 
 This makes sync opt-in at the source path and requires constrained destinations

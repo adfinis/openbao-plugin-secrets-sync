@@ -52,7 +52,7 @@ func TestDispatchHonorsTightenedDestinationPolicy(t *testing.T) {
 	assertStatusObjectState(t, env.b, env.storage, domain.SyncStateValidationError)
 }
 
-func TestDispatchHonorsDelegatedModeEnabledAfterEnqueue(t *testing.T) {
+func TestDispatchHonorsHardenedPostureEnabledAfterEnqueue(t *testing.T) {
 	env := newBackendTestEnv(t)
 
 	env.writeAppDBSecret("initial")
@@ -61,23 +61,22 @@ func TestDispatchHonorsDelegatedModeEnabledAfterEnqueue(t *testing.T) {
 	operationID := operationIDsFromResponse(t, associationResp)[0]
 
 	cfgResp := env.update("config", map[string]interface{}{
-		"require_source_opt_in": true,
-		"delegated_mode":        true,
+		"security_posture": securityPostureHardened,
 	})
 	if cfgResp != nil && cfgResp.IsError() {
 		t.Fatalf("unexpected config write error: %v", cfgResp.Error())
 	}
-	env.runPeriodicAllowed("periodic after delegated mode enabled")
+	env.runPeriodicAllowed("periodic after hardened posture enabled")
 	assertOutboxOperation(t, env.storage, operationID, 1, outboxStateFailedTerminal)
 	assertStatusObjectErrorClass(t, env.b, env.storage, providers.ErrorClassValidation)
 	assertStatusObjectState(t, env.b, env.storage, domain.SyncStateValidationError)
 }
 
-func TestDispatchHonorsTightenedSourceOptInPolicy(t *testing.T) {
+func TestDispatchHonorsHardenedSourceOptInAfterEnqueue(t *testing.T) {
 	env := newBackendTestEnv(t)
 
 	env.writeAppDBSecret("initial")
-	env.createFakeDestination("default")
+	env.createDefaultConstrainedFakeDestination()
 	associationResp := env.update("associations/app/db", map[string]interface{}{
 		"destination":   destinationRef(providerTypeFake, "default"),
 		"resolved_name": "prod/app/db",
@@ -87,12 +86,12 @@ func TestDispatchHonorsTightenedSourceOptInPolicy(t *testing.T) {
 	operationID := operationIDsFromResponse(t, associationResp)[0]
 
 	cfgResp := env.update("config", map[string]interface{}{
-		"require_source_opt_in": true,
+		"security_posture": securityPostureHardened,
 	})
 	if cfgResp != nil && cfgResp.IsError() {
 		t.Fatalf("unexpected config write error: %v", cfgResp.Error())
 	}
-	env.runPeriodicAllowed("periodic after source opt-in policy tightened")
+	env.runPeriodicAllowed("periodic after hardened posture enabled")
 	assertOutboxOperation(t, env.storage, operationID, 1, outboxStateFailedTerminal)
 	assertStatusObjectErrorClass(t, env.b, env.storage, providers.ErrorClassValidation)
 	assertStatusObjectState(t, env.b, env.storage, domain.SyncStateValidationError)

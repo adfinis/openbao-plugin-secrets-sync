@@ -7,13 +7,12 @@ remote names.
 
 For OpenBao policy snippets, use [Policy examples](../security/policies.md).
 
-## Enable strict source opt-in
+## Enable Hardened Posture
 
 Fresh mounts default to platform-operated mode:
 
 ```text
-require_source_opt_in=false
-delegated_mode=false
+security_posture=standard
 ```
 
 In that mode, a trusted platform operator is expected to own both
@@ -21,15 +20,16 @@ In that mode, a trusted platform operator is expected to own both
 for simple onboarding and operator-managed sync.
 
 When application owners can manage their own `associations/<path>` prefixes,
-enable delegated mode and strict source opt-in together:
+switch the mount to hardened posture:
 
 ```sh
-bao write secret-sync/config require_source_opt_in=true delegated_mode=true
+bao write secret-sync/config security_posture=hardened
 ```
 
-When strict opt-in is enabled, an enabled association can enqueue or dispatch
-remote mutation only if the source metadata has `custom_metadata.syncable=true`.
-`delegated_mode=true` requires `require_source_opt_in=true`.
+In hardened posture, an enabled association can enqueue or dispatch remote
+mutation only if the source metadata has `custom_metadata.syncable=true`.
+Destination writes must include both delegation constraint lists while hardened
+posture is active.
 
 Application owners can mark their own source path syncable when policy grants
 the source enable endpoint:
@@ -55,7 +55,7 @@ bao read secret-sync/sources/apps/team-a/db/check
 ## Constrain destination use
 
 Destinations can restrict which source paths and remote object names may use
-them. In delegated mode, both constraint lists are required before an
+them. In hardened posture, both constraint lists are required before an
 association can sync through the destination:
 
 - `allowed_source_path_prefixes`
@@ -82,7 +82,7 @@ Non-empty fields from another provider type are rejected.
 `openbao-plugin-secrets-sync/team-a/db` but not
 `openbao-plugin-secrets-sync/team-alpha/db`.
 
-Check destination readiness after enabling delegated mode:
+Check destination readiness after enabling hardened posture:
 
 ```sh
 bao read secret-sync/destinations/PROVIDER_TYPE/NAME/check

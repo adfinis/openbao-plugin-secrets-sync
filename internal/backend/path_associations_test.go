@@ -716,13 +716,13 @@ func TestAssociationRequiresSyncableMetadata(t *testing.T) {
 	env := newBackendTestEnv(t)
 
 	cfgResp := env.update("config", map[string]interface{}{
-		"require_source_opt_in": true,
+		"security_posture": securityPostureHardened,
 	})
 	if cfgResp != nil && cfgResp.IsError() {
 		t.Fatalf("unexpected config write error: %v", cfgResp.Error())
 	}
 	env.writeAppDBSecret("initial")
-	env.createFakeDestination("default")
+	env.createDefaultConstrainedFakeDestination()
 
 	blockedResp := env.update("associations/app/db", map[string]interface{}{
 		"destination":   destinationRef(providerTypeFake, "default"),
@@ -841,19 +841,18 @@ func TestAssociationDestinationPolicyConstraints(t *testing.T) {
 	assertNoErrorResponse(t, allowedResp)
 }
 
-func TestDelegatedModeRejectsUnconstrainedDestinationForAssociation(t *testing.T) {
+func TestHardenedPostureRejectsUnconstrainedDestinationForAssociation(t *testing.T) {
 	env := newBackendTestEnv(t)
 
+	env.writeAppDBSecret("initial")
+	env.markAppDBSyncable()
+	env.createFakeDestination("default")
 	cfgResp := env.update(configPath, map[string]interface{}{
-		"require_source_opt_in": true,
-		"delegated_mode":        true,
+		"security_posture": securityPostureHardened,
 	})
 	if cfgResp != nil && cfgResp.IsError() {
 		t.Fatalf("unexpected config write error: %v", cfgResp.Error())
 	}
-	env.writeAppDBSecret("initial")
-	env.markAppDBSyncable()
-	env.createFakeDestination("default")
 
 	planResp := env.planDefaultFakeAssociation("prod/app/db")
 	assertNoErrorResponse(t, planResp)
@@ -871,7 +870,7 @@ func TestDelegatedModeRejectsUnconstrainedDestinationForAssociation(t *testing.T
 		"format":        defaultAssociationFormat,
 	})
 	if writeResp == nil || !writeResp.IsError() {
-		t.Fatalf("delegated association write response = %#v, want error", writeResp)
+		t.Fatalf("hardened association write response = %#v, want error", writeResp)
 	}
 	if !strings.Contains(writeResp.Error().Error(), destinationUnconstrainedBlocker) {
 		t.Fatalf("write error = %q, want %s", writeResp.Error().Error(), destinationUnconstrainedBlocker)
@@ -896,7 +895,7 @@ func TestDelegatedModeRejectsUnconstrainedDestinationForAssociation(t *testing.T
 	assertNoErrorResponse(t, allowedResp)
 }
 
-func TestDelegatedModeRejectsUnconstrainedDestinationLifecycle(t *testing.T) {
+func TestHardenedPostureRejectsUnconstrainedDestinationLifecycle(t *testing.T) {
 	env := newBackendTestEnv(t)
 
 	env.writeAppDBSecret("initial")
@@ -905,8 +904,7 @@ func TestDelegatedModeRejectsUnconstrainedDestinationLifecycle(t *testing.T) {
 	associationID := associationIDFromResponse(t, associationResp)
 
 	cfgResp := env.update(configPath, map[string]interface{}{
-		"require_source_opt_in": true,
-		"delegated_mode":        true,
+		"security_posture": securityPostureHardened,
 	})
 	if cfgResp != nil && cfgResp.IsError() {
 		t.Fatalf("unexpected config write error: %v", cfgResp.Error())
@@ -914,7 +912,7 @@ func TestDelegatedModeRejectsUnconstrainedDestinationLifecycle(t *testing.T) {
 
 	syncResp := env.update("associations/app/db/"+associationID+"/sync", nil)
 	if syncResp == nil || !syncResp.IsError() {
-		t.Fatalf("delegated manual sync response = %#v, want error", syncResp)
+		t.Fatalf("hardened manual sync response = %#v, want error", syncResp)
 	}
 	if !strings.Contains(syncResp.Error().Error(), destinationUnconstrainedBlocker) {
 		t.Fatalf("manual sync error = %q, want %s", syncResp.Error().Error(), destinationUnconstrainedBlocker)
@@ -936,13 +934,13 @@ func TestAssociationPlan(t *testing.T) {
 	env := newBackendTestEnv(t)
 
 	cfgResp := env.update("config", map[string]interface{}{
-		"require_source_opt_in": true,
+		"security_posture": securityPostureHardened,
 	})
 	if cfgResp != nil && cfgResp.IsError() {
 		t.Fatalf("unexpected config write error: %v", cfgResp.Error())
 	}
 	env.writeAppDBSecret("initial")
-	env.createFakeDestination("default")
+	env.createDefaultConstrainedFakeDestination()
 
 	blockedResp := env.planDefaultFakeAssociation("prod/app/db")
 	assertNoErrorResponse(t, blockedResp)
@@ -963,7 +961,7 @@ func TestAssociationPlan(t *testing.T) {
 		t.Fatalf("plan response contains secret value: %#v", createResp.Data)
 	}
 
-	conflictResp := env.planDefaultFakeAssociation("prod/conflict/app/db")
+	conflictResp := env.planDefaultFakeAssociation("prod/app/conflict/db")
 	assertNoErrorResponse(t, conflictResp)
 	assertResponseValue(t, conflictResp, "action", providers.PlanActionConflict)
 	assertResponseValue(t, conflictResp, "error_class", string(providers.ErrorClassCollision))
@@ -1138,13 +1136,13 @@ func TestAssociationEnableRequiresSyncableMetadata(t *testing.T) {
 	env := newBackendTestEnv(t)
 
 	cfgResp := env.update("config", map[string]interface{}{
-		"require_source_opt_in": true,
+		"security_posture": securityPostureHardened,
 	})
 	if cfgResp != nil && cfgResp.IsError() {
 		t.Fatalf("unexpected config write error: %v", cfgResp.Error())
 	}
 	env.writeAppDBSecret("initial")
-	env.createFakeDestination("default")
+	env.createDefaultConstrainedFakeDestination()
 	resp := env.update("associations/app/db", map[string]interface{}{
 		"destination":   destinationRef(providerTypeFake, "default"),
 		"resolved_name": "prod/app/db",

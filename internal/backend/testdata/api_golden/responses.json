@@ -90,7 +90,6 @@
   },
   "config.read.initial": {
     "data": {
-      "delegated_mode": false,
       "disabled": false,
       "drift_reconcile_batch": 16,
       "drift_reconcile_interval": "1h",
@@ -99,10 +98,10 @@
       "event_dispatch_max_operations": 16,
       "plugin_instance_id": "<plugin-instance-id>",
       "queue_capacity": 1000,
-      "require_source_opt_in": false,
       "restore_epoch": "<restore-epoch>",
       "restore_guard": false,
       "restore_guard_acknowledged_time": "<timestamp>",
+      "security_posture": "standard",
       "storage_schema_min_compatible_version": 1,
       "storage_schema_version": 1
     }

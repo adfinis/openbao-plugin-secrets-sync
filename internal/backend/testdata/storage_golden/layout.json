@@ -29,7 +29,6 @@
   {
     "key": "config",
     "value": {
-      "delegated_mode": false,
       "disabled": false,
       "drift_reconcile_batch": 16,
       "drift_reconcile_interval": "1h",
@@ -37,9 +36,9 @@
       "event_dispatch_enabled": false,
       "event_dispatch_max_operations": 16,
       "queue_capacity": 10,
-      "require_source_opt_in": false,
       "restore_guard": false,
       "restore_guard_acknowledged_time": "<timestamp>",
+      "security_posture": "standard",
       "updated_time": "<timestamp>"
     }
   },

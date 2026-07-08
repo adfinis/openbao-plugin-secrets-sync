@@ -121,7 +121,7 @@ func TestDataWriteHonorsStrictSourceOptInBeforeEnqueue(t *testing.T) {
 	assertOperationIDs(t, associationResp.Data, 1)
 
 	cfgResp := env.update("config", map[string]interface{}{
-		"require_source_opt_in": true,
+		"security_posture": securityPostureHardened,
 	})
 	if cfgResp != nil && cfgResp.IsError() {
 		t.Fatalf("unexpected config write error: %v", cfgResp.Error())

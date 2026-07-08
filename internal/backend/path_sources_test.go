@@ -72,11 +72,11 @@ func TestSourceCheckReportsReadiness(t *testing.T) {
 	assertStringSlice(t, readyResp.Data["blockers"].([]string), []string{})
 }
 
-func TestSourceCheckReportsStrictOptInBlocker(t *testing.T) {
+func TestSourceCheckReportsHardenedOptInBlocker(t *testing.T) {
 	env := newBackendTestEnv(t)
 
 	cfgResp := env.update("config", map[string]interface{}{
-		"require_source_opt_in": true,
+		"security_posture": securityPostureHardened,
 	})
 	if cfgResp != nil && cfgResp.IsError() {
 		t.Fatalf("unexpected config write error: %v", cfgResp.Error())

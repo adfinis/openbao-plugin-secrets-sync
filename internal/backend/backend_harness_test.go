@@ -100,6 +100,11 @@ func (env *backendTestEnv) createFakeDestination(name string) {
 	createFakeDestination(env.t, env.b, env.storage, name)
 }
 
+func (env *backendTestEnv) createDefaultConstrainedFakeDestination() {
+	env.t.Helper()
+	createDefaultConstrainedFakeDestination(env.t, env.b, env.storage)
+}
+
 func (env *backendTestEnv) createDefaultFakeAssociation() *logical.Response {
 	env.t.Helper()
 	return createDefaultFakeAssociation(env.t, env.b, env.storage)
@@ -829,6 +834,18 @@ func createFakeDestination(t *testing.T, b logical.Backend, storage logical.Stor
 	})
 	if resp != nil && resp.IsError() {
 		t.Fatalf("unexpected destination write error: %v", resp.Error())
+	}
+}
+
+func createDefaultConstrainedFakeDestination(t *testing.T, b logical.Backend, storage logical.Storage) {
+	t.Helper()
+	resp := handleRequest(t, b, storage, logical.UpdateOperation, "destinations/fake/default", map[string]interface{}{
+		"description": "test destination",
+		destinationAllowedSourcePathPrefixesField:   "app",
+		destinationAllowedResolvedNamePrefixesField: "prod/app/",
+	})
+	if resp != nil && resp.IsError() {
+		t.Fatalf("unexpected constrained destination write error: %v", resp.Error())
 	}
 }
 

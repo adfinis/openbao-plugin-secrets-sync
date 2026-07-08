@@ -1369,7 +1369,7 @@ func validateDestinationPolicyForObject(
 const destinationUnconstrainedBlocker = "destination_unconstrained"
 
 func destinationDelegationConstraintBlockers(destination destinationRecord, cfg globalConfig) []string {
-	if !cfg.DelegatedMode || destinationHasDelegationConstraints(destination) {
+	if !destinationConstraintsRequired(cfg) || destinationHasDelegationConstraints(destination) {
 		return nil
 	}
 	return []string{destinationUnconstrainedBlocker}
@@ -1389,7 +1389,8 @@ func validateDestinationDelegationConstraints(
 		return nil
 	}
 	return fmt.Errorf(
-		"%s: delegated_mode requires destination %s to set allowed_source_path_prefixes and allowed_resolved_name_prefixes",
+		"%s: security_posture=hardened requires destination %s to set "+
+			"allowed_source_path_prefixes and allowed_resolved_name_prefixes",
 		destinationUnconstrainedBlocker,
 		record.DestinationRef,
 	)
@@ -2178,12 +2179,13 @@ func validateAssociationActivation(record associationRecord, metadata *metadataR
 }
 
 func validateSourceEligibility(metadata *metadataRecord, cfg globalConfig) error {
-	if !cfg.RequireSourceOptIn {
+	if !sourceOptInRequired(cfg) {
 		return nil
 	}
 	if metadata == nil || metadata.CustomMetadata[sourceMetadataKeySyncable] != sourceMetadataValueTrue {
 		return fmt.Errorf(
-			"source path is not eligible for sync: custom_metadata.syncable must be true when require_source_opt_in=true",
+			"source path is not eligible for sync: custom_metadata.syncable must be true " +
+				"when security_posture=hardened",
 		)
 	}
 	return nil

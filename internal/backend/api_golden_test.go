@@ -29,7 +29,6 @@ func TestAPIGoldenResponses(t *testing.T) {
 	capture.response(t, "config.update", env.update(configPath, map[string]interface{}{
 		"event_dispatch_enabled": false,
 		"queue_capacity":         10,
-		"require_source_opt_in":  false,
 	}))
 	capture.response(t, "sources.check.empty", env.read("sources/app/db/check"))
 	capture.response(t, "metadata.write", env.update("metadata/app/db", map[string]interface{}{

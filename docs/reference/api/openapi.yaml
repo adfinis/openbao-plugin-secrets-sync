@@ -947,6 +947,11 @@ components:
     ConfigWriteRequest:
       type: object
       properties:
+        security_posture:
+          type: string
+          enum: [standard, hardened]
+          default: standard
+          description: Mount-wide posture. standard preserves platform-operated defaults; hardened requires source opt-in and constrained destinations.
         disabled:
           type: boolean
           description: Pause background remote mutations when true.
@@ -958,12 +963,6 @@ components:
           minimum: 0
           default: 1000
           description: Maximum queued operations; 0 rejects new enqueue-producing writes.
-        require_source_opt_in:
-          type: boolean
-          description: Require custom_metadata.syncable=true before enabled associations can enqueue or dispatch remote mutation.
-        delegated_mode:
-          type: boolean
-          description: Require delegated-mode guardrails. Requires require_source_opt_in=true and constrained destinations.
         drift_repair:
           type: string
           enum: [off, detect, repair]
@@ -999,6 +998,10 @@ components:
     Config:
       type: object
       properties:
+        security_posture:
+          type: string
+          enum: [standard, hardened]
+          description: Mount-wide posture. standard preserves platform-operated defaults; hardened requires source opt-in and constrained destinations.
         disabled:
           type: boolean
         restore_guard:
@@ -1016,12 +1019,6 @@ components:
         queue_capacity:
           type: integer
           description: Maximum queued operations; 0 rejects new enqueue-producing writes.
-        require_source_opt_in:
-          type: boolean
-          description: Whether source syncable metadata is required before enabled associations can enqueue or dispatch remote mutation.
-        delegated_mode:
-          type: boolean
-          description: Whether delegated association guardrails are enforced for destination constraints.
         drift_repair:
           type: string
           enum: [off, detect, repair]
