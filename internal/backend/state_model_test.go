@@ -52,7 +52,7 @@ func TestCoreStateModelSourceAssociationQueueLifecycle(t *testing.T) {
 		{
 			name: "create association enqueues current version",
 			run: func(t *testing.T) {
-				env.markAppDBSyncable()
+				env.enableAppDBSourceSync()
 				resp := env.update("associations/app/db", map[string]interface{}{
 					"destination":   destinationRef(providerTypeFake, "default"),
 					"resolved_name": modelResolvedName,

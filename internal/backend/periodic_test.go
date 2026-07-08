@@ -231,7 +231,7 @@ func TestPeriodicRejectsPayloadOverAWSProviderLimit(t *testing.T) {
 	if resp != nil && resp.IsError() {
 		t.Fatalf("unexpected destination write error: %v", resp.Error())
 	}
-	env.markAppDBSyncable()
+	env.enableAppDBSourceSync()
 	associationResp := env.update("associations/app/db", map[string]interface{}{
 		"destination":   destinationRef(awssecretsmanager.ProviderType, "prod"),
 		"resolved_name": "openbao-plugin-secrets-sync/app/db",
@@ -353,7 +353,7 @@ func TestPeriodicLeavesClaimedOperationWhenCanceledProviderRedactsCause(t *testi
 	if destinationResp != nil && destinationResp.IsError() {
 		t.Fatalf("unexpected destination write error: %v", destinationResp.Error())
 	}
-	markAppDBSyncable(t, b, storage)
+	enableAppDBSourceSync(t, b, storage)
 	associationResp := handleRequest(t, b, storage, logical.UpdateOperation, "associations/app/db", map[string]interface{}{
 		"destination":   destinationRef("ctxcancel", "default"),
 		"resolved_name": "prod/app/db",

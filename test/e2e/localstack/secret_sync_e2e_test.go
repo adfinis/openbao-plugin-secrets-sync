@@ -67,7 +67,7 @@ func TestOpenBaoPluginSyncsToLocalStackSecretsManager(t *testing.T) {
 	})
 	assertFreshConfigDefaults(t, baoClient)
 	writeSource(t, baoClient, "initial")
-	assertSourceReadyWithoutOptIn(t, baoClient)
+	assertSourceReadyWithoutSourceSync(t, baoClient)
 
 	plan := write(t, baoClient, mountPath+"/associations/app/db/plan", associationRequest(remoteName))
 	if got := plan.Data["action"]; got != "create" {
@@ -403,7 +403,7 @@ func assertFreshConfigDefaults(t *testing.T, client *api.Client) {
 	}
 }
 
-func assertSourceReadyWithoutOptIn(t *testing.T, client *api.Client) {
+func assertSourceReadyWithoutSourceSync(t *testing.T, client *api.Client) {
 	t.Helper()
 	secret, err := client.Logical().Read(mountPath + "/sources/app/db/check")
 	if err != nil {
@@ -412,11 +412,11 @@ func assertSourceReadyWithoutOptIn(t *testing.T, client *api.Client) {
 	if secret == nil {
 		t.Fatal("source check response is nil")
 	}
-	if got := secret.Data["source_opt_in_required"]; got != false {
-		t.Fatalf("source_opt_in_required = %v, want false", got)
+	if got := secret.Data["source_sync_required"]; got != false {
+		t.Fatalf("source_sync_required = %v, want false", got)
 	}
-	if got := secret.Data["source_opt_in_present"]; got != false {
-		t.Fatalf("source_opt_in_present = %v, want false", got)
+	if got := secret.Data["source_sync_enabled"]; got != false {
+		t.Fatalf("source_sync_enabled = %v, want false", got)
 	}
 	if got := secret.Data["ready"]; got != true {
 		t.Fatalf("ready = %v, want true", got)

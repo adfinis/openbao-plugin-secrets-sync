@@ -188,7 +188,7 @@ func setupBlockingMutationDispatch(
 	env.b.providerRegistry = providers.MustNewRegistry(provider)
 
 	env.writeAppDBSecret("initial")
-	markAppDBSyncable(t, env.b, env.storage)
+	enableAppDBSourceSync(t, env.b, env.storage)
 	destinationResp := env.update("destinations/claim/prod")
 	if destinationResp != nil && destinationResp.IsError() {
 		t.Fatalf("unexpected destination write error: %v", destinationResp.Error())

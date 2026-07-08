@@ -60,8 +60,6 @@ const (
 	driftRepairRepair         = "repair"
 	outboxTriggerUser         = "user"
 	outboxTriggerDriftRepair  = "drift-repair"
-	sourceMetadataKeySyncable = "syncable"
-	sourceMetadataValueTrue   = "true"
 	currentStorageSchema      = 1
 	minSupportedStorageSchema = 1
 )
@@ -107,6 +105,7 @@ type metadataRecord struct {
 	MaxVersions        int                        `json:"max_versions"`
 	CASRequired        bool                       `json:"cas_required"`
 	DeleteVersionAfter string                     `json:"delete_version_after"`
+	SourceSyncEnabled  bool                       `json:"source_sync_enabled"`
 	CustomMetadata     map[string]string          `json:"custom_metadata"`
 	Versions           map[string]versionMetadata `json:"versions"`
 	UpdatedTime        string                     `json:"updated_time"`

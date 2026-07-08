@@ -4,7 +4,7 @@ import (
 	"testing"
 )
 
-func TestSourceEnableMarksPathSyncable(t *testing.T) {
+func TestSourceEnableDisableUpdatesSourceSyncState(t *testing.T) {
 	env := newBackendTestEnv(t)
 
 	metadataResp := env.update("metadata/app/db", map[string]interface{}{
@@ -17,20 +17,29 @@ func TestSourceEnableMarksPathSyncable(t *testing.T) {
 	enableResp := env.update("sources/app/db/enable")
 	assertNoErrorResponse(t, enableResp)
 	assertResponseValue(t, enableResp, "path", modelSourcePath)
-	assertResponseValue(t, enableResp, "syncable", true)
+	assertResponseValue(t, enableResp, "source_sync_enabled", true)
 	assertResponseValue(t, enableResp, "changed", true)
 	metadata := enableResp.Data["metadata"].(map[string]interface{})
+	if got := metadata["source_sync_enabled"]; got != true {
+		t.Fatalf("metadata.source_sync_enabled = %v, want true", got)
+	}
 	customMetadata := metadata["custom_metadata"].(map[string]string)
 	if got := customMetadata["owner"]; got != "team-a" {
 		t.Fatalf("custom_metadata.owner = %v, want team-a", got)
-	}
-	if got := customMetadata[sourceMetadataKeySyncable]; got != sourceMetadataValueTrue {
-		t.Fatalf("custom_metadata.syncable = %v, want true", got)
 	}
 
 	secondResp := env.update("sources/app/db/enable")
 	assertNoErrorResponse(t, secondResp)
 	assertResponseValue(t, secondResp, "changed", false)
+
+	disableResp := env.update("sources/app/db/disable")
+	assertNoErrorResponse(t, disableResp)
+	assertResponseValue(t, disableResp, "source_sync_enabled", false)
+	assertResponseValue(t, disableResp, "changed", true)
+
+	secondDisableResp := env.update("sources/app/db/disable")
+	assertNoErrorResponse(t, secondDisableResp)
+	assertResponseValue(t, secondDisableResp, "changed", false)
 }
 
 func TestSourceCheckReportsReadiness(t *testing.T) {
@@ -39,8 +48,8 @@ func TestSourceCheckReportsReadiness(t *testing.T) {
 	initialResp := env.read("sources/app/db/check")
 	assertNoErrorResponse(t, initialResp)
 	assertResponseValue(t, initialResp, "ready", false)
-	assertResponseValue(t, initialResp, "source_opt_in_required", false)
-	assertResponseValue(t, initialResp, "source_opt_in_present", false)
+	assertResponseValue(t, initialResp, "source_sync_required", false)
+	assertResponseValue(t, initialResp, "source_sync_enabled", false)
 	assertResponseValue(t, initialResp, "current_version", 0)
 	assertStringSlice(t, initialResp.Data["blockers"].([]string), []string{
 		"source_missing",
@@ -65,7 +74,7 @@ func TestSourceCheckReportsReadiness(t *testing.T) {
 	readyResp := env.read("sources/app/db/check")
 	assertNoErrorResponse(t, readyResp)
 	assertResponseValue(t, readyResp, "ready", true)
-	assertResponseValue(t, readyResp, "source_opt_in_present", true)
+	assertResponseValue(t, readyResp, "source_sync_enabled", true)
 	assertResponseValue(t, readyResp, "association_count", 1)
 	assertResponseValue(t, readyResp, "enabled_association_count", 1)
 	assertResponseValue(t, readyResp, "queued_operations", 1)
@@ -84,25 +93,25 @@ func TestSourceCheckReportsHardenedOptInBlocker(t *testing.T) {
 
 	initialResp := env.read("sources/app/db/check")
 	assertNoErrorResponse(t, initialResp)
-	assertResponseValue(t, initialResp, "source_opt_in_required", true)
-	assertResponseValue(t, initialResp, "source_opt_in_present", false)
+	assertResponseValue(t, initialResp, "source_sync_required", true)
+	assertResponseValue(t, initialResp, "source_sync_enabled", false)
 	assertStringSlice(t, initialResp.Data["blockers"].([]string), []string{
 		"source_missing",
-		"source_not_syncable",
+		"source_sync_not_enabled",
 	})
 
 	env.writeAppDBSecret("secret")
 	writtenResp := env.read("sources/app/db/check")
 	assertNoErrorResponse(t, writtenResp)
 	assertResponseValue(t, writtenResp, "ready", false)
-	assertStringSlice(t, writtenResp.Data["blockers"].([]string), []string{"source_not_syncable"})
+	assertStringSlice(t, writtenResp.Data["blockers"].([]string), []string{"source_sync_not_enabled"})
 
 	enableResp := env.update("sources/app/db/enable")
 	assertNoErrorResponse(t, enableResp)
 	readyResp := env.read("sources/app/db/check")
 	assertNoErrorResponse(t, readyResp)
 	assertResponseValue(t, readyResp, "ready", true)
-	assertResponseValue(t, readyResp, "source_opt_in_present", true)
+	assertResponseValue(t, readyResp, "source_sync_enabled", true)
 	assertStringSlice(t, readyResp.Data["blockers"].([]string), []string{})
 }
 

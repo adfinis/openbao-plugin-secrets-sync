@@ -241,7 +241,7 @@ func TestAssociationUpdateMergesOmittedFieldsFromExistingRecord(t *testing.T) {
 		"password": "initial",
 	})
 	env.createFakeDestination("default")
-	env.markAppDBSyncable()
+	env.enableAppDBSourceSync()
 	initialResp := env.update("associations/app/db", map[string]interface{}{
 		"destination":   destinationRef(providerTypeFake, "default"),
 		"name_template": "prod/{{ path }}/{{ key }}",
@@ -295,7 +295,7 @@ func TestAssociationUpdateRejectsGranularityIdentityChange(t *testing.T) {
 		"username": "appuser",
 	})
 	env.createFakeDestination("default")
-	env.markAppDBSyncable()
+	env.enableAppDBSourceSync()
 	initialResp := env.update("associations/app/db", map[string]interface{}{
 		"destination":   destinationRef(providerTypeFake, "default"),
 		"resolved_name": "prod/app/db",
@@ -390,7 +390,7 @@ func TestAssociationUpdateRejectsReservationIdentityChange(t *testing.T) {
 				"password": "initial",
 			})
 			env.createFakeDestination("default")
-			env.markAppDBSyncable()
+			env.enableAppDBSourceSync()
 			initialResp := env.update("associations/app/db", testCase.initialRequest)
 			assertNoErrorResponse(t, initialResp)
 			associationID := associationIDFromResponse(t, initialResp)
@@ -495,7 +495,7 @@ func TestAssociationUpdateEnqueuesWhenEnablingExistingRecord(t *testing.T) {
 
 	env.writeAppDBSecret("initial")
 	env.createFakeDestination("default")
-	env.markAppDBSyncable()
+	env.enableAppDBSourceSync()
 	initialResp := env.update("associations/app/db", map[string]interface{}{
 		"destination":   destinationRef(providerTypeFake, "default"),
 		"resolved_name": "prod/app/db",
@@ -522,7 +522,7 @@ func TestAssociationEnableQueueCapacityFailureLeavesAssociationDisabled(t *testi
 
 	env.writeAppDBSecret("initial")
 	env.createFakeDestination("default")
-	env.markAppDBSyncable()
+	env.enableAppDBSourceSync()
 	initialResp := env.update("associations/app/db", map[string]interface{}{
 		"destination":   destinationRef(providerTypeFake, "default"),
 		"resolved_name": "prod/app/db",
@@ -561,7 +561,7 @@ func TestAssociationPlanMergesOmittedFieldsFromExistingRecord(t *testing.T) {
 		"password": "initial",
 	})
 	env.createFakeDestination("default")
-	env.markAppDBSyncable()
+	env.enableAppDBSourceSync()
 	initialResp := env.update("associations/app/db", map[string]interface{}{
 		"destination":   destinationRef(providerTypeFake, "default"),
 		"name_template": "prod/{{ path }}/{{ key }}",
@@ -590,7 +590,7 @@ func TestAssociationUpdateRejectsAmbiguousDestinationBase(t *testing.T) {
 		"password": "initial",
 	})
 	env.createFakeDestination("default")
-	env.markAppDBSyncable()
+	env.enableAppDBSourceSync()
 	firstResp := env.update("associations/app/db", map[string]interface{}{
 		"destination":   destinationRef(providerTypeFake, "default"),
 		"resolved_name": "prod/app/db",
@@ -712,7 +712,7 @@ func TestOperationMetricsUseGranularityLabels(t *testing.T) {
 	}
 }
 
-func TestAssociationRequiresSyncableMetadata(t *testing.T) {
+func TestAssociationRequiresSourceSyncEnabledInHardenedPosture(t *testing.T) {
 	env := newBackendTestEnv(t)
 
 	cfgResp := env.update("config", map[string]interface{}{
@@ -731,10 +731,10 @@ func TestAssociationRequiresSyncableMetadata(t *testing.T) {
 		"format":        defaultAssociationFormat,
 	})
 	if blockedResp == nil || !blockedResp.IsError() {
-		t.Fatalf("association without syncable metadata response = %#v, want error", blockedResp)
+		t.Fatalf("association without source sync enabled response = %#v, want error", blockedResp)
 	}
 
-	env.markAppDBSyncable()
+	env.enableAppDBSourceSync()
 	allowedResp := env.update("associations/app/db", map[string]interface{}{
 		"destination":   destinationRef(providerTypeFake, "default"),
 		"resolved_name": "prod/app/db",
@@ -744,7 +744,7 @@ func TestAssociationRequiresSyncableMetadata(t *testing.T) {
 	assertNoErrorResponse(t, allowedResp)
 }
 
-func TestAssociationAllowsNonSyncableSourceByDefault(t *testing.T) {
+func TestAssociationAllowsSourceSyncDisabledByDefault(t *testing.T) {
 	env := newBackendTestEnv(t)
 
 	env.writeAppDBSecret("initial")
@@ -764,7 +764,7 @@ func TestAssociationDestinationPolicyConstraints(t *testing.T) {
 	env := newBackendTestEnv(t)
 
 	env.writeAppDBSecret("initial")
-	env.markAppDBSyncable()
+	env.enableAppDBSourceSync()
 	writeResp := env.update(
 		"destinations/fake/restricted",
 		map[string]interface{}{
@@ -845,7 +845,7 @@ func TestHardenedPostureRejectsUnconstrainedDestinationForAssociation(t *testing
 	env := newBackendTestEnv(t)
 
 	env.writeAppDBSecret("initial")
-	env.markAppDBSyncable()
+	env.enableAppDBSourceSync()
 	env.createFakeDestination("default")
 	cfgResp := env.update(configPath, map[string]interface{}{
 		"security_posture": securityPostureHardened,
@@ -948,7 +948,7 @@ func TestAssociationPlan(t *testing.T) {
 	assertResponseValue(t, blockedResp, "source_eligible", false)
 	assertResponseValue(t, blockedResp, "error_class", string(providers.ErrorClassValidation))
 
-	env.markAppDBSyncable()
+	env.enableAppDBSourceSync()
 	createResp := env.planDefaultFakeAssociation("prod/app/db")
 	assertNoErrorResponse(t, createResp)
 	assertResponseValue(t, createResp, "action", providers.PlanActionCreate)
@@ -1132,7 +1132,7 @@ func TestAssociationDestinationAddressedLifecycleRejectsAmbiguousDestination(t *
 	}
 }
 
-func TestAssociationEnableRequiresSyncableMetadata(t *testing.T) {
+func TestAssociationEnableRequiresSourceSyncEnabledInHardenedPosture(t *testing.T) {
 	env := newBackendTestEnv(t)
 
 	cfgResp := env.update("config", map[string]interface{}{
@@ -1158,7 +1158,7 @@ func TestAssociationEnableRequiresSyncableMetadata(t *testing.T) {
 		nil,
 	)
 	if enableResp == nil || !enableResp.IsError() {
-		t.Fatalf("enable without syncable metadata response = %#v, want error", enableResp)
+		t.Fatalf("enable without source sync enabled response = %#v, want error", enableResp)
 	}
 }
 
@@ -1172,11 +1172,7 @@ func TestConcurrentAssociationWritesReserveResolvedNameOnce(t *testing.T) {
 			},
 		})
 		assertNoErrorResponse(t, resp)
-		resp = env.update("metadata/"+path, map[string]interface{}{
-			"custom_metadata": map[string]interface{}{
-				sourceMetadataKeySyncable: sourceMetadataValueTrue,
-			},
-		})
+		resp = env.update("sources/" + path + "/enable")
 		assertNoErrorResponse(t, resp)
 	}
 	env.createFakeDestination("default")

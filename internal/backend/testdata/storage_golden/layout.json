@@ -100,13 +100,12 @@
     "value": {
       "cas_required": false,
       "current_version": 2,
-      "custom_metadata": {
-        "syncable": "true"
-      },
+      "custom_metadata": {},
       "delete_version_after": "0s",
       "generation": "<generation>",
       "max_versions": 10,
       "oldest_version": 1,
+      "source_sync_enabled": true,
       "updated_time": "<timestamp>",
       "versions": {
         "1": {

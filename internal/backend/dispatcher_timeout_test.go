@@ -92,7 +92,7 @@ func setupProviderMutationTestWithDeleteMode(
 	env.b.providerRegistry = providers.MustNewRegistry(provider)
 
 	env.writeAppDBSecret("initial")
-	env.markAppDBSyncable()
+	env.enableAppDBSourceSync()
 	destinationResp := env.update("destinations/"+provider.providerType+"/default", map[string]interface{}{})
 	if destinationResp != nil && destinationResp.IsError() {
 		t.Fatalf("unexpected destination write error: %v", destinationResp.Error())

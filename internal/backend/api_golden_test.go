@@ -33,11 +33,12 @@ func TestAPIGoldenResponses(t *testing.T) {
 	capture.response(t, "sources.check.empty", env.read("sources/app/db/check"))
 	capture.response(t, "metadata.write", env.update("metadata/app/db", map[string]interface{}{
 		"custom_metadata": map[string]interface{}{
-			"owner":    "platform",
-			"syncable": "true",
+			"owner": "platform",
 		},
 		"max_versions": 5,
 	}))
+	capture.response(t, "sources.enable", env.update("sources/app/db/enable"))
+	capture.response(t, "sources.disable", env.update("sources/app/db/disable"))
 	capture.response(t, "data.write.initial", env.update("data/app/db", map[string]interface{}{
 		"data": map[string]interface{}{
 			"setting":  "enabled",

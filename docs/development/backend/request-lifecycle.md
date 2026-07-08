@@ -18,7 +18,7 @@ and runtime identity.
 - `associations`: association plan, create/update/read/list/delete, enable,
   disable, and manual sync.
 - `metadata`: source metadata create/update/read/list/delete.
-- `sources`: source eligibility check and source opt-in helper.
+- `sources`: source eligibility check and source sync enable/disable helpers.
 - `data`: source data create/update/read/delete.
 - `delete`, `undelete`, `destroy`: source version lifecycle mutations.
 - `status`: per-source sync status summary.
@@ -82,7 +82,7 @@ on the association record.
 
 Enabled associations require source eligibility in hardened posture. Mounts
 default `security_posture=standard`; in hardened posture, eligibility requires
-source custom metadata `syncable=true`.
+source sync to be explicitly enabled.
 
 The backend validates association requests against provider capabilities before
 it accepts them. Capability checks cover secret-path support, secret-key

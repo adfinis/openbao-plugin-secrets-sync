@@ -20,7 +20,7 @@ page when you need to choose the right detailed document.
 - [Secret shapes](guides/secret-shapes.md) explains how source paths become
   AWS, Kubernetes, or GitLab remote objects.
 - [Delegated use](guides/delegated-use.md) explains hardened posture,
-  source opt-in metadata, and destination prefix constraints.
+  source sync enablement, and destination prefix constraints.
 - [Provider guides](providers/README.md) explain destination-specific
   configuration for AWS Secrets Manager, Kubernetes Secrets, and GitLab project
   variables.
@@ -125,7 +125,7 @@ When behavior changes, update docs at the same ownership level as the code:
 - Runtime, queue, convergence, drift, reconcile, restore, or dispatch changes:
   update runtime configuration, concepts, and the runbook when recovery behavior
   changes.
-- Delegated authorization, security posture, or source opt-in changes: update
+- Delegated authorization, security posture, or source sync changes: update
   delegated use, security policy examples, and the security model.
 - Provider configuration, naming, ownership, or capability changes: update the
   affected provider guide.

@@ -109,7 +109,7 @@ Common diagnostics include:
 - remote missing;
 - remote drift;
 - remote ownership loss;
-- source opt-in failure in hardened posture;
+- source sync enablement failure in hardened posture;
 - destination policy or validation failure.
 
 ## Redaction

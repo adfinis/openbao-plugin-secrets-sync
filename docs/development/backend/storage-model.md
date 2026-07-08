@@ -125,7 +125,8 @@ Source metadata records track:
 - maximum retained versions;
 - CAS requirement;
 - delete-after setting;
-- custom metadata such as `syncable=true`;
+- custom metadata supplied by callers;
+- plugin-owned source sync enablement state;
 - per-version deletion and destroy state;
 - updated time.
 

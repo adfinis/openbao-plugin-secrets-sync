@@ -64,10 +64,11 @@ fallback for missed wakeups, retries, and restart recovery.
 
 `security_posture` defaults to `standard` for platform-operated mounts. In
 that posture, unconstrained destinations remain valid for trusted
-operator-managed sync and source metadata opt-in is not required.
+operator-managed sync and source sync enablement is not required.
 
-`security_posture=hardened` requires `custom_metadata.syncable=true` before an
-enabled association can enqueue or dispatch remote mutation. It also rejects
+`security_posture=hardened` requires source sync to be explicitly enabled for
+the source path before an enabled association can enqueue or dispatch remote
+mutation. It also rejects
 destination writes and association use of destinations that omit
 `allowed_source_path_prefixes` or `allowed_resolved_name_prefixes`.
 Destination checks report `destination_unconstrained` for that blocker.
@@ -79,7 +80,8 @@ Destination checks report `destination_unconstrained` for that blocker.
 | `data/<path>` | Write, read, or soft-delete local source secret data. |
 | `metadata/<path>` | Manage source version policy and custom metadata. |
 | `metadata/` and `metadata/<path>` with `LIST` | List source metadata keys. |
-| `sources/<path>/enable` | Mark a source path as syncable by setting source metadata. |
+| `sources/<path>/enable` | Enable source sync for a path in hardened posture. |
+| `sources/<path>/disable` | Disable source sync for a path in hardened posture. |
 | `sources/<path>/check` | Check source readiness for sync. |
 | `delete/<path>` | Soft-delete selected source versions. |
 | `undelete/<path>` | Undelete selected source versions. |
@@ -112,10 +114,9 @@ field names. `cas` remains the CLI alias for `options.cas`; `version` is
 rejected on writes because it is only meaningful for reads. Use the wrapped
 body when the source payload needs one of those literal top-level keys.
 Mounts default `security_posture=standard`. In hardened posture,
-`sources/<path>/enable` sets
-`custom_metadata.syncable=true`; source checks report
-`source_opt_in_present` for that metadata and block with
-`source_not_syncable` only when opt-in is required and missing.
+`sources/<path>/enable` sets plugin-owned source sync state; source checks
+report `source_sync_enabled` and block with `source_sync_not_enabled` only when
+source sync is required and missing.
 Source paths cannot end with reserved association route segments such as
 `plan`, `disable`, `enable`, or `sync`.
 

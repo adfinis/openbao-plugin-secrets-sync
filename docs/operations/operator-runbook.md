@@ -62,7 +62,7 @@ Examples:
 - `manual_sync`: run after resolving `REMOTE_MISSING`, `DRIFTED`, or
   `REMOTE_OWNERSHIP_LOST` remote state.
 - `enable_source`: run when hardened posture blocks association activation or
-  dispatch because the source is not marked syncable.
+  dispatch because source sync is not enabled for the source path.
 - `acknowledge_restore_guard`: run only after restore or clone review is
   complete.
 - `read_queue`, `drain_queue`, or `retry_operation`: use when queue or provider
@@ -100,7 +100,7 @@ network, IAM, token, RBAC, or provider availability issues.
 
 ## Source and association checks
 
-In hardened posture, confirm the source path is explicitly syncable:
+In hardened posture, confirm source sync is explicitly enabled for the path:
 
 ```sh
 bao write -force secret-sync/sources/app/db/enable
@@ -308,7 +308,7 @@ to use while the restore guard is active.
 - check destination config fields;
 - check provider name rules for the rendered remote object name;
 - check payload size and granularity support.
-- use the returned `hint` and `next_actions`; source opt-in failures point to
+- use the returned `hint` and `next_actions`; source sync failures point to
   `sources/<path>/enable`, while generic validation failures point to the
   association plan.
 

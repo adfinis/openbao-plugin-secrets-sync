@@ -112,7 +112,7 @@ func TestSecurityBoundarySourcePayloadDoesNotLeakThroughOperationalResponses(t *
 
 	env.writeAppDBSecret(redactionCanary)
 	env.createFakeDestination("default")
-	env.markAppDBSyncable()
+	env.enableAppDBSourceSync()
 
 	planResp := env.planDefaultFakeAssociation("prod/app/db")
 	assertNoErrorResponse(t, planResp)

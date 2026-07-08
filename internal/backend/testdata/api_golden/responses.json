@@ -305,12 +305,12 @@
       "cas_required": false,
       "current_version": 1,
       "custom_metadata": {
-        "owner": "platform",
-        "syncable": "true"
+        "owner": "platform"
       },
       "delete_version_after": "0s",
       "max_versions": 5,
       "oldest_version": 1,
+      "source_sync_enabled": false,
       "sync": {
         "objects": 0,
         "queued_operations": 0
@@ -330,12 +330,12 @@
       "cas_required": false,
       "current_version": 0,
       "custom_metadata": {
-        "owner": "platform",
-        "syncable": "true"
+        "owner": "platform"
       },
       "delete_version_after": "0s",
       "max_versions": 5,
       "oldest_version": 0,
+      "source_sync_enabled": false,
       "sync": {
         "objects": 0,
         "queued_operations": 0
@@ -467,8 +467,8 @@
       "path": "app/db",
       "queued_operations": 0,
       "ready": false,
-      "source_opt_in_present": false,
-      "source_opt_in_required": false,
+      "source_sync_enabled": false,
+      "source_sync_required": false,
       "status_objects": 0
     }
   },
@@ -482,9 +482,57 @@
       "path": "app/db",
       "queued_operations": 0,
       "ready": true,
-      "source_opt_in_present": true,
-      "source_opt_in_required": false,
+      "source_sync_enabled": false,
+      "source_sync_required": false,
       "status_objects": 0
+    }
+  },
+  "sources.disable": {
+    "data": {
+      "changed": true,
+      "metadata": {
+        "cas_required": false,
+        "current_version": 0,
+        "custom_metadata": {
+          "owner": "platform"
+        },
+        "delete_version_after": "0s",
+        "max_versions": 5,
+        "oldest_version": 0,
+        "source_sync_enabled": false,
+        "sync": {
+          "objects": 0,
+          "queued_operations": 0
+        },
+        "updated_time": "<timestamp>",
+        "versions": {}
+      },
+      "path": "app/db",
+      "source_sync_enabled": false
+    }
+  },
+  "sources.enable": {
+    "data": {
+      "changed": true,
+      "metadata": {
+        "cas_required": false,
+        "current_version": 0,
+        "custom_metadata": {
+          "owner": "platform"
+        },
+        "delete_version_after": "0s",
+        "max_versions": 5,
+        "oldest_version": 0,
+        "source_sync_enabled": true,
+        "sync": {
+          "objects": 0,
+          "queued_operations": 0
+        },
+        "updated_time": "<timestamp>",
+        "versions": {}
+      },
+      "path": "app/db",
+      "source_sync_enabled": true
     }
   },
   "status.read.pending": {

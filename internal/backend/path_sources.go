@@ -26,7 +26,7 @@ func pathSources(b *secretSyncBackend) []*framework.Path {
 			},
 			HelpSynopsis: "Check source sync readiness.",
 			HelpDescription: "Reports whether a source path has a current version and whether " +
-				"source opt-in metadata is present.",
+				"source sync is enabled.",
 		},
 		{
 			Pattern: "sources/(?P<path>.+)/enable",
@@ -39,11 +39,28 @@ func pathSources(b *secretSyncBackend) []*framework.Path {
 			Operations: map[logical.Operation]framework.OperationHandler{
 				logical.UpdateOperation: &framework.PathOperation{
 					Callback: b.pathSourceEnable,
-					Summary:  "Mark a source path as syncable.",
+					Summary:  "Enable source sync for a path.",
 				},
 			},
 			HelpSynopsis:    "Enable source sync eligibility.",
-			HelpDescription: "Marks a source path as explicitly syncable without requiring a custom_metadata JSON write.",
+			HelpDescription: "Marks a source path as explicitly enabled for sync in hardened posture.",
+		},
+		{
+			Pattern: "sources/(?P<path>.+)/disable",
+			Fields: map[string]*framework.FieldSchema{
+				"path": {
+					Type:        framework.TypeString,
+					Description: "Source secret path.",
+				},
+			},
+			Operations: map[logical.Operation]framework.OperationHandler{
+				logical.UpdateOperation: &framework.PathOperation{
+					Callback: b.pathSourceDisable,
+					Summary:  "Disable source sync for a path.",
+				},
+			},
+			HelpSynopsis:    "Disable source sync eligibility.",
+			HelpDescription: "Marks a source path as not enabled for sync in hardened posture.",
 		},
 	}
 }
@@ -92,19 +109,19 @@ func (b *secretSyncBackend) pathSourceCheck(
 		return nil, err
 	}
 	currentVersion := 0
-	syncable := false
+	sourceSyncEnabled := false
 	if metadata != nil {
 		currentVersion = metadata.CurrentVersion
-		syncable = sourceMetadataSyncable(*metadata)
+		sourceSyncEnabled = metadata.SourceSyncEnabled
 	}
-	optInRequired := sourceOptInRequired(cfg)
-	blockers := sourceReadinessBlockers(metadata, syncable, currentVersionAvailable, optInRequired)
+	sourceSyncRequiredFlag := sourceSyncRequired(cfg)
+	blockers := sourceReadinessBlockers(metadata, sourceSyncEnabled, currentVersionAvailable, sourceSyncRequiredFlag)
 	b.recordReadinessCheck(ctx, observability.CheckSource, "", blockers)
 	return &logical.Response{Data: newResponseData(
 		responseField("path", path),
 		responseField("ready", len(blockers) == 0),
-		responseField("source_opt_in_present", syncable),
-		responseField("source_opt_in_required", optInRequired),
+		responseField("source_sync_enabled", sourceSyncEnabled),
+		responseField("source_sync_required", sourceSyncRequiredFlag),
 		responseField("current_version", currentVersion),
 		responseField("current_version_available", currentVersionAvailable),
 		responseField("association_count", len(associations)),
@@ -120,6 +137,23 @@ func (b *secretSyncBackend) pathSourceEnable(
 	req *logical.Request,
 	data *framework.FieldData,
 ) (*logical.Response, error) {
+	return b.pathSourceSyncSet(ctx, req, data, true)
+}
+
+func (b *secretSyncBackend) pathSourceDisable(
+	ctx context.Context,
+	req *logical.Request,
+	data *framework.FieldData,
+) (*logical.Response, error) {
+	return b.pathSourceSyncSet(ctx, req, data, false)
+}
+
+func (b *secretSyncBackend) pathSourceSyncSet(
+	ctx context.Context,
+	req *logical.Request,
+	data *framework.FieldData,
+	enabled bool,
+) (*logical.Response, error) {
 	path, err := normalizeSourcePath(data.Get("path").(string))
 	if err != nil {
 		return logical.ErrorResponse(err.Error()), nil
@@ -134,9 +168,9 @@ func (b *secretSyncBackend) pathSourceEnable(
 	if metadata == nil {
 		metadata = newMetadataRecordPtr()
 	}
-	changed := !sourceMetadataSyncable(*metadata)
+	changed := metadata.SourceSyncEnabled != enabled
 	if changed {
-		metadata.CustomMetadata[sourceMetadataKeySyncable] = sourceMetadataValueTrue
+		metadata.SourceSyncEnabled = enabled
 		metadata.UpdatedTime = nowUTC().Format(timeFormatRFC3339)
 		if err := putMetadata(ctx, req.Storage, path, *metadata); err != nil {
 			return nil, err
@@ -152,7 +186,7 @@ func (b *secretSyncBackend) pathSourceEnable(
 	}
 	return &logical.Response{Data: newResponseData(
 		responseField("path", path),
-		responseField("syncable", true),
+		responseField("source_sync_enabled", enabled),
 		responseField("changed", changed),
 		responseField("metadata", newResponseData(
 			metadataResponseFields(*metadata, len(queuedOperations), len(statusRecords))...,
@@ -160,15 +194,11 @@ func (b *secretSyncBackend) pathSourceEnable(
 	)}, nil
 }
 
-func sourceMetadataSyncable(metadata metadataRecord) bool {
-	return metadata.CustomMetadata[sourceMetadataKeySyncable] == sourceMetadataValueTrue
-}
-
 func sourceReadinessBlockers(
 	metadata *metadataRecord,
-	syncable bool,
+	sourceSyncEnabled bool,
 	currentVersionAvailable bool,
-	sourceOptInRequired bool,
+	sourceSyncRequired bool,
 ) []string {
 	blockers := []string{}
 	if metadata == nil || metadata.CurrentVersion == 0 {
@@ -176,8 +206,8 @@ func sourceReadinessBlockers(
 	} else if !currentVersionAvailable {
 		blockers = append(blockers, "current_version_unavailable")
 	}
-	if sourceOptInRequired && !syncable {
-		blockers = append(blockers, "source_not_syncable")
+	if sourceSyncRequired && !sourceSyncEnabled {
+		blockers = append(blockers, "source_sync_not_enabled")
 	}
 	return blockers
 }

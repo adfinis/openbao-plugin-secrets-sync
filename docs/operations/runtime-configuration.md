@@ -41,8 +41,8 @@ until the mount is enabled again.
 ## Security posture
 
 Fresh mounts default `security_posture=standard`. This keeps onboarding simple:
-unconstrained destinations are accepted, and source metadata
-`custom_metadata.syncable=true` is not required before sync.
+unconstrained destinations are accepted, and explicit source sync enablement is
+not required before sync.
 
 Set `security_posture=hardened` when application owners can manage their own
 source paths or associations:
@@ -51,8 +51,9 @@ source paths or associations:
 bao write secret-sync/config security_posture=hardened
 ```
 
-Hardened posture requires source metadata `custom_metadata.syncable=true`
-before enabled associations can enqueue or dispatch remote mutation. It also
+Hardened posture requires source sync to be explicitly enabled with
+`sources/<path>/enable` before enabled associations can enqueue or dispatch
+remote mutation. It also
 rejects destination writes that do not set both
 `allowed_source_path_prefixes` and `allowed_resolved_name_prefixes`.
 Association create, enable, manual sync, reconcile, and queued dispatch reject

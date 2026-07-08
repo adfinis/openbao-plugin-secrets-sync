@@ -2179,13 +2179,12 @@ func validateAssociationActivation(record associationRecord, metadata *metadataR
 }
 
 func validateSourceEligibility(metadata *metadataRecord, cfg globalConfig) error {
-	if !sourceOptInRequired(cfg) {
+	if !sourceSyncRequired(cfg) {
 		return nil
 	}
-	if metadata == nil || metadata.CustomMetadata[sourceMetadataKeySyncable] != sourceMetadataValueTrue {
+	if metadata == nil || !metadata.SourceSyncEnabled {
 		return fmt.Errorf(
-			"source path is not eligible for sync: custom_metadata.syncable must be true " +
-				"when security_posture=hardened",
+			"source path is not eligible for sync: source sync must be enabled when security_posture=hardened",
 		)
 	}
 	return nil

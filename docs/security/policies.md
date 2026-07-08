@@ -108,8 +108,8 @@ path "secret-sync/metadata/*" {
 ## App writer
 
 App writers manage source payloads and source metadata for their own prefix.
-Grant `sources/<path>/enable` when app writers may mark their own source path
-as syncable.
+Grant `sources/<path>/enable` when app writers may enable sync for their own
+source path.
 
 ```hcl
 path "secret-sync/info" {

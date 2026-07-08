@@ -24,7 +24,7 @@ The plugin supports:
 
 - KV-v2-like source storage in the plugin mount;
 - explicit association-based sync from source paths to named destinations;
-- optional hardened posture with source opt-in metadata and destination
+- optional hardened posture with source sync enablement and destination
   constraints;
 - provider-specific secret shapes, naming rules, and ownership metadata;
 - safe defaults for JSON `secret-path` sync, including retained remote data on

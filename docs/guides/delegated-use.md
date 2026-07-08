@@ -27,23 +27,21 @@ bao write secret-sync/config security_posture=hardened
 ```
 
 In hardened posture, an enabled association can enqueue or dispatch remote
-mutation only if the source metadata has `custom_metadata.syncable=true`.
+mutation only if source sync is explicitly enabled for the source path.
 Destination writes must include both delegation constraint lists while hardened
 posture is active.
 
-Application owners can mark their own source path syncable when policy grants
-the source enable endpoint:
+Application owners can enable source sync for their own source path when policy
+grants the source enable endpoint:
 
 ```sh
 bao write -force secret-sync/sources/apps/team-a/db/enable
 ```
 
-The same state can be set through metadata when the caller is allowed to update
-metadata:
+The state can be removed through the matching disable endpoint:
 
 ```sh
-bao write secret-sync/metadata/apps/team-a/db \
-  @<(printf '%s' '{"custom_metadata":{"syncable":"true"}}')
+bao write -force secret-sync/sources/apps/team-a/db/disable
 ```
 
 Check source readiness before creating or enabling an association:
@@ -97,7 +95,7 @@ reconcile, and queued dispatch refuse to use that destination.
 Separate these privileges unless a team intentionally owns the full workflow:
 
 - source payload write access under `data/<path>`;
-- source metadata and `sources/<path>/enable` access;
+- source metadata and source sync enable/disable access;
 - association create/update/delete access for the delegated source prefix;
 - destination management access;
 - queue drain, queue retry, restore guard acknowledgement, and runtime config

@@ -19,7 +19,7 @@ func TestAssociationDataMapDispatchesSourceKeys(t *testing.T) {
 		"username": testAppUsername,
 		"password": "secret",
 	})
-	env.markAppDBSyncable()
+	env.enableAppDBSourceSync()
 	resp := env.update("destinations/data-map/prod")
 	assertNilOrNoErrorResponse(t, resp)
 
@@ -68,7 +68,7 @@ func TestAssociationDataMapDispatchesSourceKeys(t *testing.T) {
 func TestAssociationDataMapRequiresProviderCapability(t *testing.T) {
 	env := newBackendTestEnv(t)
 	env.writeAppDBSecretData(map[string]interface{}{"username": testAppUsername})
-	env.markAppDBSyncable()
+	env.enableAppDBSourceSync()
 	env.createFakeDestination("default")
 
 	resp := env.update("associations/app/db", map[string]interface{}{
@@ -90,7 +90,7 @@ func TestAssociationDataMapRejectsUnsupportedSourceValues(t *testing.T) {
 	env.writeAppDBSecretData(map[string]interface{}{
 		"config": map[string]interface{}{"nested": "value"},
 	})
-	env.markAppDBSyncable()
+	env.enableAppDBSourceSync()
 	resp := env.update("destinations/data-map/prod")
 	assertNilOrNoErrorResponse(t, resp)
 

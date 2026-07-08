@@ -60,11 +60,7 @@ func TestOpenBaoPluginSyncsToGitLabProjectVariables(t *testing.T) {
 	acknowledgeRestoreGuard(t, baoClient)
 	disableEventDispatch(t, baoClient)
 	assertSecretKeyRenderedNameReservations(t, baoClient)
-	write(t, baoClient, mountPath+"/metadata/app/db", map[string]interface{}{
-		"custom_metadata": map[string]interface{}{
-			"syncable": "true",
-		},
-	})
+	enableSourceSyncAt(t, baoClient, "app/db")
 	writeSource(t, baoClient, variableKey, "initial")
 
 	plan := write(t, baoClient, mountPath+"/associations/app/db/plan", associationRequest())
@@ -159,8 +155,8 @@ func associationRequest() map[string]interface{} {
 
 func assertSecretKeyRenderedNameReservations(t *testing.T, client *api.Client) {
 	t.Helper()
-	writeSyncableSourceAt(t, client, "reservation/left", "A", "left")
-	writeSyncableSourceAt(t, client, "reservation/right", "A", "right")
+	writeSourceSyncEnabledAt(t, client, "reservation/left", "A", "left")
+	writeSourceSyncEnabledAt(t, client, "reservation/right", "A", "right")
 	write(t, client, mountPath+"/associations/reservation/left", reservationAssociationRequest("E2E_COLLISION_A{{ key }}", false))
 	writeExpectError(
 		t,
@@ -170,8 +166,8 @@ func assertSecretKeyRenderedNameReservations(t *testing.T, client *api.Client) {
 		"already reserved",
 	)
 
-	writeSyncableSourceAt(t, client, "reservation/source-left", "X", "left")
-	writeSyncableSourceAt(t, client, "reservation/source-right", "B", "right")
+	writeSourceSyncEnabledAt(t, client, "reservation/source-left", "X", "left")
+	writeSourceSyncEnabledAt(t, client, "reservation/source-right", "B", "right")
 	leftAssociation := write(
 		t,
 		client,
@@ -217,14 +213,15 @@ func writeSource(t *testing.T, client *api.Client, variableKey string, value str
 	writeSourceAt(t, client, "app/db", variableKey, value)
 }
 
-func writeSyncableSourceAt(t *testing.T, client *api.Client, path string, key string, value string) {
+func writeSourceSyncEnabledAt(t *testing.T, client *api.Client, path string, key string, value string) {
 	t.Helper()
-	write(t, client, mountPath+"/metadata/"+path, map[string]interface{}{
-		"custom_metadata": map[string]interface{}{
-			"syncable": "true",
-		},
-	})
+	enableSourceSyncAt(t, client, path)
 	writeSourceAt(t, client, path, key, value)
+}
+
+func enableSourceSyncAt(t *testing.T, client *api.Client, path string) {
+	t.Helper()
+	write(t, client, mountPath+"/sources/"+path+"/enable", map[string]interface{}{})
 }
 
 func writeSourceAt(t *testing.T, client *api.Client, path string, key string, value string) {

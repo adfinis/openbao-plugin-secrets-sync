@@ -64,9 +64,9 @@ prefixes, operators should set `security_posture=hardened`.
 
 Source eligibility is local source metadata, not an implicit source-read
 permission check. In hardened posture, the backend requires
-`custom_metadata.syncable=true` before an enabled association can enqueue or
-dispatch sync work. OpenBao policy must therefore control who can update
-`metadata/<path>` or call `sources/<path>/enable`.
+source sync to be explicitly enabled before an enabled association can enqueue
+or dispatch sync work. OpenBao policy must therefore control who can call
+`sources/<path>/enable` and `sources/<path>/disable`.
 
 Delegated association owners do not need source payload read access unless the
 deployment also wants them to inspect the secret value. Combine delegated
@@ -97,7 +97,7 @@ all due operations in the queue.
 
 Implemented controls:
 
-- `custom_metadata.syncable=true` before enabled association activation in
+- explicit source sync enablement before enabled association activation in
   hardened posture;
 - opt-in `security_posture=hardened`, which requires constrained destinations
   for delegated association use;

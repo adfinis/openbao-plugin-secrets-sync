@@ -128,9 +128,9 @@ func validationDiagnostic(mount, sourcePath, destinationRef, message string) dia
 	normalized := strings.ToLower(message)
 	switch {
 	case strings.Contains(normalized, "source path is not eligible") ||
-		strings.Contains(normalized, "custom_metadata.syncable"):
+		strings.Contains(normalized, "source sync must be enabled"):
 		return diagnostic{
-			Hint: "Source opt-in is required. Mark the source path syncable before enabling or syncing this association.",
+			Hint: "Source sync must be enabled before this association can sync in hardened posture.",
 			NextActions: []diagnosticAction{
 				enableSourceAction(mount, sourcePath),
 			},

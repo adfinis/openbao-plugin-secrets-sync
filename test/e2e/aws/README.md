@@ -163,7 +163,7 @@ bao write secret-sync/destinations/aws-sm/prod \
 ```
 
 Create a source secret. Fresh mounts default `security_posture=standard`, so
-metadata opt-in is not required unless you enable hardened posture in
+source sync enablement is not required unless you enable hardened posture in
 `secret-sync/config`.
 
 ```sh

@@ -23,7 +23,7 @@ func pathConfig(b *secretSyncBackend) *framework.Path {
 			"security_posture": {
 				Type: framework.TypeString,
 				Description: "Security posture: standard preserves platform-operated defaults; " +
-					"hardened requires source opt-in and constrained destinations.",
+					"hardened requires source sync enablement and constrained destinations.",
 			},
 			"disabled": {
 				Type:        framework.TypeBool,
@@ -482,7 +482,7 @@ func validateSecurityPosture(posture string) error {
 	}
 }
 
-func sourceOptInRequired(cfg globalConfig) bool {
+func sourceSyncRequired(cfg globalConfig) bool {
 	return cfg.SecurityPosture == securityPostureHardened
 }
 

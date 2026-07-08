@@ -115,7 +115,6 @@ Metadata writes support:
   "cas_required": true,
   "delete_version_after": "0s",
   "custom_metadata": {
-    "syncable": "true",
     "owner": "platform"
   }
 }
@@ -127,14 +126,11 @@ policy is rejected until the backend enforces it.
 Mounts default `security_posture=standard`, so creating an enabled association
 is the source authorization step in the platform-operated default mode.
 
-In hardened posture, enabled associations require:
+In hardened posture, enabled associations require source sync to be explicitly
+enabled for the source path:
 
-```json
-{
-  "custom_metadata": {
-    "syncable": "true"
-  }
-}
+```sh
+bao write -force secret-sync/sources/app/db/enable
 ```
 
 Delegated deployments should enable hardened posture:
@@ -143,5 +139,6 @@ Delegated deployments should enable hardened posture:
 bao write secret-sync/config security_posture=hardened
 ```
 
-This makes sync opt-in at the source path and requires constrained destinations
-before delegated association owners can trigger destination mutation.
+This requires explicit source sync enablement at the source path and constrained
+destinations before delegated association owners can trigger destination
+mutation.

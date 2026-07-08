@@ -17,7 +17,7 @@ func TestDispatchHonorsTightenedDestinationPolicy(t *testing.T) {
 	env := newBackendTestEnv(t)
 
 	env.writeAppDBSecret("initial")
-	env.markAppDBSyncable()
+	env.enableAppDBSourceSync()
 	writeResp := env.update(
 		"destinations/fake/restricted",
 		map[string]interface{}{

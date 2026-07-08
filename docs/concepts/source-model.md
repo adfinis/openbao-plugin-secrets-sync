@@ -55,9 +55,9 @@ the new version is stored.
 ## Source Metadata
 
 Source metadata controls local version policy and can carry custom metadata.
-In hardened posture, enabled associations require
-`custom_metadata.syncable=true` before they can enqueue or dispatch remote
-mutation.
+In hardened posture, enabled associations require source sync to be explicitly
+enabled through `sources/<path>/enable` before they can enqueue or dispatch
+remote mutation.
 
 Fresh mounts default `security_posture=standard`. In that platform-operated
 mode, creating or enabling an association is the authorization step that

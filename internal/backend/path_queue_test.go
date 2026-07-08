@@ -78,7 +78,7 @@ func TestQueueCapacityRejectsWriteBeforeVersionCommit(t *testing.T) {
 	})
 	env.writeAppDBSecret("initial")
 	env.createFakeDestination("default")
-	env.markAppDBSyncable()
+	env.enableAppDBSourceSync()
 	associationResp := env.update("associations/app/db", map[string]interface{}{
 		"destination":   destinationRef(providerTypeFake, "default"),
 		"resolved_name": "prod/app/db",

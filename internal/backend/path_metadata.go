@@ -45,7 +45,7 @@ func pathMetadata(b *secretSyncBackend) []*framework.Path {
 				},
 				"custom_metadata": {
 					Type:        framework.TypeMap,
-					Description: "Non-secret source metadata used by sync policy and operators.",
+					Description: "Non-secret source metadata for operators and external tooling.",
 				},
 			}),
 			Operations: map[logical.Operation]framework.OperationHandler{
@@ -271,6 +271,7 @@ func metadataResponseFields(
 		responseField("max_versions", metadata.MaxVersions),
 		responseField("cas_required", metadata.CASRequired),
 		responseField("delete_version_after", metadata.DeleteVersionAfter),
+		responseField("source_sync_enabled", metadata.SourceSyncEnabled),
 		responseField("custom_metadata", metadata.CustomMetadata),
 		responseField("updated_time", metadata.UpdatedTime),
 		responseField("versions", metadata.Versions),

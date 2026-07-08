@@ -8,8 +8,9 @@ for the shared association model.
 
 Provider secret-shape pages include source writes and the association shape
 required by the provider. Fresh mounts default `security_posture=standard`, so
-no provider-specific `syncable` step is required. In hardened posture, mark the
-source with `sources/<path>/enable` before creating or enabling associations.
+no provider-specific source sync step is required. In hardened posture, enable
+source sync with `sources/<path>/enable` before creating or enabling
+associations.
 
 Use [Templating](../concepts/templating.md) for `resolved_name`,
 `name_template`, and `data_key_template` behavior. Use
