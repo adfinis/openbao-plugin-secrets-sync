@@ -1155,7 +1155,7 @@ func TestHealthClassifiesAWSFailure(t *testing.T) {
 func TestHealthClassifiesDestinationValidationFailure(t *testing.T) {
 	provider := Provider{
 		clientFactory: func(context.Context, providers.DestinationConfig) (secretsManagerClient, error) {
-			return nil, validationError("invalid destination config")
+			return nil, providerHelpers.ValidationError("invalid destination config")
 		},
 	}
 	_, err := provider.OpenDestination(context.Background(), providers.DestinationConfig{Name: testDestinationName})

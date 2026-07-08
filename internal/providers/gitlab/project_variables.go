@@ -21,6 +21,7 @@ import (
 	payloadpkg "github.com/adfinis/openbao-plugin-secrets-sync/internal/payload"
 	"github.com/adfinis/openbao-plugin-secrets-sync/internal/providers"
 	"github.com/adfinis/openbao-plugin-secrets-sync/internal/providers/endpointguard"
+	"github.com/adfinis/openbao-plugin-secrets-sync/internal/providers/providerutil"
 )
 
 const (
@@ -70,6 +71,8 @@ const (
 	metadataDescriptionCompactedVersion = "v"
 )
 
+var providerHelpers = providerutil.New(ProviderType)
+
 type projectVariableClient interface {
 	GetProject(context.Context, gitlabDestinationOptions) error
 	GetVariable(context.Context, gitlabDestinationOptions, string) (*gitlabVariable, error)
@@ -115,7 +118,7 @@ func (Provider) Capabilities() providers.Capabilities {
 
 func (Provider) ValidateConfig(_ context.Context, cfg providers.DestinationConfig) error {
 	if strings.TrimSpace(cfg.Name) == "" {
-		return validationError("gitlab destination name must not be empty")
+		return providerHelpers.ValidationError("gitlab destination name must not be empty")
 	}
 	_, err := gitlabDestinationOptionsFromConfig(cfg)
 	return err
@@ -131,7 +134,7 @@ func (p Provider) OpenDestination(
 	}
 	client, err := p.clientFor(ctx, cfg)
 	if err != nil {
-		return nil, providerError(setupErrorClass(err))
+		return nil, providerHelpers.ProviderError(providerHelpers.SetupErrorClass(err))
 	}
 	return destinationRuntime{client: client, options: options}, nil
 }
@@ -149,7 +152,7 @@ func (r destinationRuntime) Health(ctx context.Context) (*providers.HealthResult
 
 func (r destinationRuntime) Plan(ctx context.Context, req providers.PlanRequest) (*providers.PlanResult, error) {
 	if err := validateVariableKey(req.ResolvedName); err != nil {
-		return blockedPlan(providers.ErrorClassValidation), nil
+		return providerHelpers.BlockedPlan(providers.ErrorClassValidation), nil
 	}
 	variable, err := r.client.GetVariable(ctx, r.options, req.ResolvedName)
 	if isGitLabNotFound(err) {
@@ -159,7 +162,7 @@ func (r destinationRuntime) Plan(ctx context.Context, req providers.PlanRequest)
 		return &providers.PlanResult{Action: providers.PlanActionCreate}, nil
 	}
 	if err != nil {
-		return blockedPlan(classifyGitLabError(err)), nil
+		return providerHelpers.BlockedPlan(classifyGitLabError(err)), nil
 	}
 	metadata, owned := ownershipMetadata(variable)
 	if !ownedByRequest(metadata, owned, req.OwnershipIdentity()) {
@@ -196,7 +199,7 @@ func (r destinationRuntime) Upsert(ctx context.Context, req providers.UpsertRequ
 		return nil, err
 	}
 	if len(req.Payload) > variableValueMaxBytes {
-		return nil, providerError(providers.ErrorClassCapacity)
+		return nil, providerHelpers.ProviderError(providers.ErrorClassCapacity)
 	}
 	input := variableInputFromUpsert(r.options, req)
 	variable, err := r.client.GetVariable(ctx, r.options, req.ResolvedName)
@@ -206,19 +209,19 @@ func (r destinationRuntime) Upsert(ctx context.Context, req providers.UpsertRequ
 		}
 		created, createErr := r.client.CreateVariable(ctx, r.options, input)
 		if createErr != nil {
-			return nil, providerError(classifyGitLabError(createErr))
+			return nil, providerHelpers.ProviderError(classifyGitLabError(createErr))
 		}
 		return &providers.SyncResult{RemoteVersion: remoteVersion(created)}, nil
 	}
 	if err != nil {
-		return nil, providerError(classifyGitLabError(err))
+		return nil, providerHelpers.ProviderError(classifyGitLabError(err))
 	}
 	metadata, owned := ownershipMetadata(variable)
 	if !ownedByRequest(metadata, owned, req.OwnershipIdentity()) {
-		return nil, providerError(providers.ErrorClassOwnership)
+		return nil, providerHelpers.ProviderError(providers.ErrorClassOwnership)
 	}
 	if remoteSourceVersionNewer(metadata, req.SourceVersion) {
-		return nil, providerError(providers.ErrorClassDrift)
+		return nil, providerHelpers.ProviderError(providers.ErrorClassDrift)
 	}
 	if err := validateHiddenUpdate(r.options, variable); err != nil {
 		return nil, err
@@ -231,7 +234,7 @@ func (r destinationRuntime) Upsert(ctx context.Context, req providers.UpsertRequ
 	}
 	updated, err := r.client.UpdateVariable(ctx, r.options, req.ResolvedName, input)
 	if err != nil {
-		return nil, providerError(classifyGitLabError(err))
+		return nil, providerHelpers.ProviderError(classifyGitLabError(err))
 	}
 	return &providers.SyncResult{RemoteVersion: remoteVersion(updated)}, nil
 }
@@ -245,17 +248,17 @@ func (r destinationRuntime) Delete(ctx context.Context, req providers.DeleteRequ
 		return &providers.SyncResult{RemoteVersion: "missing"}, nil
 	}
 	if err != nil {
-		return nil, providerError(classifyGitLabError(err))
+		return nil, providerHelpers.ProviderError(classifyGitLabError(err))
 	}
 	metadata, owned := ownershipMetadata(variable)
 	if !ownedByRequest(metadata, owned, req.OwnershipIdentity()) {
-		return nil, providerError(providers.ErrorClassOwnership)
+		return nil, providerHelpers.ProviderError(providers.ErrorClassOwnership)
 	}
 	if remoteSourceVersionNewer(metadata, req.SourceVersion) {
-		return nil, providerError(providers.ErrorClassDrift)
+		return nil, providerHelpers.ProviderError(providers.ErrorClassDrift)
 	}
 	if err := r.client.DeleteVariable(ctx, r.options, req.ResolvedName); err != nil {
-		return nil, providerError(classifyGitLabError(err))
+		return nil, providerHelpers.ProviderError(classifyGitLabError(err))
 	}
 	return &providers.SyncResult{RemoteVersion: remoteVersion(variable)}, nil
 }
@@ -272,7 +275,7 @@ func (r destinationRuntime) ReadState(
 		return &providers.RemoteState{Exists: false}, nil
 	}
 	if err != nil {
-		return nil, providerError(classifyGitLabError(err))
+		return nil, providerHelpers.ProviderError(classifyGitLabError(err))
 	}
 	metadata, owned := ownershipMetadata(variable)
 	return &providers.RemoteState{
@@ -358,58 +361,59 @@ type gitlabDestinationOptions struct {
 
 func gitlabDestinationOptionsFromConfig(cfg providers.DestinationConfig) (gitlabDestinationOptions, error) {
 	options := gitlabDestinationOptions{
-		baseURL:          stringDefault(configValue(cfg, ConfigKeyBaseURL), defaultBaseURL),
-		projectID:        configValue(cfg, ConfigKeyProjectID),
-		environmentScope: stringDefault(configValue(cfg, ConfigKeyEnvironmentScope), defaultEnvironmentScope),
+		baseURL:          stringDefault(providerHelpers.ConfigValue(cfg, ConfigKeyBaseURL), defaultBaseURL),
+		projectID:        providerHelpers.ConfigValue(cfg, ConfigKeyProjectID),
+		environmentScope: stringDefault(providerHelpers.ConfigValue(cfg, ConfigKeyEnvironmentScope), defaultEnvironmentScope),
 		variableRaw:      true,
-		variableType:     stringDefault(configValue(cfg, ConfigKeyVariableType), defaultVariableType),
-		token:            configValue(cfg, ConfigKeyToken),
+		variableType:     stringDefault(providerHelpers.ConfigValue(cfg, ConfigKeyVariableType), defaultVariableType),
+		token:            providerHelpers.ConfigValue(cfg, ConfigKeyToken),
 	}
 	var err error
-	if options.protected, err = boolConfigValue(cfg, ConfigKeyProtected, false); err != nil {
+	if options.protected, err = providerHelpers.BoolConfigValue(cfg, ConfigKeyProtected, false); err != nil {
 		return gitlabDestinationOptions{}, err
 	}
-	if options.masked, err = boolConfigValue(cfg, ConfigKeyMasked, false); err != nil {
+	if options.masked, err = providerHelpers.BoolConfigValue(cfg, ConfigKeyMasked, false); err != nil {
 		return gitlabDestinationOptions{}, err
 	}
-	if options.hidden, err = boolConfigValue(cfg, ConfigKeyHidden, false); err != nil {
+	if options.hidden, err = providerHelpers.BoolConfigValue(cfg, ConfigKeyHidden, false); err != nil {
 		return gitlabDestinationOptions{}, err
 	}
 	if options.hidden {
 		options.masked = true
 	}
-	if options.variableRaw, err = boolConfigValue(cfg, ConfigKeyVariableRaw, true); err != nil {
+	if options.variableRaw, err = providerHelpers.BoolConfigValue(cfg, ConfigKeyVariableRaw, true); err != nil {
 		return gitlabDestinationOptions{}, err
 	}
-	if options.allowInsecureHTTP, err = boolConfigValue(cfg, ConfigKeyAllowInsecureHTTP, false); err != nil {
+	if options.allowInsecureHTTP, err = providerHelpers.BoolConfigValue(
+		cfg,
+		ConfigKeyAllowInsecureHTTP,
+		false,
+	); err != nil {
 		return gitlabDestinationOptions{}, err
 	}
-	if options.allowPrivateNet, err = boolConfigValue(cfg, ConfigKeyAllowPrivateNetwork, false); err != nil {
+	if options.allowPrivateNet, err = providerHelpers.BoolConfigValue(
+		cfg,
+		ConfigKeyAllowPrivateNetwork,
+		false,
+	); err != nil {
 		return gitlabDestinationOptions{}, err
 	}
 	if err := validateBaseURL(options.baseURL, options.allowInsecureHTTP, options.allowPrivateNet); err != nil {
 		return gitlabDestinationOptions{}, err
 	}
 	if options.projectID == "" {
-		return gitlabDestinationOptions{}, validationError("gitlab project_id must not be empty")
+		return gitlabDestinationOptions{}, providerHelpers.ValidationError("gitlab project_id must not be empty")
 	}
 	if options.token == "" {
-		return gitlabDestinationOptions{}, validationError("gitlab token must not be empty")
+		return gitlabDestinationOptions{}, providerHelpers.ValidationError("gitlab token must not be empty")
 	}
 	if options.environmentScope == "" {
-		return gitlabDestinationOptions{}, validationError("gitlab environment_scope must not be empty")
+		return gitlabDestinationOptions{}, providerHelpers.ValidationError("gitlab environment_scope must not be empty")
 	}
 	if options.variableType != VariableTypeEnvVar && options.variableType != VariableTypeFile {
-		return gitlabDestinationOptions{}, validationError("gitlab variable_type must be env_var or file")
+		return gitlabDestinationOptions{}, providerHelpers.ValidationError("gitlab variable_type must be env_var or file")
 	}
 	return options, nil
-}
-
-func configValue(cfg providers.DestinationConfig, key string) string {
-	if cfg.Config == nil {
-		return ""
-	}
-	return strings.TrimSpace(cfg.Config[key])
 }
 
 func stringDefault(value string, fallback string) string {
@@ -419,32 +423,20 @@ func stringDefault(value string, fallback string) string {
 	return value
 }
 
-func boolConfigValue(cfg providers.DestinationConfig, key string, fallback bool) (bool, error) {
-	value := configValue(cfg, key)
-	if value == "" {
-		return fallback, nil
-	}
-	parsed, err := strconv.ParseBool(value)
-	if err != nil {
-		return false, validationError(fmt.Sprintf("gitlab %s must be true or false", key))
-	}
-	return parsed, nil
-}
-
 func validateBaseURL(rawBaseURL string, allowInsecureHTTP bool, allowPrivateNetwork bool) error {
 	parsed, err := url.Parse(rawBaseURL)
 	if err != nil {
-		return validationError("gitlab base_url must be a valid URL")
+		return providerHelpers.ValidationError("gitlab base_url must be a valid URL")
 	}
 	if parsed.Host == "" || parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" {
-		return validationError("gitlab base_url must include a host and no userinfo, query, or fragment")
+		return providerHelpers.ValidationError("gitlab base_url must include a host and no userinfo, query, or fragment")
 	}
 	host := endpointguard.NormalizeHost(parsed.Hostname())
 	if host == "" {
-		return validationError("gitlab base_url must include a host")
+		return providerHelpers.ValidationError("gitlab base_url must include a host")
 	}
 	if !allowPrivateNetwork && endpointguard.IsRestrictedHost(host) {
-		return validationError(
+		return providerHelpers.ValidationError(
 			"gitlab base_url requires allow_private_network=true for localhost, private, link-local, " +
 				"multicast, or unspecified hosts",
 		)
@@ -456,9 +448,11 @@ func validateBaseURL(rawBaseURL string, allowInsecureHTTP bool, allowPrivateNetw
 		if endpointguard.IsLocalHost(host) || allowInsecureHTTP {
 			return nil
 		}
-		return validationError("gitlab http base_url requires allow_insecure_http=true unless it targets localhost")
+		return providerHelpers.ValidationError(
+			"gitlab http base_url requires allow_insecure_http=true unless it targets localhost",
+		)
 	default:
-		return validationError("gitlab base_url must use http or https")
+		return providerHelpers.ValidationError("gitlab base_url must use http or https")
 	}
 }
 
@@ -472,11 +466,11 @@ func validateBaseURLResolution(
 	}
 	parsed, err := url.Parse(options.baseURL)
 	if err != nil {
-		return validationError("gitlab base_url must be a valid URL")
+		return providerHelpers.ValidationError("gitlab base_url must be a valid URL")
 	}
 	host := endpointguard.NormalizeHost(parsed.Hostname())
 	if host == "" {
-		return validationError("gitlab base_url must include a host")
+		return providerHelpers.ValidationError("gitlab base_url must include a host")
 	}
 	if _, ok := endpointguard.ParseAddr(host); ok {
 		return nil
@@ -496,7 +490,7 @@ func validateBaseURLResolution(
 	}
 	for _, addr := range addrs {
 		if endpointguard.IsRestrictedAddr(addr) {
-			return validationError(
+			return providerHelpers.ValidationError(
 				"gitlab base_url DNS must not resolve to localhost, private, link-local, multicast, or unspecified addresses",
 			)
 		}
@@ -506,17 +500,17 @@ func validateBaseURLResolution(
 
 func validateVariableKey(key string) error {
 	if key == "" {
-		return validationError("gitlab variable key must not be empty")
+		return providerHelpers.ValidationError("gitlab variable key must not be empty")
 	}
 	if len(key) > variableKeyMaxBytes {
-		return validationError("gitlab variable key exceeds 255 characters")
+		return providerHelpers.ValidationError("gitlab variable key exceeds 255 characters")
 	}
 	for _, char := range key {
 		if (char >= 'A' && char <= 'Z') || (char >= 'a' && char <= 'z') ||
 			(char >= '0' && char <= '9') || char == '_' {
 			continue
 		}
-		return validationError("gitlab variable key may contain only letters, digits, and underscore")
+		return providerHelpers.ValidationError("gitlab variable key may contain only letters, digits, and underscore")
 	}
 	return nil
 }
@@ -526,10 +520,10 @@ func validateMaskedPayloadForPlan(options gitlabDestinationOptions, req provider
 		return nil
 	}
 	if req.PayloadBytes < maskedVariableMinChars {
-		return validationError("gitlab masked variable value must be at least 8 characters")
+		return providerHelpers.ValidationError("gitlab masked variable value must be at least 8 characters")
 	}
 	if !options.variableRaw && req.Format != payloadpkg.FormatRaw {
-		return validationError("gitlab masked variables with variable_raw=false require raw payload format")
+		return providerHelpers.ValidationError("gitlab masked variables with variable_raw=false require raw payload format")
 	}
 	return nil
 }
@@ -539,20 +533,22 @@ func validateMaskedPayloadForUpsert(options gitlabDestinationOptions, req provid
 		return nil
 	}
 	if !utf8.Valid(req.Payload) {
-		return validationError("gitlab masked variable value must be valid UTF-8")
+		return providerHelpers.ValidationError("gitlab masked variable value must be valid UTF-8")
 	}
 	value := string(req.Payload)
 	if utf8.RuneCountInString(value) < maskedVariableMinChars {
-		return validationError("gitlab masked variable value must be at least 8 characters")
+		return providerHelpers.ValidationError("gitlab masked variable value must be at least 8 characters")
 	}
 	if strings.ContainsFunc(value, unicode.IsSpace) {
-		return validationError("gitlab masked variable value must be a single line with no spaces")
+		return providerHelpers.ValidationError("gitlab masked variable value must be a single line with no spaces")
 	}
 	if !options.variableRaw && req.Format != payloadpkg.FormatRaw {
-		return validationError("gitlab masked variables with variable_raw=false require raw payload format")
+		return providerHelpers.ValidationError("gitlab masked variables with variable_raw=false require raw payload format")
 	}
 	if !options.variableRaw && strings.ContainsFunc(value, invalidExpandedMaskedVariableChar) {
-		return validationError("gitlab masked variable value contains characters incompatible with variable_raw=false")
+		return providerHelpers.ValidationError(
+			"gitlab masked variable value contains characters incompatible with variable_raw=false",
+		)
 	}
 	return nil
 }
@@ -577,7 +573,7 @@ func invalidExpandedMaskedVariableChar(char rune) bool {
 
 func validateHiddenUpdate(options gitlabDestinationOptions, variable *gitlabVariable) error {
 	if options.hidden && !variable.Hidden {
-		return validationError("gitlab hidden variables can only be hidden when they are created")
+		return providerHelpers.ValidationError("gitlab hidden variables can only be hidden when they are created")
 	}
 	return nil
 }
@@ -1087,36 +1083,12 @@ func payloadSHA256(payload []byte) string {
 	return "sha256:" + hex.EncodeToString(sum[:])
 }
 
-func validationError(message string) error {
-	return &providers.Error{Class: providers.ErrorClassValidation, Message: message}
-}
-
-func blockedPlan(errorClass providers.ErrorClass) *providers.PlanResult {
-	return &providers.PlanResult{
-		Action:     providers.PlanActionBlocked,
-		ErrorClass: errorClass,
-		Message:    "gitlab provider plan failed",
-	}
-}
-
 func blockedValidationPlan(message string) *providers.PlanResult {
 	return &providers.PlanResult{
 		Action:     providers.PlanActionBlocked,
 		ErrorClass: providers.ErrorClassValidation,
 		Message:    message,
 	}
-}
-
-func providerError(errorClass providers.ErrorClass) error {
-	return &providers.Error{Class: errorClass, Message: "gitlab request failed"}
-}
-
-func setupErrorClass(err error) providers.ErrorClass {
-	var providerError *providers.Error
-	if errors.As(err, &providerError) && providerError.Class != "" {
-		return providerError.Class
-	}
-	return providers.ErrorClassInternal
 }
 
 type gitlabVariable struct {
@@ -1267,11 +1239,11 @@ func (c httpProjectVariableClient) newRequest(
 ) (*http.Request, error) {
 	parsed, err := url.Parse(options.baseURL)
 	if err != nil {
-		return nil, validationError("gitlab base_url must be a valid URL")
+		return nil, providerHelpers.ValidationError("gitlab base_url must be a valid URL")
 	}
 	unescapedAPIPath, err := url.PathUnescape(apiPath)
 	if err != nil {
-		return nil, validationError("gitlab api path must be valid URL path escaping")
+		return nil, providerHelpers.ValidationError("gitlab api path must be valid URL path escaping")
 	}
 	basePath := strings.TrimRight(parsed.Path, "/")
 	escapedBasePath := strings.TrimRight(parsed.EscapedPath(), "/")
