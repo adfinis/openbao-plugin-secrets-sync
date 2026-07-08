@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/adfinis/openbao-plugin-secrets-sync/internal/providers"
+	"github.com/adfinis/openbao-plugin-secrets-sync/internal/providers/endpointguard"
 	"github.com/adfinis/openbao-plugin-secrets-sync/internal/providers/providertest"
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/secretsmanager"
@@ -251,6 +252,14 @@ func TestValidateDestinationConfig(t *testing.T) {
 			errorClass: providers.ErrorClassValidation,
 		},
 		{
+			name: "private endpoint rejects ipv4 mapped loopback",
+			config: map[string]string{
+				ConfigKeyEndpointURL:    "https://[::ffff:127.0.0.1]:4566",
+				ConfigKeyEndpointPolicy: EndpointPolicyPrivate,
+			},
+			errorClass: providers.ErrorClassValidation,
+		},
+		{
 			name: "custom delete recovery window",
 			config: map[string]string{
 				ConfigKeyRegion:                   testRegion,
@@ -313,7 +322,7 @@ func TestValidatePrivateEndpointResolution(t *testing.T) {
 	tests := []struct {
 		name       string
 		options    awsDestinationOptions
-		resolve    endpointResolver
+		resolve    endpointguard.Resolver
 		errorClass providers.ErrorClass
 	}{
 		{
@@ -334,6 +343,17 @@ func TestValidatePrivateEndpointResolution(t *testing.T) {
 			},
 			resolve: func(context.Context, string, string) ([]netip.Addr, error) {
 				return []netip.Addr{netip.MustParseAddr("127.0.0.1")}, nil
+			},
+			errorClass: providers.ErrorClassValidation,
+		},
+		{
+			name: "private hostname rejects ipv4 mapped loopback resolution",
+			options: awsDestinationOptions{
+				endpointURL:    "https://vpce-1234567890abcdef.secretsmanager.eu-central-1.vpce.amazonaws.com",
+				endpointPolicy: EndpointPolicyPrivate,
+			},
+			resolve: func(context.Context, string, string) ([]netip.Addr, error) {
+				return []netip.Addr{netip.MustParseAddr("::ffff:127.0.0.1")}, nil
 			},
 			errorClass: providers.ErrorClassValidation,
 		},
@@ -932,7 +952,7 @@ func TestUpsertRejectsUnownedScheduledDelete(t *testing.T) {
 
 func TestOwnedByRequestRejectsRuntimeIdentityMismatch(t *testing.T) {
 	request := defaultUpsertRequest()
-	identity := ownershipIdentityFromUpsert(request)
+	identity := request.OwnershipIdentity()
 	tags := ownershipTagsFromUpsert(request)
 	if !ownedByRequest(tags, identity) {
 		t.Fatalf("ownedByRequest returned false for matching runtime identity")
@@ -1135,7 +1155,7 @@ func TestHealthClassifiesAWSFailure(t *testing.T) {
 func TestHealthClassifiesDestinationValidationFailure(t *testing.T) {
 	provider := Provider{
 		clientFactory: func(context.Context, providers.DestinationConfig) (secretsManagerClient, error) {
-			return nil, validationError("invalid destination config")
+			return nil, providerHelpers.ValidationError("invalid destination config")
 		},
 	}
 	_, err := provider.OpenDestination(context.Background(), providers.DestinationConfig{Name: testDestinationName})

@@ -6,7 +6,6 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
-	"net"
 	"net/http"
 	"net/netip"
 	"net/url"
@@ -16,6 +15,8 @@ import (
 	"time"
 
 	"github.com/adfinis/openbao-plugin-secrets-sync/internal/providers"
+	"github.com/adfinis/openbao-plugin-secrets-sync/internal/providers/endpointguard"
+	"github.com/adfinis/openbao-plugin-secrets-sync/internal/providers/providerutil"
 	"github.com/aws/aws-sdk-go-v2/aws"
 	awsconfig "github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/credentials/stscreds"
@@ -69,7 +70,6 @@ const (
 	minDeleteRecoveryWindowDays     = 7
 	maxDeleteRecoveryWindowDays     = 30
 	defaultHTTPTimeout              = 30 * time.Second
-	endpointResolutionTimeout       = 5 * time.Second
 
 	tagManaged        = "openbao-sync"
 	tagAssociationID  = "openbao-sync-association"
@@ -81,7 +81,7 @@ const (
 	tagRestoreEpoch   = "openbao-sync-restore-epoch"
 )
 
-type endpointResolver func(context.Context, string, string) ([]netip.Addr, error)
+var providerHelpers = providerutil.New(ProviderType)
 
 type secretsManagerClient interface {
 	DescribeSecret(
@@ -181,7 +181,7 @@ func (p Provider) OpenDestination(
 	}
 	client, err := p.clientFor(ctx, cfg)
 	if err != nil {
-		return nil, providerError(setupErrorClass(err))
+		return nil, providerHelpers.ProviderError(providerHelpers.SetupErrorClass(err))
 	}
 	return destinationRuntime{client: client, options: options}, nil
 }
@@ -208,9 +208,9 @@ func (r destinationRuntime) Plan(ctx context.Context, req providers.PlanRequest)
 		}, nil
 	}
 	if err != nil {
-		return blockedPlan(classifyAWSError(err)), nil
+		return providerHelpers.BlockedPlan(classifyAWSError(err)), nil
 	}
-	if !ownedByRequest(describe.Tags, ownershipIdentityFromPlan(req)) {
+	if !ownedByRequest(describe.Tags, req.OwnershipIdentity()) {
 		message := "aws-sm secret exists but is not owned by this association"
 		if describe.DeletedDate != nil {
 			message = "aws-sm secret is scheduled for deletion but is not owned by this association"
@@ -236,7 +236,7 @@ func (r destinationRuntime) Plan(ctx context.Context, req providers.PlanRequest)
 	}
 	payloadMatches, err := r.payloadMatchesRequest(ctx, describe.Tags, req.ResolvedName, req.PayloadSHA256)
 	if err != nil {
-		return blockedPlan(classifyAWSError(err)), nil
+		return providerHelpers.BlockedPlan(classifyAWSError(err)), nil
 	}
 	if payloadMatches {
 		if tagValue(describe.Tags, tagPayloadSHA256) == req.PayloadSHA256 &&
@@ -259,7 +259,7 @@ func (r destinationRuntime) Plan(ctx context.Context, req providers.PlanRequest)
 
 func (r destinationRuntime) Upsert(ctx context.Context, req providers.UpsertRequest) (*providers.SyncResult, error) {
 	if len(req.Payload) > secretValueMaxBytes {
-		return nil, providerError(providers.ErrorClassCapacity)
+		return nil, providerHelpers.ProviderError(providers.ErrorClassCapacity)
 	}
 	describe, err := r.client.DescribeSecret(ctx, &secretsmanager.DescribeSecretInput{
 		SecretId: aws.String(req.ResolvedName),
@@ -268,24 +268,24 @@ func (r destinationRuntime) Upsert(ctx context.Context, req providers.UpsertRequ
 		return createSecret(ctx, r.client, req)
 	}
 	if err != nil {
-		return nil, providerError(classifyAWSError(err))
+		return nil, providerHelpers.ProviderError(classifyAWSError(err))
 	}
-	if !ownedByRequest(describe.Tags, ownershipIdentityFromUpsert(req)) {
-		return nil, providerError(providers.ErrorClassOwnership)
+	if !ownedByRequest(describe.Tags, req.OwnershipIdentity()) {
+		return nil, providerHelpers.ProviderError(providers.ErrorClassOwnership)
 	}
 	if remoteSourceVersionNewer(describe.Tags, req.SourceVersion) {
-		return nil, providerError(providers.ErrorClassDrift)
+		return nil, providerHelpers.ProviderError(providers.ErrorClassDrift)
 	}
 	if describe.DeletedDate != nil {
 		if _, err := r.client.RestoreSecret(ctx, &secretsmanager.RestoreSecretInput{
 			SecretId: aws.String(req.ResolvedName),
 		}); err != nil {
-			return nil, providerError(classifyAWSError(err))
+			return nil, providerHelpers.ProviderError(classifyAWSError(err))
 		}
 	}
 	valueMatches, err := r.payloadMatchesRequest(ctx, describe.Tags, req.ResolvedName, req.PayloadSHA256)
 	if err != nil {
-		return nil, providerError(classifyAWSError(err))
+		return nil, providerHelpers.ProviderError(classifyAWSError(err))
 	}
 	if valueMatches {
 		if tagValue(describe.Tags, tagPayloadSHA256) != req.PayloadSHA256 ||
@@ -294,7 +294,7 @@ func (r destinationRuntime) Upsert(ctx context.Context, req providers.UpsertRequ
 				SecretId: aws.String(req.ResolvedName),
 				Tags:     ownershipTagsFromUpsert(req),
 			}); err != nil {
-				return nil, providerError(classifyAWSError(err))
+				return nil, providerHelpers.ProviderError(classifyAWSError(err))
 			}
 		}
 		return &providers.SyncResult{RemoteVersion: currentVersionID(describe)}, nil
@@ -306,13 +306,13 @@ func (r destinationRuntime) Upsert(ctx context.Context, req providers.UpsertRequ
 		ClientRequestToken: aws.String(mutationIdempotencyToken("put", req)),
 	})
 	if err != nil {
-		return nil, providerError(classifyAWSError(err))
+		return nil, providerHelpers.ProviderError(classifyAWSError(err))
 	}
 	if _, err := r.client.TagResource(ctx, &secretsmanager.TagResourceInput{
 		SecretId: aws.String(req.ResolvedName),
 		Tags:     ownershipTagsFromUpsert(req),
 	}); err != nil {
-		return nil, providerError(classifyAWSError(err))
+		return nil, providerHelpers.ProviderError(classifyAWSError(err))
 	}
 	return &providers.SyncResult{RemoteVersion: aws.ToString(result.VersionId)}, nil
 }
@@ -325,23 +325,23 @@ func (r destinationRuntime) Delete(ctx context.Context, req providers.DeleteRequ
 		return &providers.SyncResult{RemoteVersion: "missing"}, nil
 	}
 	if err != nil {
-		return nil, providerError(classifyAWSError(err))
+		return nil, providerHelpers.ProviderError(classifyAWSError(err))
 	}
-	if !ownedByRequest(describe.Tags, ownershipIdentityFromDelete(req)) {
-		return nil, providerError(providers.ErrorClassOwnership)
+	if !ownedByRequest(describe.Tags, req.OwnershipIdentity()) {
+		return nil, providerHelpers.ProviderError(providers.ErrorClassOwnership)
 	}
 	if describe.DeletedDate != nil {
 		return &providers.SyncResult{RemoteVersion: "scheduled"}, nil
 	}
 	if remoteSourceVersionNewer(describe.Tags, req.SourceVersion) {
-		return nil, providerError(providers.ErrorClassDrift)
+		return nil, providerHelpers.ProviderError(providers.ErrorClassDrift)
 	}
 	result, err := r.client.DeleteSecret(ctx, &secretsmanager.DeleteSecretInput{
 		SecretId:             aws.String(req.ResolvedName),
 		RecoveryWindowInDays: aws.Int64(int64(r.options.deleteRecoveryWindowDays)),
 	})
 	if err != nil {
-		return nil, providerError(classifyAWSError(err))
+		return nil, providerHelpers.ProviderError(classifyAWSError(err))
 	}
 	return &providers.SyncResult{RemoteVersion: aws.ToString(result.ARN)}, nil
 }
@@ -357,26 +357,26 @@ func (r destinationRuntime) ReadState(
 		return &providers.RemoteState{Exists: false}, nil
 	}
 	if err != nil {
-		return nil, providerError(classifyAWSError(err))
+		return nil, providerHelpers.ProviderError(classifyAWSError(err))
 	}
 	if describe.DeletedDate != nil {
 		return &providers.RemoteState{Exists: false}, nil
 	}
-	owned := ownedByRequest(describe.Tags, ownershipIdentityFromReadState(req))
+	owned := ownedByRequest(describe.Tags, req.OwnershipIdentity())
 	payloadSHA256 := tagValue(describe.Tags, tagPayloadSHA256)
 	verification := providers.RemoteStateVerificationMetadata
 	if owned && r.options.valueDriftDetection {
 		var readErr error
 		payloadSHA256, readErr = remotePayloadSHA256(ctx, r.client, req.ResolvedName)
 		if readErr != nil {
-			return nil, providerError(classifyAWSError(readErr))
+			return nil, providerHelpers.ProviderError(classifyAWSError(readErr))
 		}
 		verification = providers.RemoteStateVerificationValue
 	}
 	sourceVersion, _ := strconv.Atoi(tagValue(describe.Tags, tagSourceVersion))
 	return &providers.RemoteState{
 		Exists:         true,
-		OwnershipKnown: hasOwnershipIdentityFromReadState(req),
+		OwnershipKnown: req.OwnershipIdentity().Complete(),
 		Owned:          owned,
 		PayloadSHA256:  payloadSHA256,
 		SourceVersion:  sourceVersion,
@@ -424,7 +424,7 @@ func defaultClientFactory(
 	if err != nil {
 		return nil, err
 	}
-	if err := validateEndpointResolution(ctx, options, net.DefaultResolver.LookupNetIP); err != nil {
+	if err := validateEndpointResolution(ctx, options, nil); err != nil {
 		return nil, err
 	}
 	loadOptions := []func(*awsconfig.LoadOptions) error{}
@@ -502,21 +502,25 @@ type awsDestinationOptions struct {
 
 func awsDestinationOptionsFromConfig(cfg providers.DestinationConfig) (awsDestinationOptions, error) {
 	options := awsDestinationOptions{
-		region:                   configValue(cfg, ConfigKeyRegion),
-		endpointURL:              configValue(cfg, ConfigKeyEndpointURL),
-		endpointPolicy:           configValue(cfg, ConfigKeyEndpointPolicy),
+		region:                   providerHelpers.ConfigValue(cfg, ConfigKeyRegion),
+		endpointURL:              providerHelpers.ConfigValue(cfg, ConfigKeyEndpointURL),
+		endpointPolicy:           providerHelpers.ConfigValue(cfg, ConfigKeyEndpointPolicy),
 		authMode:                 normalizedAuthMode(cfg),
-		roleARN:                  configValue(cfg, ConfigKeyRoleARN),
-		externalID:               configValue(cfg, ConfigKeyExternalID),
-		sessionName:              configValue(cfg, ConfigKeySessionName),
-		webIdentityTokenFile:     configValue(cfg, ConfigKeyWebIdentityTokenFile),
+		roleARN:                  providerHelpers.ConfigValue(cfg, ConfigKeyRoleARN),
+		externalID:               providerHelpers.ConfigValue(cfg, ConfigKeyExternalID),
+		sessionName:              providerHelpers.ConfigValue(cfg, ConfigKeySessionName),
+		webIdentityTokenFile:     providerHelpers.ConfigValue(cfg, ConfigKeyWebIdentityTokenFile),
 		deleteRecoveryWindowDays: defaultDeleteRecoveryWindowDays,
 	}
 	var err error
 	if options.deleteRecoveryWindowDays, err = deleteRecoveryWindowDaysFromConfig(cfg); err != nil {
 		return awsDestinationOptions{}, err
 	}
-	if options.valueDriftDetection, err = boolConfigValue(cfg, ConfigKeyValueDriftDetection, false); err != nil {
+	if options.valueDriftDetection, err = providerHelpers.BoolConfigValue(
+		cfg,
+		ConfigKeyValueDriftDetection,
+		false,
+	); err != nil {
 		return awsDestinationOptions{}, err
 	}
 	if err := validateEndpointOptions(options); err != nil {
@@ -531,13 +535,13 @@ func awsDestinationOptionsFromConfig(cfg providers.DestinationConfig) (awsDestin
 func validateEndpointOptions(options awsDestinationOptions) error {
 	if options.endpointURL != "" {
 		if options.endpointPolicy == "" {
-			return validationError("aws-sm endpoint_url requires endpoint_policy")
+			return providerHelpers.ValidationError("aws-sm endpoint_url requires endpoint_policy")
 		}
 		if err := validateEndpointURL(options.endpointURL, options.endpointPolicy); err != nil {
 			return err
 		}
 	} else if options.endpointPolicy != "" {
-		return validationError("aws-sm endpoint_policy requires endpoint_url")
+		return providerHelpers.ValidationError("aws-sm endpoint_policy requires endpoint_url")
 	}
 	return nil
 }
@@ -551,7 +555,7 @@ func validateAuthOptions(options awsDestinationOptions) error {
 	case AuthModeWebIdentity:
 		return validateWebIdentityAuthOptions(options)
 	default:
-		return validationError(
+		return providerHelpers.ValidationError(
 			"aws-sm auth_mode must be default, assume_role, or web_identity",
 		)
 	}
@@ -562,97 +566,78 @@ func validateDefaultAuthOptions(options awsDestinationOptions) error {
 		options.externalID != "" ||
 		options.sessionName != "" ||
 		options.webIdentityTokenFile != "" {
-		return validationError("aws-sm auth fields require auth_mode assume_role or web_identity")
+		return providerHelpers.ValidationError("aws-sm auth fields require auth_mode assume_role or web_identity")
 	}
 	return nil
 }
 
 func validateAssumeRoleAuthOptions(options awsDestinationOptions) error {
 	if options.roleARN == "" {
-		return validationError("aws-sm auth_mode assume_role requires role_arn")
+		return providerHelpers.ValidationError("aws-sm auth_mode assume_role requires role_arn")
 	}
 	if !isLikelyRoleARN(options.roleARN) {
-		return validationError("aws-sm role_arn must be an IAM role ARN")
+		return providerHelpers.ValidationError("aws-sm role_arn must be an IAM role ARN")
 	}
 	if options.webIdentityTokenFile != "" {
-		return validationError("aws-sm web_identity_token_file requires auth_mode web_identity")
+		return providerHelpers.ValidationError("aws-sm web_identity_token_file requires auth_mode web_identity")
 	}
 	return nil
 }
 
 func validateWebIdentityAuthOptions(options awsDestinationOptions) error {
 	if options.roleARN == "" {
-		return validationError("aws-sm auth_mode web_identity requires role_arn")
+		return providerHelpers.ValidationError("aws-sm auth_mode web_identity requires role_arn")
 	}
 	if !isLikelyRoleARN(options.roleARN) {
-		return validationError("aws-sm role_arn must be an IAM role ARN")
+		return providerHelpers.ValidationError("aws-sm role_arn must be an IAM role ARN")
 	}
 	if options.webIdentityTokenFile == "" {
-		return validationError("aws-sm auth_mode web_identity requires web_identity_token_file")
+		return providerHelpers.ValidationError("aws-sm auth_mode web_identity requires web_identity_token_file")
 	}
 	if !filepath.IsAbs(options.webIdentityTokenFile) {
-		return validationError("aws-sm web_identity_token_file must be an absolute path")
+		return providerHelpers.ValidationError("aws-sm web_identity_token_file must be an absolute path")
 	}
 	if options.externalID != "" {
-		return validationError("aws-sm external_id is only supported with auth_mode assume_role")
+		return providerHelpers.ValidationError("aws-sm external_id is only supported with auth_mode assume_role")
 	}
 	return nil
 }
 
 func deleteRecoveryWindowDaysFromConfig(cfg providers.DestinationConfig) (int, error) {
-	value := configValue(cfg, ConfigKeyDeleteRecoveryWindowDays)
+	value := providerHelpers.ConfigValue(cfg, ConfigKeyDeleteRecoveryWindowDays)
 	if value == "" {
 		return defaultDeleteRecoveryWindowDays, nil
 	}
 	days, err := strconv.Atoi(value)
 	if err != nil {
-		return 0, validationError("aws-sm delete_recovery_window_days must be an integer")
+		return 0, providerHelpers.ValidationError("aws-sm delete_recovery_window_days must be an integer")
 	}
 	if days < minDeleteRecoveryWindowDays || days > maxDeleteRecoveryWindowDays {
-		return 0, validationError("aws-sm delete_recovery_window_days must be between 7 and 30")
+		return 0, providerHelpers.ValidationError("aws-sm delete_recovery_window_days must be between 7 and 30")
 	}
 	return days, nil
 }
 
-func boolConfigValue(cfg providers.DestinationConfig, key string, fallback bool) (bool, error) {
-	value := configValue(cfg, key)
-	if value == "" {
-		return fallback, nil
-	}
-	parsed, err := strconv.ParseBool(value)
-	if err != nil {
-		return false, validationError("aws-sm " + key + " must be true or false")
-	}
-	return parsed, nil
-}
-
 func normalizedAuthMode(cfg providers.DestinationConfig) string {
-	authMode := configValue(cfg, ConfigKeyAuthMode)
+	authMode := providerHelpers.ConfigValue(cfg, ConfigKeyAuthMode)
 	if authMode == "" {
 		return AuthModeDefault
 	}
 	return authMode
 }
 
-func configValue(cfg providers.DestinationConfig, key string) string {
-	if cfg.Config == nil {
-		return ""
-	}
-	return strings.TrimSpace(cfg.Config[key])
-}
-
 func validateEndpointURL(rawEndpoint string, endpointPolicy string) error {
 	parsedEndpoint, err := url.Parse(rawEndpoint)
 	if err != nil {
-		return validationError("aws-sm endpoint_url must be a valid URL")
+		return providerHelpers.ValidationError("aws-sm endpoint_url must be a valid URL")
 	}
 	if parsedEndpoint.Host == "" || parsedEndpoint.User != nil ||
 		parsedEndpoint.RawQuery != "" || parsedEndpoint.Fragment != "" {
-		return validationError("aws-sm endpoint_url must include a host and no userinfo, query, or fragment")
+		return providerHelpers.ValidationError("aws-sm endpoint_url must include a host and no userinfo, query, or fragment")
 	}
-	host := normalizeEndpointHost(parsedEndpoint.Hostname())
+	host := endpointguard.NormalizeHost(parsedEndpoint.Hostname())
 	if host == "" {
-		return validationError("aws-sm endpoint_url must include a host")
+		return providerHelpers.ValidationError("aws-sm endpoint_url must include a host")
 	}
 	switch endpointPolicy {
 	case EndpointPolicyLocal:
@@ -660,40 +645,35 @@ func validateEndpointURL(rawEndpoint string, endpointPolicy string) error {
 	case EndpointPolicyPrivate:
 		return validatePrivateEndpointURL(parsedEndpoint.Scheme, host)
 	default:
-		return validationError("aws-sm endpoint_policy must be local or private")
+		return providerHelpers.ValidationError("aws-sm endpoint_policy must be local or private")
 	}
 }
 
 func validateEndpointResolution(
 	ctx context.Context,
 	options awsDestinationOptions,
-	resolver endpointResolver,
+	resolver endpointguard.Resolver,
 ) error {
 	if options.endpointURL == "" || options.endpointPolicy != EndpointPolicyPrivate {
 		return nil
 	}
-	if resolver == nil {
-		resolver = net.DefaultResolver.LookupNetIP
-	}
 	parsedEndpoint, err := url.Parse(options.endpointURL)
 	if err != nil {
-		return validationError("aws-sm endpoint_url must be a valid URL")
+		return providerHelpers.ValidationError("aws-sm endpoint_url must be a valid URL")
 	}
-	host := normalizeEndpointHost(parsedEndpoint.Hostname())
+	host := endpointguard.NormalizeHost(parsedEndpoint.Hostname())
 	if host == "" {
-		return validationError("aws-sm endpoint_url must include a host")
+		return providerHelpers.ValidationError("aws-sm endpoint_url must include a host")
 	}
-	if addr, ok := parseEndpointAddr(host); ok {
+	if addr, ok := endpointguard.ParseAddr(host); ok {
 		if isUnsafeEndpointAddr(addr) {
-			return validationError(
+			return providerHelpers.ValidationError(
 				"aws-sm private endpoint_url DNS must not resolve to loopback, link-local, multicast, or unspecified addresses",
 			)
 		}
 		return nil
 	}
-	resolveCtx, cancel := context.WithTimeout(ctx, endpointResolutionTimeout)
-	defer cancel()
-	addrs, err := resolver(resolveCtx, "ip", host)
+	addrs, err := endpointguard.LookupNetIP(ctx, host, resolver)
 	if err != nil {
 		return &providers.Error{
 			Class:   providers.ErrorClassUnavailable,
@@ -708,7 +688,7 @@ func validateEndpointResolution(
 	}
 	for _, addr := range addrs {
 		if isUnsafeEndpointAddr(addr) {
-			return validationError(
+			return providerHelpers.ValidationError(
 				"aws-sm private endpoint_url DNS must not resolve to loopback, link-local, multicast, or unspecified addresses",
 			)
 		}
@@ -718,50 +698,38 @@ func validateEndpointResolution(
 
 func validateLocalEndpointURL(scheme string, host string) error {
 	if scheme != "https" && scheme != "http" {
-		return validationError("aws-sm local endpoint_url must use http or https")
+		return providerHelpers.ValidationError("aws-sm local endpoint_url must use http or https")
 	}
 	if !isLocalEndpointHost(host) {
-		return validationError("aws-sm local endpoint_url host must be localhost, loopback, or localstack")
+		return providerHelpers.ValidationError("aws-sm local endpoint_url host must be localhost, loopback, or localstack")
 	}
 	return nil
 }
 
 func validatePrivateEndpointURL(scheme string, host string) error {
 	if scheme != "https" {
-		return validationError("aws-sm private endpoint_url must use https")
+		return providerHelpers.ValidationError("aws-sm private endpoint_url must use https")
 	}
 	if isLocalEndpointHost(host) {
-		return validationError("aws-sm private endpoint_url must not target local development hosts")
+		return providerHelpers.ValidationError("aws-sm private endpoint_url must not target local development hosts")
 	}
-	if addr, ok := parseEndpointAddr(host); ok && isUnsafeEndpointAddr(addr) {
-		return validationError(
+	if addr, ok := endpointguard.ParseAddr(host); ok && isUnsafeEndpointAddr(addr) {
+		return providerHelpers.ValidationError(
 			"aws-sm private endpoint_url must not target loopback, link-local, multicast, or unspecified addresses",
 		)
 	}
 	return nil
 }
 
-func normalizeEndpointHost(host string) string {
-	return strings.TrimSuffix(strings.ToLower(strings.TrimSpace(host)), ".")
-}
-
 func isLocalEndpointHost(host string) bool {
-	if host == "localhost" || host == "localstack" || strings.HasSuffix(host, ".localhost") {
+	if endpointguard.NormalizeHost(host) == "localstack" {
 		return true
 	}
-	addr, ok := parseEndpointAddr(host)
-	return ok && addr.IsLoopback()
-}
-
-func parseEndpointAddr(host string) (netip.Addr, bool) {
-	addr, err := netip.ParseAddr(host)
-	if err != nil {
-		return netip.Addr{}, false
-	}
-	return addr, true
+	return endpointguard.IsLocalHost(host)
 }
 
 func isUnsafeEndpointAddr(addr netip.Addr) bool {
+	addr = addr.Unmap()
 	return addr.IsLoopback() ||
 		addr.IsLinkLocalUnicast() ||
 		addr.IsMulticast() ||
@@ -779,18 +747,6 @@ func isLikelyRoleARN(roleARN string) bool {
 		strings.HasPrefix(parts[5], "role/")
 }
 
-func validationError(message string) error {
-	return &providers.Error{Class: providers.ErrorClassValidation, Message: message}
-}
-
-func blockedPlan(errorClass providers.ErrorClass) *providers.PlanResult {
-	return &providers.PlanResult{
-		Action:     providers.PlanActionBlocked,
-		ErrorClass: errorClass,
-		Message:    "aws-sm provider plan failed",
-	}
-}
-
 func createSecret(
 	ctx context.Context,
 	client secretsManagerClient,
@@ -804,7 +760,7 @@ func createSecret(
 		Tags:               ownershipTagsFromUpsert(req),
 	})
 	if err != nil {
-		return nil, providerError(classifyAWSError(err))
+		return nil, providerHelpers.ProviderError(classifyAWSError(err))
 	}
 	return &providers.SyncResult{RemoteVersion: aws.ToString(result.VersionId)}, nil
 }
@@ -838,58 +794,6 @@ func payloadSHA256(payload []byte) string {
 	return "sha256:" + hex.EncodeToString(sum[:])
 }
 
-type ownershipIdentity struct {
-	AssociationID    string
-	SourcePath       string
-	ObjectID         string
-	PluginInstanceID string
-	RestoreEpoch     string
-}
-
-func ownershipIdentityFromPlan(req providers.PlanRequest) ownershipIdentity {
-	return ownershipIdentity{
-		AssociationID:    req.AssociationID,
-		SourcePath:       req.SourcePath,
-		ObjectID:         req.ObjectID,
-		PluginInstanceID: req.Runtime.PluginInstanceID,
-		RestoreEpoch:     req.Runtime.RestoreEpoch,
-	}
-}
-
-func ownershipIdentityFromUpsert(req providers.UpsertRequest) ownershipIdentity {
-	return ownershipIdentity{
-		AssociationID:    req.AssociationID,
-		SourcePath:       req.SourcePath,
-		ObjectID:         req.ObjectID,
-		PluginInstanceID: req.Runtime.PluginInstanceID,
-		RestoreEpoch:     req.Runtime.RestoreEpoch,
-	}
-}
-
-func ownershipIdentityFromDelete(req providers.DeleteRequest) ownershipIdentity {
-	return ownershipIdentity{
-		AssociationID:    req.AssociationID,
-		SourcePath:       req.SourcePath,
-		ObjectID:         req.ObjectID,
-		PluginInstanceID: req.Runtime.PluginInstanceID,
-		RestoreEpoch:     req.Runtime.RestoreEpoch,
-	}
-}
-
-func ownershipIdentityFromReadState(req providers.ReadStateRequest) ownershipIdentity {
-	return ownershipIdentity{
-		AssociationID:    req.AssociationID,
-		SourcePath:       req.SourcePath,
-		ObjectID:         req.ObjectID,
-		PluginInstanceID: req.Runtime.PluginInstanceID,
-		RestoreEpoch:     req.Runtime.RestoreEpoch,
-	}
-}
-
-func hasOwnershipIdentityFromReadState(req providers.ReadStateRequest) bool {
-	return req.AssociationID != "" && req.SourcePath != "" && req.ObjectID != ""
-}
-
 func ownershipTagsFromUpsert(req providers.UpsertRequest) []smtypes.Tag {
 	tags := []smtypes.Tag{
 		tag(tagManaged, "true"),
@@ -908,7 +812,7 @@ func ownershipTagsFromUpsert(req providers.UpsertRequest) []smtypes.Tag {
 	return tags
 }
 
-func ownedByRequest(tags []smtypes.Tag, identity ownershipIdentity) bool {
+func ownedByRequest(tags []smtypes.Tag, identity providers.RequestIdentity) bool {
 	if tagValue(tags, tagManaged) != "true" {
 		return false
 	}
@@ -996,18 +900,6 @@ func mutationIdempotencyToken(operation string, req providers.UpsertRequest) str
 func isResourceNotFound(err error) bool {
 	var apiError smithy.APIError
 	return errors.As(err, &apiError) && apiError.ErrorCode() == "ResourceNotFoundException"
-}
-
-func providerError(errorClass providers.ErrorClass) error {
-	return &providers.Error{Class: errorClass, Message: "aws-sm request failed"}
-}
-
-func setupErrorClass(err error) providers.ErrorClass {
-	var providerError *providers.Error
-	if errors.As(err, &providerError) && providerError.Class != "" {
-		return providerError.Class
-	}
-	return providers.ErrorClassInternal
 }
 
 func classifyAWSError(err error) providers.ErrorClass {

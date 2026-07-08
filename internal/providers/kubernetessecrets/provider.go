@@ -7,7 +7,6 @@ import (
 	"crypto/x509"
 	"encoding/hex"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"net/url"
 	"sort"
@@ -17,6 +16,7 @@ import (
 	payloadpkg "github.com/adfinis/openbao-plugin-secrets-sync/internal/payload"
 	"github.com/adfinis/openbao-plugin-secrets-sync/internal/providers"
 	"github.com/adfinis/openbao-plugin-secrets-sync/internal/providers/endpointguard"
+	"github.com/adfinis/openbao-plugin-secrets-sync/internal/providers/providerutil"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -73,6 +73,8 @@ const (
 	annotationRestoreEpoch   = "openbao.adfinis.com/restore-epoch"
 )
 
+var providerHelpers = providerutil.New(ProviderType)
+
 type clientFactory func(context.Context, providers.DestinationConfig) (kubernetes.Interface, error)
 
 // Provider is the Kubernetes Secret provider.
@@ -124,7 +126,7 @@ func (p Provider) OpenDestination(
 	}
 	client, err := p.clientFor(ctx, cfg)
 	if err != nil {
-		return nil, providerError(setupErrorClass(err))
+		return nil, providerHelpers.ProviderError(providerHelpers.SetupErrorClass(err))
 	}
 	return destinationRuntime{client: client, options: options}, nil
 }
@@ -143,7 +145,7 @@ func (r destinationRuntime) Health(ctx context.Context) (*providers.HealthResult
 func (r destinationRuntime) Plan(ctx context.Context, req providers.PlanRequest) (*providers.PlanResult, error) {
 	secretClient := r.secretClient()
 	if err := validateSecretName(req.ResolvedName); err != nil {
-		return blockedPlan(providers.ErrorClassValidation), nil
+		return providerHelpers.BlockedPlan(providers.ErrorClassValidation), nil
 	}
 	if err := validateDataMapKeys(req.DataMapKeys); err != nil {
 		return &providers.PlanResult{
@@ -157,9 +159,9 @@ func (r destinationRuntime) Plan(ctx context.Context, req providers.PlanRequest)
 		return &providers.PlanResult{Action: providers.PlanActionCreate}, nil
 	}
 	if err != nil {
-		return blockedPlan(classifyKubernetesError(err)), nil
+		return providerHelpers.BlockedPlan(classifyKubernetesError(err)), nil
 	}
-	if !ownedByRequest(secret, ownershipIdentityFromPlan(req)) {
+	if !ownedByRequest(secret, req.OwnershipIdentity()) {
 		return &providers.PlanResult{
 			Action:     providers.PlanActionConflict,
 			ErrorClass: providers.ErrorClassCollision,
@@ -210,7 +212,7 @@ func (r destinationRuntime) Upsert(ctx context.Context, req providers.UpsertRequ
 		return nil, err
 	}
 	if len(req.Payload) > secretMaxBytes {
-		return nil, providerError(providers.ErrorClassCapacity)
+		return nil, providerHelpers.ProviderError(providers.ErrorClassCapacity)
 	}
 	if len(req.DataMap) > 0 {
 		return r.upsertDataMap(ctx, req)
@@ -220,27 +222,27 @@ func (r destinationRuntime) Upsert(ctx context.Context, req providers.UpsertRequ
 		return createSecret(ctx, secretClient, r.options.namespace, req)
 	}
 	if err != nil {
-		return nil, providerError(classifyKubernetesError(err))
+		return nil, providerHelpers.ProviderError(classifyKubernetesError(err))
 	}
-	if !ownedByRequest(secret, ownershipIdentityFromUpsert(req)) {
-		return nil, providerError(providers.ErrorClassOwnership)
+	if !ownedByRequest(secret, req.OwnershipIdentity()) {
+		return nil, providerHelpers.ProviderError(providers.ErrorClassOwnership)
 	}
 	if remoteSourceVersionNewer(secret.Annotations, req.SourceVersion) {
-		return nil, providerError(providers.ErrorClassDrift)
+		return nil, providerHelpers.ProviderError(providers.ErrorClassDrift)
 	}
 	if payloadSHA256ForMode(secret, false) == req.PayloadSHA256 {
 		return &providers.SyncResult{RemoteVersion: secret.ResourceVersion}, nil
 	}
 	if isImmutable(secret) {
-		return nil, providerError(providers.ErrorClassValidation)
+		return nil, providerHelpers.ProviderError(providers.ErrorClassValidation)
 	}
 	updated := secret.DeepCopy()
 	updated.Type = corev1.SecretTypeOpaque
 	updated.Data = map[string][]byte{dataKeyPayload: req.Payload}
-	applyOwnershipMetadata(updated, ownershipIdentityFromUpsert(req), req.SourceVersion, req.PayloadSHA256, req.Format)
+	applyOwnershipMetadata(updated, req.OwnershipIdentity(), req.SourceVersion, req.PayloadSHA256, req.Format)
 	result, err := secretClient.Update(ctx, updated, metav1.UpdateOptions{})
 	if err != nil {
-		return nil, providerError(classifyKubernetesError(err))
+		return nil, providerHelpers.ProviderError(classifyKubernetesError(err))
 	}
 	return &providers.SyncResult{RemoteVersion: result.ResourceVersion}, nil
 }
@@ -255,19 +257,19 @@ func (r destinationRuntime) Delete(ctx context.Context, req providers.DeleteRequ
 		return &providers.SyncResult{RemoteVersion: "missing"}, nil
 	}
 	if err != nil {
-		return nil, providerError(classifyKubernetesError(err))
+		return nil, providerHelpers.ProviderError(classifyKubernetesError(err))
 	}
-	if !ownedByRequest(secret, ownershipIdentityFromDelete(req)) {
-		return nil, providerError(providers.ErrorClassOwnership)
+	if !ownedByRequest(secret, req.OwnershipIdentity()) {
+		return nil, providerHelpers.ProviderError(providers.ErrorClassOwnership)
 	}
 	if remoteSourceVersionNewer(secret.Annotations, req.SourceVersion) {
-		return nil, providerError(providers.ErrorClassDrift)
+		return nil, providerHelpers.ProviderError(providers.ErrorClassDrift)
 	}
 	if req.DataMap {
 		return r.deleteDataMap(ctx, secret, req)
 	}
 	if err := secretClient.Delete(ctx, req.ResolvedName, metav1.DeleteOptions{}); err != nil {
-		return nil, providerError(classifyKubernetesError(err))
+		return nil, providerHelpers.ProviderError(classifyKubernetesError(err))
 	}
 	return &providers.SyncResult{RemoteVersion: secret.ResourceVersion}, nil
 }
@@ -285,13 +287,13 @@ func (r destinationRuntime) ReadState(
 		return &providers.RemoteState{Exists: false}, nil
 	}
 	if err != nil {
-		return nil, providerError(classifyKubernetesError(err))
+		return nil, providerHelpers.ProviderError(classifyKubernetesError(err))
 	}
 	sourceVersion, _ := strconv.Atoi(annotationValue(secret.Annotations, annotationSourceVersion))
 	return &providers.RemoteState{
 		Exists:         true,
-		OwnershipKnown: hasOwnershipIdentityFromReadState(req),
-		Owned:          ownedByRequest(secret, ownershipIdentityFromReadState(req)),
+		OwnershipKnown: req.OwnershipIdentity().Complete(),
+		Owned:          ownedByRequest(secret, req.OwnershipIdentity()),
 		PayloadSHA256:  payloadSHA256ForMode(secret, req.DataMap),
 		SourceVersion:  sourceVersion,
 		RemoteVersion:  secret.ResourceVersion,
@@ -351,7 +353,7 @@ func defaultClientFactoryWithResolver(
 		}
 		restConfig = restConfigForToken(options)
 	default:
-		err = validationError("k8s auth_mode must be in_cluster, kubeconfig, or token")
+		err = providerHelpers.ValidationError("k8s auth_mode must be in_cluster, kubeconfig, or token")
 	}
 	if err != nil {
 		return nil, err
@@ -376,22 +378,26 @@ func kubernetesDestinationOptionsFromConfig(
 	cfg providers.DestinationConfig,
 ) (kubernetesDestinationOptions, error) {
 	options := kubernetesDestinationOptions{
-		namespace:       configValue(cfg, ConfigKeyNamespace),
+		namespace:       providerHelpers.ConfigValue(cfg, ConfigKeyNamespace),
 		authMode:        normalizedAuthMode(cfg),
-		kubeconfigPath:  configValue(cfg, ConfigKeyKubeconfigPath),
-		kubeContext:     configValue(cfg, ConfigKeyKubeContext),
-		apiServer:       configValue(cfg, ConfigKeyAPIServer),
-		allowPrivateSet: configValue(cfg, ConfigKeyAllowPrivateAPIServer) != "",
-		token:           configValue(cfg, ConfigKeyToken),
-		caCertPEM:       configValue(cfg, ConfigKeyCACertPEM),
-		tlsServerName:   configValue(cfg, ConfigKeyTLSServerName),
+		kubeconfigPath:  providerHelpers.ConfigValue(cfg, ConfigKeyKubeconfigPath),
+		kubeContext:     providerHelpers.ConfigValue(cfg, ConfigKeyKubeContext),
+		apiServer:       providerHelpers.ConfigValue(cfg, ConfigKeyAPIServer),
+		allowPrivateSet: providerHelpers.ConfigValue(cfg, ConfigKeyAllowPrivateAPIServer) != "",
+		token:           providerHelpers.ConfigValue(cfg, ConfigKeyToken),
+		caCertPEM:       providerHelpers.ConfigValue(cfg, ConfigKeyCACertPEM),
+		tlsServerName:   providerHelpers.ConfigValue(cfg, ConfigKeyTLSServerName),
 	}
 	var err error
-	if options.allowPrivateAPI, err = boolConfigValue(cfg, ConfigKeyAllowPrivateAPIServer, false); err != nil {
+	if options.allowPrivateAPI, err = providerHelpers.BoolConfigValue(
+		cfg,
+		ConfigKeyAllowPrivateAPIServer,
+		false,
+	); err != nil {
 		return kubernetesDestinationOptions{}, err
 	}
 	if cfg.Name == "" {
-		return kubernetesDestinationOptions{}, validationError("k8s destination name must not be empty")
+		return kubernetesDestinationOptions{}, providerHelpers.ValidationError("k8s destination name must not be empty")
 	}
 	if err := validateNamespace(options.namespace); err != nil {
 		return kubernetesDestinationOptions{}, err
@@ -411,52 +417,53 @@ func (options kubernetesDestinationOptions) validateAuthMode() error {
 	case AuthModeToken:
 		return options.validateTokenAuth()
 	default:
-		return validationError("k8s auth_mode must be in_cluster, kubeconfig, or token")
+		return providerHelpers.ValidationError("k8s auth_mode must be in_cluster, kubeconfig, or token")
 	}
 }
 
 func (options kubernetesDestinationOptions) validateInClusterAuth() error {
 	if options.kubeconfigPath != "" || options.kubeContext != "" || options.hasTokenAuthConfig() {
-		return validationError("k8s kubeconfig or token fields require matching auth_mode")
+		return providerHelpers.ValidationError("k8s kubeconfig or token fields require matching auth_mode")
 	}
 	return nil
 }
 
 func (options kubernetesDestinationOptions) validateKubeconfigAuth() error {
 	if options.kubeconfigPath == "" {
-		return validationError("k8s auth_mode kubeconfig requires kubeconfig_path")
+		return providerHelpers.ValidationError("k8s auth_mode kubeconfig requires kubeconfig_path")
 	}
 	if options.hasTokenAuthConfig() {
-		return validationError("k8s token fields require auth_mode token")
+		return providerHelpers.ValidationError("k8s token fields require auth_mode token")
 	}
 	return nil
 }
 
 func (options kubernetesDestinationOptions) validateTokenAuth() error {
 	if options.kubeconfigPath != "" || options.kubeContext != "" {
-		return validationError("k8s kubeconfig fields require auth_mode kubeconfig")
+		return providerHelpers.ValidationError("k8s kubeconfig fields require auth_mode kubeconfig")
 	}
 	if options.apiServer == "" {
-		return validationError("k8s auth_mode token requires api_server")
+		return providerHelpers.ValidationError("k8s auth_mode token requires api_server")
 	}
 	if err := validateAPIServer(options.apiServer, options.allowPrivateAPI); err != nil {
 		return err
 	}
 	if options.token == "" {
-		return validationError("k8s auth_mode token requires token")
+		return providerHelpers.ValidationError("k8s auth_mode token requires token")
 	}
 	return validateCACertPEM(options.caCertPEM)
 }
 
 func normalizedAuthMode(cfg providers.DestinationConfig) string {
-	authMode := configValue(cfg, ConfigKeyAuthMode)
+	authMode := providerHelpers.ConfigValue(cfg, ConfigKeyAuthMode)
 	if authMode != "" {
 		return authMode
 	}
-	if configValue(cfg, ConfigKeyAPIServer) != "" || configValue(cfg, ConfigKeyToken) != "" {
+	if providerHelpers.ConfigValue(cfg, ConfigKeyAPIServer) != "" ||
+		providerHelpers.ConfigValue(cfg, ConfigKeyToken) != "" {
 		return AuthModeToken
 	}
-	if configValue(cfg, ConfigKeyKubeconfigPath) != "" {
+	if providerHelpers.ConfigValue(cfg, ConfigKeyKubeconfigPath) != "" {
 		return AuthModeKubeconfig
 	}
 	return AuthModeInCluster
@@ -481,31 +488,12 @@ func restConfigForToken(options kubernetesDestinationOptions) *rest.Config {
 	}
 }
 
-func configValue(cfg providers.DestinationConfig, key string) string {
-	if cfg.Config == nil {
-		return ""
-	}
-	return strings.TrimSpace(cfg.Config[key])
-}
-
-func boolConfigValue(cfg providers.DestinationConfig, key string, fallback bool) (bool, error) {
-	value := configValue(cfg, key)
-	if value == "" {
-		return fallback, nil
-	}
-	parsed, err := strconv.ParseBool(value)
-	if err != nil {
-		return false, validationError(fmt.Sprintf("k8s %s must be true or false", key))
-	}
-	return parsed, nil
-}
-
 func validateNamespace(namespace string) error {
 	if namespace == "" {
-		return validationError("k8s namespace must not be empty")
+		return providerHelpers.ValidationError("k8s namespace must not be empty")
 	}
 	if errs := validation.IsDNS1123Label(namespace); len(errs) > 0 {
-		return validationError(fmt.Sprintf("k8s namespace is invalid: %s", strings.Join(errs, "; ")))
+		return providerHelpers.ValidationError(fmt.Sprintf("k8s namespace is invalid: %s", strings.Join(errs, "; ")))
 	}
 	return nil
 }
@@ -513,17 +501,17 @@ func validateNamespace(namespace string) error {
 func validateAPIServer(apiServer string, allowPrivateAPI bool) error {
 	parsed, err := url.Parse(apiServer)
 	if err != nil || parsed.Scheme == "" || parsed.Host == "" {
-		return validationError("k8s api_server must be an absolute URL")
+		return providerHelpers.ValidationError("k8s api_server must be an absolute URL")
 	}
 	if parsed.Scheme != "https" {
-		return validationError("k8s api_server must use https")
+		return providerHelpers.ValidationError("k8s api_server must use https")
 	}
 	host := endpointguard.NormalizeHost(parsed.Hostname())
 	if host == "" {
-		return validationError("k8s api_server must include a host")
+		return providerHelpers.ValidationError("k8s api_server must include a host")
 	}
 	if !allowPrivateAPI && endpointguard.IsRestrictedHost(host) {
-		return validationError(
+		return providerHelpers.ValidationError(
 			"k8s api_server requires allow_private_api_server=true for localhost, private, link-local, " +
 				"multicast, or unspecified hosts",
 		)
@@ -541,11 +529,11 @@ func validateAPIServerResolution(
 	}
 	parsed, err := url.Parse(options.apiServer)
 	if err != nil {
-		return validationError("k8s api_server must be an absolute URL")
+		return providerHelpers.ValidationError("k8s api_server must be an absolute URL")
 	}
 	host := endpointguard.NormalizeHost(parsed.Hostname())
 	if host == "" {
-		return validationError("k8s api_server must include a host")
+		return providerHelpers.ValidationError("k8s api_server must include a host")
 	}
 	if _, ok := endpointguard.ParseAddr(host); ok {
 		return nil
@@ -565,7 +553,7 @@ func validateAPIServerResolution(
 	}
 	for _, addr := range addrs {
 		if endpointguard.IsRestrictedAddr(addr) {
-			return validationError(
+			return providerHelpers.ValidationError(
 				"k8s api_server DNS must not resolve to localhost, private, link-local, multicast, or unspecified addresses",
 			)
 		}
@@ -579,17 +567,20 @@ func validateCACertPEM(caCertPEM string) error {
 	}
 	pool := x509.NewCertPool()
 	if !pool.AppendCertsFromPEM([]byte(caCertPEM)) {
-		return validationError("k8s ca_cert_pem must contain at least one PEM certificate")
+		return providerHelpers.ValidationError("k8s ca_cert_pem must contain at least one PEM certificate")
 	}
 	return nil
 }
 
 func validateSecretName(name string) error {
 	if name == "" {
-		return validationError("k8s resolved secret name must not be empty")
+		return providerHelpers.ValidationError("k8s resolved secret name must not be empty")
 	}
 	if errs := validation.IsDNS1123Subdomain(name); len(errs) > 0 {
-		return validationError(fmt.Sprintf("k8s resolved secret name is invalid: %s", strings.Join(errs, "; ")))
+		return providerHelpers.ValidationError(fmt.Sprintf(
+			"k8s resolved secret name is invalid: %s",
+			strings.Join(errs, "; "),
+		))
 	}
 	return nil
 }
@@ -608,10 +599,10 @@ func createSecret(
 		Type: corev1.SecretTypeOpaque,
 		Data: map[string][]byte{dataKeyPayload: req.Payload},
 	}
-	applyOwnershipMetadata(secret, ownershipIdentityFromUpsert(req), req.SourceVersion, req.PayloadSHA256, req.Format)
+	applyOwnershipMetadata(secret, req.OwnershipIdentity(), req.SourceVersion, req.PayloadSHA256, req.Format)
 	result, err := secretClient.Create(ctx, secret, metav1.CreateOptions{})
 	if err != nil {
-		return nil, providerError(classifyKubernetesError(err))
+		return nil, providerHelpers.ProviderError(classifyKubernetesError(err))
 	}
 	return &providers.SyncResult{RemoteVersion: result.ResourceVersion}, nil
 }
@@ -629,36 +620,36 @@ func (r destinationRuntime) upsertDataMap(
 		return createDataMapSecret(ctx, secretClient, r.options.namespace, req)
 	}
 	if err != nil {
-		return nil, providerError(classifyKubernetesError(err))
+		return nil, providerHelpers.ProviderError(classifyKubernetesError(err))
 	}
-	if !ownedByRequest(secret, ownershipIdentityFromUpsert(req)) {
-		return nil, providerError(providers.ErrorClassOwnership)
+	if !ownedByRequest(secret, req.OwnershipIdentity()) {
+		return nil, providerHelpers.ProviderError(providers.ErrorClassOwnership)
 	}
 	if remoteSourceVersionNewer(secret.Annotations, req.SourceVersion) {
-		return nil, providerError(providers.ErrorClassDrift)
+		return nil, providerHelpers.ProviderError(providers.ErrorClassDrift)
 	}
 	if payloadSHA256ForMode(secret, true) == req.PayloadSHA256 {
 		return &providers.SyncResult{RemoteVersion: secret.ResourceVersion}, nil
 	}
 	if isImmutable(secret) {
-		return nil, providerError(providers.ErrorClassValidation)
+		return nil, providerHelpers.ProviderError(providers.ErrorClassValidation)
 	}
 	managedKeys, err := managedDataKeysForMutation(secret)
 	if err != nil {
-		return nil, providerError(providers.ErrorClassDrift)
+		return nil, providerHelpers.ProviderError(providers.ErrorClassDrift)
 	}
 	unmanagedConflicts := unmanagedDataKeyConflicts(secret, managedKeys, dataMapKeys(req.DataMap))
 	if len(unmanagedConflicts) > 0 {
-		return nil, providerError(providers.ErrorClassOwnership)
+		return nil, providerHelpers.ProviderError(providers.ErrorClassOwnership)
 	}
 	updated := secret.DeepCopy()
 	updated.Type = corev1.SecretTypeOpaque
 	updated.Data = mergedDataMap(secret.Data, managedKeys, req.DataMap)
-	applyOwnershipMetadata(updated, ownershipIdentityFromUpsert(req), req.SourceVersion, req.PayloadSHA256, req.Format)
+	applyOwnershipMetadata(updated, req.OwnershipIdentity(), req.SourceVersion, req.PayloadSHA256, req.Format)
 	applyDataMapMetadata(updated, dataMapKeys(req.DataMap))
 	result, err := secretClient.Update(ctx, updated, metav1.UpdateOptions{})
 	if err != nil {
-		return nil, providerError(classifyKubernetesError(err))
+		return nil, providerHelpers.ProviderError(classifyKubernetesError(err))
 	}
 	return &providers.SyncResult{RemoteVersion: result.ResourceVersion}, nil
 }
@@ -677,11 +668,11 @@ func createDataMapSecret(
 		Type: corev1.SecretTypeOpaque,
 		Data: copyDataMap(req.DataMap),
 	}
-	applyOwnershipMetadata(secret, ownershipIdentityFromUpsert(req), req.SourceVersion, req.PayloadSHA256, req.Format)
+	applyOwnershipMetadata(secret, req.OwnershipIdentity(), req.SourceVersion, req.PayloadSHA256, req.Format)
 	applyDataMapMetadata(secret, dataMapKeys(req.DataMap))
 	result, err := secretClient.Create(ctx, secret, metav1.CreateOptions{})
 	if err != nil {
-		return nil, providerError(classifyKubernetesError(err))
+		return nil, providerHelpers.ProviderError(classifyKubernetesError(err))
 	}
 	return &providers.SyncResult{RemoteVersion: result.ResourceVersion}, nil
 }
@@ -693,13 +684,13 @@ func (r destinationRuntime) deleteDataMap(
 ) (*providers.SyncResult, error) {
 	managedKeys, err := managedDataKeysForMutation(secret)
 	if err != nil {
-		return nil, providerError(providers.ErrorClassDrift)
+		return nil, providerHelpers.ProviderError(providers.ErrorClassDrift)
 	}
 	secretClient := r.secretClient()
 	updatedData := mergedDataMap(secret.Data, managedKeys, nil)
 	if len(updatedData) == 0 {
 		if err := secretClient.Delete(ctx, req.ResolvedName, metav1.DeleteOptions{}); err != nil {
-			return nil, providerError(classifyKubernetesError(err))
+			return nil, providerHelpers.ProviderError(classifyKubernetesError(err))
 		}
 		return &providers.SyncResult{RemoteVersion: secret.ResourceVersion}, nil
 	}
@@ -708,66 +699,14 @@ func (r destinationRuntime) deleteDataMap(
 	removeOwnershipMetadata(updated)
 	result, err := secretClient.Update(ctx, updated, metav1.UpdateOptions{})
 	if err != nil {
-		return nil, providerError(classifyKubernetesError(err))
+		return nil, providerHelpers.ProviderError(classifyKubernetesError(err))
 	}
 	return &providers.SyncResult{RemoteVersion: result.ResourceVersion}, nil
 }
 
-type ownershipIdentity struct {
-	AssociationID    string
-	SourcePath       string
-	ObjectID         string
-	PluginInstanceID string
-	RestoreEpoch     string
-}
-
-func ownershipIdentityFromPlan(req providers.PlanRequest) ownershipIdentity {
-	return ownershipIdentity{
-		AssociationID:    req.AssociationID,
-		SourcePath:       req.SourcePath,
-		ObjectID:         req.ObjectID,
-		PluginInstanceID: req.Runtime.PluginInstanceID,
-		RestoreEpoch:     req.Runtime.RestoreEpoch,
-	}
-}
-
-func ownershipIdentityFromUpsert(req providers.UpsertRequest) ownershipIdentity {
-	return ownershipIdentity{
-		AssociationID:    req.AssociationID,
-		SourcePath:       req.SourcePath,
-		ObjectID:         req.ObjectID,
-		PluginInstanceID: req.Runtime.PluginInstanceID,
-		RestoreEpoch:     req.Runtime.RestoreEpoch,
-	}
-}
-
-func ownershipIdentityFromDelete(req providers.DeleteRequest) ownershipIdentity {
-	return ownershipIdentity{
-		AssociationID:    req.AssociationID,
-		SourcePath:       req.SourcePath,
-		ObjectID:         req.ObjectID,
-		PluginInstanceID: req.Runtime.PluginInstanceID,
-		RestoreEpoch:     req.Runtime.RestoreEpoch,
-	}
-}
-
-func ownershipIdentityFromReadState(req providers.ReadStateRequest) ownershipIdentity {
-	return ownershipIdentity{
-		AssociationID:    req.AssociationID,
-		SourcePath:       req.SourcePath,
-		ObjectID:         req.ObjectID,
-		PluginInstanceID: req.Runtime.PluginInstanceID,
-		RestoreEpoch:     req.Runtime.RestoreEpoch,
-	}
-}
-
-func hasOwnershipIdentityFromReadState(req providers.ReadStateRequest) bool {
-	return req.AssociationID != "" && req.SourcePath != "" && req.ObjectID != ""
-}
-
 func applyOwnershipMetadata(
 	secret *corev1.Secret,
-	identity ownershipIdentity,
+	identity providers.RequestIdentity,
 	sourceVersion int,
 	payloadSHA256 string,
 	format string,
@@ -827,7 +766,7 @@ func removeOwnershipMetadata(secret *corev1.Secret) {
 	}
 }
 
-func ownedByRequest(secret *corev1.Secret, identity ownershipIdentity) bool {
+func ownedByRequest(secret *corev1.Secret, identity providers.RequestIdentity) bool {
 	if secret == nil || secret.Labels[labelManaged] != "true" {
 		return false
 	}
@@ -915,7 +854,7 @@ func payloadSHA256Bytes(payload []byte) string {
 
 func validateDataMap(data map[string][]byte) error {
 	if len(data) == 0 {
-		return validationError("k8s data-map payload must contain at least one key")
+		return providerHelpers.ValidationError("k8s data-map payload must contain at least one key")
 	}
 	return validateDataMapKeys(dataMapKeys(data))
 }
@@ -923,7 +862,7 @@ func validateDataMap(data map[string][]byte) error {
 func validateDataMapKeys(keys []string) error {
 	for _, key := range keys {
 		if errs := validation.IsConfigMapKey(key); len(errs) > 0 {
-			return validationError(fmt.Sprintf("k8s data key %q is invalid: %s", key, strings.Join(errs, "; ")))
+			return providerHelpers.ValidationError(fmt.Sprintf("k8s data key %q is invalid: %s", key, strings.Join(errs, "; ")))
 		}
 	}
 	return nil
@@ -1017,30 +956,6 @@ func stringSet(values []string) map[string]struct{} {
 
 func isImmutable(secret *corev1.Secret) bool {
 	return secret.Immutable != nil && *secret.Immutable
-}
-
-func validationError(message string) error {
-	return &providers.Error{Class: providers.ErrorClassValidation, Message: message}
-}
-
-func blockedPlan(errorClass providers.ErrorClass) *providers.PlanResult {
-	return &providers.PlanResult{
-		Action:     providers.PlanActionBlocked,
-		ErrorClass: errorClass,
-		Message:    "k8s provider plan failed",
-	}
-}
-
-func providerError(errorClass providers.ErrorClass) error {
-	return &providers.Error{Class: errorClass, Message: "k8s request failed"}
-}
-
-func setupErrorClass(err error) providers.ErrorClass {
-	var providerError *providers.Error
-	if errors.As(err, &providerError) && providerError.Class != "" {
-		return providerError.Class
-	}
-	return providers.ErrorClassInternal
 }
 
 func classifyKubernetesError(err error) providers.ErrorClass {

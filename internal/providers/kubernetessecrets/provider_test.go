@@ -819,11 +819,11 @@ func TestOwnedByRequestRejectsRuntimeIdentityMismatch(t *testing.T) {
 	secret := ownedSecret(testPayloadSHANew, 1, []byte(`{"password":"new"}`))
 	secret.Annotations[annotationPluginInstance] = testPluginInstance
 	secret.Annotations[annotationRestoreEpoch] = testRestoreEpoch
-	if !ownedByRequest(secret, ownershipIdentityFromUpsert(request)) {
+	if !ownedByRequest(secret, request.OwnershipIdentity()) {
 		t.Fatal("ownedByRequest returned false for matching runtime identity")
 	}
 	secret.Annotations[annotationPluginInstance] = "inst-other"
-	if ownedByRequest(secret, ownershipIdentityFromUpsert(request)) {
+	if ownedByRequest(secret, request.OwnershipIdentity()) {
 		t.Fatal("ownedByRequest returned true for mismatched plugin instance")
 	}
 }
