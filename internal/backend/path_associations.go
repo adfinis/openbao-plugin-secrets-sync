@@ -2,12 +2,14 @@ package backend
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
 
 	"github.com/adfinis/openbao-plugin-secrets-sync/internal/domain"
 	"github.com/adfinis/openbao-plugin-secrets-sync/internal/observability"
+	"github.com/adfinis/openbao-plugin-secrets-sync/internal/outbox"
 	payloadpkg "github.com/adfinis/openbao-plugin-secrets-sync/internal/payload"
 	"github.com/adfinis/openbao-plugin-secrets-sync/internal/providers"
 	"github.com/openbao/openbao/sdk/v2/framework"
@@ -15,6 +17,11 @@ import (
 )
 
 const associationIDPattern = "assoc-[0-9a-f]{32}"
+
+var (
+	errSourcePathDoesNotExist          = errors.New("source path does not exist")
+	errCurrentSourceVersionUnavailable = errors.New("current source version is unavailable")
+)
 
 func pathAssociations(b *secretSyncBackend) []*framework.Path {
 	return []*framework.Path{
@@ -348,12 +355,12 @@ func associationRecordForEnable(
 			validationDiagnosticForAssociation(mount, record, err.Error()),
 		), nil
 	}
-	version, err := getVersion(ctx, storage, record.Path, metadata.CurrentVersion)
+	version, err := currentVersionRecord(ctx, storage, record.Path, *metadata)
 	if err != nil {
+		if response := currentSourceVersionErrorResponse(err); response != nil {
+			return associationRecord{}, response, nil
+		}
 		return associationRecord{}, nil, err
-	}
-	if version == nil || version.Destroyed || version.DeletionTime != "" {
-		return associationRecord{}, logical.ErrorResponse("current source version is unavailable"), nil
 	}
 	recordWithReservations, err := associationWithConcreteReservationNames(record, version.Data)
 	if err != nil {
@@ -547,6 +554,48 @@ func rollbackAssociationPersistenceError(operationErr error, rollbackErr error) 
 	return fmt.Errorf("%w; association rollback failed: %v", operationErr, rollbackErr)
 }
 
+func currentSourceVersion(
+	ctx context.Context,
+	storage logical.Storage,
+	path string,
+) (*metadataRecord, *versionRecord, error) {
+	metadata, err := getMetadata(ctx, storage, path)
+	if err != nil {
+		return nil, nil, err
+	}
+	if metadata == nil || metadata.CurrentVersion == 0 {
+		return nil, nil, errSourcePathDoesNotExist
+	}
+	version, err := currentVersionRecord(ctx, storage, path, *metadata)
+	if err != nil {
+		return nil, nil, err
+	}
+	return metadata, version, nil
+}
+
+func currentVersionRecord(
+	ctx context.Context,
+	storage logical.Storage,
+	path string,
+	metadata metadataRecord,
+) (*versionRecord, error) {
+	version, err := getVersion(ctx, storage, path, metadata.CurrentVersion)
+	if err != nil {
+		return nil, err
+	}
+	if version == nil || version.Destroyed || version.DeletionTime != "" {
+		return nil, errCurrentSourceVersionUnavailable
+	}
+	return version, nil
+}
+
+func currentSourceVersionErrorResponse(err error) *logical.Response {
+	if errors.Is(err, errSourcePathDoesNotExist) || errors.Is(err, errCurrentSourceVersionUnavailable) {
+		return logical.ErrorResponse(err.Error())
+	}
+	return nil
+}
+
 func associationWritePreflight(
 	ctx context.Context,
 	storage logical.Storage,
@@ -554,19 +603,12 @@ func associationWritePreflight(
 	record associationRecord,
 	mount string,
 ) (associationRecord, *metadataRecord, *associationRecord, *logical.Response, error) {
-	metadata, err := getMetadata(ctx, storage, path)
+	metadata, version, err := currentSourceVersion(ctx, storage, path)
 	if err != nil {
+		if response := currentSourceVersionErrorResponse(err); response != nil {
+			return associationRecord{}, nil, nil, response, nil
+		}
 		return associationRecord{}, nil, nil, nil, err
-	}
-	if metadata == nil || metadata.CurrentVersion == 0 {
-		return associationRecord{}, nil, nil, logical.ErrorResponse("source path does not exist"), nil
-	}
-	version, err := getVersion(ctx, storage, path, metadata.CurrentVersion)
-	if err != nil {
-		return associationRecord{}, nil, nil, nil, err
-	}
-	if version == nil || version.Destroyed || version.DeletionTime != "" {
-		return associationRecord{}, nil, nil, logical.ErrorResponse("current source version is unavailable"), nil
 	}
 	record, err = associationWithConcreteReservationNames(record, version.Data)
 	if err != nil {
@@ -771,19 +813,12 @@ func currentSourceVersionFromPlanRequest(
 	if err != nil {
 		return "", nil, nil, logical.ErrorResponse(err.Error()), nil
 	}
-	metadata, err := getMetadata(ctx, req.Storage, path)
+	metadata, version, err := currentSourceVersion(ctx, req.Storage, path)
 	if err != nil {
+		if response := currentSourceVersionErrorResponse(err); response != nil {
+			return "", nil, nil, response, nil
+		}
 		return "", nil, nil, nil, err
-	}
-	if metadata == nil || metadata.CurrentVersion == 0 {
-		return "", nil, nil, logical.ErrorResponse("source path does not exist"), nil
-	}
-	version, err := getVersion(ctx, req.Storage, path, metadata.CurrentVersion)
-	if err != nil {
-		return "", nil, nil, nil, err
-	}
-	if version == nil || version.Destroyed || version.DeletionTime != "" {
-		return "", nil, nil, logical.ErrorResponse("current source version is unavailable"), nil
 	}
 	return path, metadata, version, nil, nil
 }
@@ -1261,19 +1296,9 @@ func validateAssociationDestination(
 	if destination.Disabled {
 		return fmt.Errorf("destination %s is disabled", record.DestinationRef)
 	}
-	metadata, err := getMetadata(ctx, storage, record.Path)
+	_, version, err := currentSourceVersion(ctx, storage, record.Path)
 	if err != nil {
 		return err
-	}
-	if metadata == nil || metadata.CurrentVersion == 0 {
-		return fmt.Errorf("source path does not exist")
-	}
-	version, err := getVersion(ctx, storage, record.Path, metadata.CurrentVersion)
-	if err != nil {
-		return err
-	}
-	if version == nil || version.Destroyed || version.DeletionTime != "" {
-		return fmt.Errorf("current source version is unavailable")
 	}
 	if err := validateAssociationDestinationPolicy(*destination, record, version.Data, cfg); err != nil {
 		return err
@@ -1406,12 +1431,9 @@ func (b *secretSyncBackend) enqueueAssociationCurrentVersion(
 	metadata metadataRecord,
 	now string,
 ) ([]string, error) {
-	version, err := getVersion(ctx, storage, record.Path, metadata.CurrentVersion)
+	version, err := currentVersionRecord(ctx, storage, record.Path, metadata)
 	if err != nil {
 		return nil, err
-	}
-	if version == nil || version.Destroyed || version.DeletionTime != "" {
-		return nil, fmt.Errorf("current source version is unavailable")
 	}
 	operations, operationIDs, err := newAssociationOutboxRecords(
 		[]associationRecord{record},
@@ -1419,6 +1441,10 @@ func (b *secretSyncBackend) enqueueAssociationCurrentVersion(
 		metadata.CurrentVersion,
 		version.Data,
 		now,
+		associationOutboxOptions{
+			operationType: outbox.OperationTypeUpsert,
+			trigger:       outboxTriggerUser,
+		},
 	)
 	if err != nil {
 		return nil, err
@@ -1486,7 +1512,7 @@ func (b *secretSyncBackend) enqueueAssociationCurrentVersionAsManualSync(
 		now,
 		"manual",
 		false,
-		newAssociationManualSyncOutboxRecords,
+		outboxTriggerUser,
 	)
 }
 
@@ -1505,18 +1531,9 @@ func (b *secretSyncBackend) enqueueAssociationCurrentVersionAsDriftRepair(
 		now,
 		"repair",
 		true,
-		newAssociationDriftRepairOutboxRecords,
+		outboxTriggerDriftRepair,
 	)
 }
-
-type saltedAssociationOutboxBuilder func(
-	associationRecord,
-	string,
-	int,
-	secretPayload,
-	string,
-	string,
-) ([]outboxRecord, []string, error)
 
 func (b *secretSyncBackend) enqueueAssociationCurrentVersionWithSalt(
 	ctx context.Context,
@@ -1526,23 +1543,24 @@ func (b *secretSyncBackend) enqueueAssociationCurrentVersionWithSalt(
 	now string,
 	idPrefix string,
 	dedupeQueuedCurrentVersion bool,
-	build saltedAssociationOutboxBuilder,
+	trigger string,
 ) ([]string, error) {
-	version, err := getVersion(ctx, storage, record.Path, metadata.CurrentVersion)
+	version, err := currentVersionRecord(ctx, storage, record.Path, metadata)
 	if err != nil {
 		return nil, err
 	}
-	if version == nil || version.Destroyed || version.DeletionTime != "" {
-		return nil, fmt.Errorf("current source version is unavailable")
-	}
 	salt := bestEffortRuntimeID(idPrefix)
-	operations, operationIDs, err := build(
-		record,
+	operations, operationIDs, err := newAssociationOutboxRecords(
+		[]associationRecord{record},
 		metadata.Generation,
 		metadata.CurrentVersion,
 		version.Data,
 		now,
-		salt,
+		associationOutboxOptions{
+			operationType: outbox.OperationTypeUpsert,
+			trigger:       trigger,
+			salt:          salt,
+		},
 	)
 	if err != nil {
 		return nil, err

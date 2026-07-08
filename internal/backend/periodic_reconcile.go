@@ -9,7 +9,6 @@ import (
 
 	"github.com/adfinis/openbao-plugin-secrets-sync/internal/domain"
 	"github.com/adfinis/openbao-plugin-secrets-sync/internal/observability"
-	"github.com/adfinis/openbao-plugin-secrets-sync/internal/providers"
 	"github.com/openbao/openbao/sdk/v2/logical"
 )
 
@@ -273,98 +272,21 @@ func (b *secretSyncBackend) reconcileAssociationObjectFromStorage(
 	objectID string,
 	cfg globalConfig,
 ) reconcileObjectResult {
-	if !association.Enabled {
-		return newReconcileObjectResult(
-			association,
-			metadata.CurrentVersion,
-			objectID,
-			"",
-			domain.SyncStateDisabled,
-			"",
-			"association is disabled",
-		)
-	}
-	provider, err := b.providerRegistry.MustGet(association.DestinationType)
-	if err != nil {
-		return newReconcileObjectResult(
-			association,
-			metadata.CurrentVersion,
-			objectID,
-			"",
-			domain.SyncStateValidationError,
-			providers.ErrorClassValidation,
-			"destination provider is unsupported",
-		)
-	}
-	destination, err := getDestination(ctx, storage, association.DestinationType, association.DestinationName)
-	if err != nil {
-		return newReconcileObjectResult(
-			association,
-			metadata.CurrentVersion,
-			objectID,
-			"",
-			domain.SyncStateInternalError,
-			providers.ErrorClassInternal,
-			"destination lookup failed",
-		)
-	}
-	if destination == nil {
-		return newReconcileObjectResult(
-			association,
-			metadata.CurrentVersion,
-			objectID,
-			"",
-			domain.SyncStateValidationError,
-			providers.ErrorClassValidation,
-			"destination is missing",
-		)
-	}
-	if destination.Disabled {
-		return newReconcileObjectResult(
-			association,
-			metadata.CurrentVersion,
-			objectID,
-			"",
-			domain.SyncStateDisabled,
-			"",
-			"destination is disabled",
-		)
-	}
-	resolvedDestinationConfig, err := destinationConfig(ctx, storage, *destination)
-	if err != nil {
-		return newReconcileObjectResult(
-			association,
-			metadata.CurrentVersion,
-			objectID,
-			"",
-			domain.SyncStateInternalError,
-			providers.ErrorClassInternal,
-			"destination config resolution failed",
-		)
-	}
-	runtimeIdentity, err := providerRuntimeIdentity(ctx, storage)
-	if err != nil {
-		return newReconcileObjectResult(
-			association,
-			metadata.CurrentVersion,
-			objectID,
-			"",
-			domain.SyncStateInternalError,
-			providers.ErrorClassInternal,
-			"runtime identity resolution failed",
-		)
+	lookup, failure := b.loadReconcileLookupContext(ctx, storage, association, &cfg)
+	if failure != nil {
+		return failure.result(association, metadata.CurrentVersion, objectID)
 	}
 	return b.reconcileAssociationObject(
 		ctx,
 		association,
-		provider,
-		*destination,
-		resolvedDestinationConfig,
-		runtimeIdentity,
+		lookup.provider,
+		lookup.destination,
+		lookup.destinationConfig,
+		lookup.runtimeIdentity,
 		metadata.CurrentVersion,
 		version,
 		objectID,
-		cfg,
+		lookup.cfg,
 	)
 }
 
