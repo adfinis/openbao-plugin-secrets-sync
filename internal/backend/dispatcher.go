@@ -636,6 +636,14 @@ type upsertContext struct {
 	provider    providers.Provider
 }
 
+type dispatchAssociationPreflight func(associationRecord) *operationFailure
+
+type dispatchTargetContext struct {
+	association *associationRecord
+	destination *destinationRecord
+	provider    providers.Provider
+}
+
 func (b *secretSyncBackend) loadUpsertContext(
 	ctx context.Context,
 	storage logical.Storage,
@@ -648,12 +656,35 @@ func (b *secretSyncBackend) loadUpsertContext(
 	if version == nil || version.Destroyed || version.DeletionTime != "" {
 		return nil, &operationFailure{class: providers.ErrorClassInternal, message: "source version is unavailable"}, nil
 	}
+	target, failure, err := b.loadDispatchTargetContext(ctx, storage, record, nil)
+	if failure != nil || err != nil {
+		return nil, failure, err
+	}
+	return &upsertContext{
+		version:     version,
+		association: target.association,
+		destination: target.destination,
+		provider:    target.provider,
+	}, nil, nil
+}
+
+func (b *secretSyncBackend) loadDispatchTargetContext(
+	ctx context.Context,
+	storage logical.Storage,
+	record outboxRecord,
+	preflight dispatchAssociationPreflight,
+) (*dispatchTargetContext, *operationFailure, error) {
 	association, err := getAssociation(ctx, storage, record.Path, record.AssociationID)
 	if err != nil {
 		return nil, nil, err
 	}
 	if association == nil {
 		return nil, &operationFailure{class: providers.ErrorClassInternal, message: "association is missing"}, nil
+	}
+	if preflight != nil {
+		if failure := preflight(*association); failure != nil {
+			return nil, failure, nil
+		}
 	}
 	destination, err := getDestination(ctx, storage, association.DestinationType, association.DestinationName)
 	if err != nil {
@@ -685,8 +716,7 @@ func (b *secretSyncBackend) loadUpsertContext(
 	if failure != nil || err != nil {
 		return nil, failure, err
 	}
-	return &upsertContext{
-		version:     version,
+	return &dispatchTargetContext{
 		association: association,
 		destination: destination,
 		provider:    provider,
@@ -711,55 +741,31 @@ func (b *secretSyncBackend) loadDeleteContext(
 	if version != nil && !version.Destroyed && version.DeletionTime == "" {
 		return nil, &operationFailure{class: providers.ErrorClassValidation, message: "source version is not deleted"}, nil
 	}
-	association, err := getAssociation(ctx, storage, record.Path, record.AssociationID)
-	if err != nil {
-		return nil, nil, err
-	}
-	if association == nil {
-		return nil, &operationFailure{class: providers.ErrorClassInternal, message: "association is missing"}, nil
-	}
-	if normalizedDeleteMode(association.DeleteMode) != deleteModeDelete {
-		return nil, &operationFailure{
-			class:        providers.ErrorClassValidation,
-			message:      "association delete_mode does not permit remote delete",
-			resolvedName: association.ResolvedName,
-		}, nil
-	}
-	destination, err := getDestination(ctx, storage, association.DestinationType, association.DestinationName)
-	if err != nil {
-		return nil, nil, err
-	}
-	if destination == nil {
-		return nil, &operationFailure{
-			class:        providers.ErrorClassInternal,
-			message:      "destination is missing",
-			resolvedName: association.ResolvedName,
-		}, nil
-	}
-	provider, err := b.providerRegistry.MustGet(destination.Type)
-	if err != nil {
-		return nil, &operationFailure{
-			class:        providers.ErrorClassValidation,
-			message:      "destination provider is unsupported",
-			resolvedName: association.ResolvedName,
-		}, nil
-	}
-	if destination.Disabled || !association.Enabled {
-		return nil, &operationFailure{
-			class:        providers.ErrorClassValidation,
-			message:      "association or destination is disabled",
-			resolvedName: association.ResolvedName,
-		}, nil
-	}
-	failure, err := sourceEligibilityFailureForDispatch(ctx, storage, *association)
+	target, failure, err := b.loadDispatchTargetContext(
+		ctx,
+		storage,
+		record,
+		requireDeleteDispatchMode,
+	)
 	if failure != nil || err != nil {
 		return nil, failure, err
 	}
 	return &deleteContext{
-		association: association,
-		destination: destination,
-		provider:    provider,
+		association: target.association,
+		destination: target.destination,
+		provider:    target.provider,
 	}, nil, nil
+}
+
+func requireDeleteDispatchMode(association associationRecord) *operationFailure {
+	if normalizedDeleteMode(association.DeleteMode) == deleteModeDelete {
+		return nil
+	}
+	return &operationFailure{
+		class:        providers.ErrorClassValidation,
+		message:      "association delete_mode does not permit remote delete",
+		resolvedName: association.ResolvedName,
+	}
 }
 
 func sourceEligibilityFailureForDispatch(
