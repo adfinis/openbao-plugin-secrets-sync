@@ -176,7 +176,17 @@ func TestRecoveryCompletesIntentWithoutCommittedVersion(t *testing.T) {
 	}
 	now := nowUTC().Format(timeFormatRFC3339)
 	generation := sourceGeneration(t, env.storage)
-	operation := newAssociationOutboxRecord(*association, generation, 99, syncObjectIDSecretPath, now)
+	operation := newAssociationOutboxRecord(
+		*association,
+		generation,
+		99,
+		syncObjectIDSecretPath,
+		now,
+		associationOutboxOptions{
+			operationType: outbox.OperationTypeUpsert,
+			trigger:       outboxTriggerUser,
+		},
+	)
 	intent := newEnqueueIntentRecord("app/db", generation, 99, []outboxRecord{operation}, []string{staleOperationID}, now)
 	if err := putEnqueueIntent(context.Background(), env.storage, intent); err != nil {
 		t.Fatalf("write enqueue intent: %v", err)
@@ -233,7 +243,17 @@ func TestRecoveryCompletesCommittedVersionIntent(t *testing.T) {
 	); err != nil {
 		t.Fatalf("write committed source version: %v", err)
 	}
-	operation := newAssociationOutboxRecord(*association, generation, 2, syncObjectIDSecretPath, now)
+	operation := newAssociationOutboxRecord(
+		*association,
+		generation,
+		2,
+		syncObjectIDSecretPath,
+		now,
+		associationOutboxOptions{
+			operationType: outbox.OperationTypeUpsert,
+			trigger:       outboxTriggerUser,
+		},
+	)
 	intent := newEnqueueIntentRecord("app/db", generation, 2, []outboxRecord{operation}, []string{staleOperationID}, now)
 	if err := putEnqueueIntent(context.Background(), env.storage, intent); err != nil {
 		t.Fatalf("write enqueue intent: %v", err)
@@ -324,13 +344,17 @@ func TestRecoveryRestoresIntentOperationMetadata(t *testing.T) {
 		t.Fatalf("read metadata: %v", err)
 	}
 	now := nowUTC().Format(timeFormatRFC3339)
-	operation := newAssociationDriftRepairOutboxRecord(
+	operation := newAssociationOutboxRecord(
 		*association,
 		metadata.Generation,
 		metadata.CurrentVersion,
 		syncObjectIDSecretPath,
 		now,
-		"repair-recovery",
+		associationOutboxOptions{
+			operationType: outbox.OperationTypeUpsert,
+			trigger:       outboxTriggerDriftRepair,
+			salt:          "repair-recovery",
+		},
 	)
 	intent := newEnqueueIntentRecord(
 		"app/db",

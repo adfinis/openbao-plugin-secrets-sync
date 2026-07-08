@@ -8,6 +8,7 @@ import (
 
 	"github.com/adfinis/openbao-plugin-secrets-sync/internal/domain"
 	"github.com/adfinis/openbao-plugin-secrets-sync/internal/observability"
+	"github.com/adfinis/openbao-plugin-secrets-sync/internal/outbox"
 	payloadpkg "github.com/adfinis/openbao-plugin-secrets-sync/internal/payload"
 	"github.com/adfinis/openbao-plugin-secrets-sync/internal/providers"
 	"github.com/openbao/openbao/sdk/v2/framework"
@@ -1419,6 +1420,10 @@ func (b *secretSyncBackend) enqueueAssociationCurrentVersion(
 		metadata.CurrentVersion,
 		version.Data,
 		now,
+		associationOutboxOptions{
+			operationType: outbox.OperationTypeUpsert,
+			trigger:       outboxTriggerUser,
+		},
 	)
 	if err != nil {
 		return nil, err
@@ -1486,7 +1491,7 @@ func (b *secretSyncBackend) enqueueAssociationCurrentVersionAsManualSync(
 		now,
 		"manual",
 		false,
-		newAssociationManualSyncOutboxRecords,
+		outboxTriggerUser,
 	)
 }
 
@@ -1505,18 +1510,9 @@ func (b *secretSyncBackend) enqueueAssociationCurrentVersionAsDriftRepair(
 		now,
 		"repair",
 		true,
-		newAssociationDriftRepairOutboxRecords,
+		outboxTriggerDriftRepair,
 	)
 }
-
-type saltedAssociationOutboxBuilder func(
-	associationRecord,
-	string,
-	int,
-	secretPayload,
-	string,
-	string,
-) ([]outboxRecord, []string, error)
 
 func (b *secretSyncBackend) enqueueAssociationCurrentVersionWithSalt(
 	ctx context.Context,
@@ -1526,7 +1522,7 @@ func (b *secretSyncBackend) enqueueAssociationCurrentVersionWithSalt(
 	now string,
 	idPrefix string,
 	dedupeQueuedCurrentVersion bool,
-	build saltedAssociationOutboxBuilder,
+	trigger string,
 ) ([]string, error) {
 	version, err := getVersion(ctx, storage, record.Path, metadata.CurrentVersion)
 	if err != nil {
@@ -1536,13 +1532,17 @@ func (b *secretSyncBackend) enqueueAssociationCurrentVersionWithSalt(
 		return nil, fmt.Errorf("current source version is unavailable")
 	}
 	salt := bestEffortRuntimeID(idPrefix)
-	operations, operationIDs, err := build(
-		record,
+	operations, operationIDs, err := newAssociationOutboxRecords(
+		[]associationRecord{record},
 		metadata.Generation,
 		metadata.CurrentVersion,
 		version.Data,
 		now,
-		salt,
+		associationOutboxOptions{
+			operationType: outbox.OperationTypeUpsert,
+			trigger:       trigger,
+			salt:          salt,
+		},
 	)
 	if err != nil {
 		return nil, err

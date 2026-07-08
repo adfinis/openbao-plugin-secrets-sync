@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/adfinis/openbao-plugin-secrets-sync/internal/outbox"
 	"github.com/openbao/openbao/sdk/v2/framework"
 	"github.com/openbao/openbao/sdk/v2/logical"
 )
@@ -223,7 +224,17 @@ func (b *secretSyncBackend) mutateCurrentVersionUndelete(
 	if err != nil {
 		return err
 	}
-	operations, _, err := newAssociationOutboxRecords(associations, metadata.Generation, version, versionRecord.Data, now)
+	operations, _, err := newAssociationOutboxRecords(
+		associations,
+		metadata.Generation,
+		version,
+		versionRecord.Data,
+		now,
+		associationOutboxOptions{
+			operationType: outbox.OperationTypeUpsert,
+			trigger:       outboxTriggerUser,
+		},
+	)
 	if err != nil {
 		return err
 	}

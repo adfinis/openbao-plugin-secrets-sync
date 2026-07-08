@@ -162,6 +162,10 @@ func dataWritePlanFromRequest(
 		nextVersion,
 		payload,
 		now,
+		associationOutboxOptions{
+			operationType: outbox.OperationTypeUpsert,
+			trigger:       outboxTriggerUser,
+		},
 	)
 	if err != nil {
 		return dataWritePlan{}, logical.ErrorResponse(err.Error()), nil
@@ -508,12 +512,17 @@ func buildSourceDeletePlan(
 	if versionRecord == nil {
 		return sourceDeletePlan{}, fmt.Errorf("source version is unavailable")
 	}
-	operations, operationIDs, err := newAssociationDeleteOutboxRecords(
+	operations, operationIDs, err := newAssociationOutboxRecords(
 		associations,
 		generation,
 		version,
 		versionRecord.Data,
 		now,
+		associationOutboxOptions{
+			operationType:     outbox.OperationTypeDelete,
+			trigger:           outboxTriggerUser,
+			requireDeleteMode: true,
+		},
 	)
 	if err != nil {
 		return sourceDeletePlan{}, err
@@ -752,78 +761,12 @@ func newAssociationOutboxRecords(
 	version int,
 	payload secretPayload,
 	now string,
+	options associationOutboxOptions,
 ) ([]outboxRecord, []string, error) {
 	operations := make([]outboxRecord, 0, len(associations))
 	operationIDs := make([]string, 0, len(associations))
 	for _, association := range associations {
-		objectIDs, err := associationObjectIDs(association, payload)
-		if err != nil {
-			return nil, nil, err
-		}
-		for _, objectID := range objectIDs {
-			operation := newAssociationOutboxRecord(association, generation, version, objectID, now)
-			operations = append(operations, operation)
-			operationIDs = append(operationIDs, operation.ID)
-		}
-	}
-	return operations, operationIDs, nil
-}
-
-func newAssociationDriftRepairOutboxRecords(
-	association associationRecord,
-	generation string,
-	version int,
-	payload secretPayload,
-	now string,
-	repairID string,
-) ([]outboxRecord, []string, error) {
-	objectIDs, err := associationObjectIDs(association, payload)
-	if err != nil {
-		return nil, nil, err
-	}
-	operations := make([]outboxRecord, 0, len(objectIDs))
-	operationIDs := make([]string, 0, len(objectIDs))
-	for _, objectID := range objectIDs {
-		operation := newAssociationDriftRepairOutboxRecord(association, generation, version, objectID, now, repairID)
-		operations = append(operations, operation)
-		operationIDs = append(operationIDs, operation.ID)
-	}
-	return operations, operationIDs, nil
-}
-
-func newAssociationManualSyncOutboxRecords(
-	association associationRecord,
-	generation string,
-	version int,
-	payload secretPayload,
-	now string,
-	syncID string,
-) ([]outboxRecord, []string, error) {
-	objectIDs, err := associationObjectIDs(association, payload)
-	if err != nil {
-		return nil, nil, err
-	}
-	operations := make([]outboxRecord, 0, len(objectIDs))
-	operationIDs := make([]string, 0, len(objectIDs))
-	for _, objectID := range objectIDs {
-		operation := newAssociationManualSyncOutboxRecord(association, generation, version, objectID, now, syncID)
-		operations = append(operations, operation)
-		operationIDs = append(operationIDs, operation.ID)
-	}
-	return operations, operationIDs, nil
-}
-
-func newAssociationDeleteOutboxRecords(
-	associations []associationRecord,
-	generation string,
-	version int,
-	payload secretPayload,
-	now string,
-) ([]outboxRecord, []string, error) {
-	operations := []outboxRecord{}
-	operationIDs := []string{}
-	for _, association := range associations {
-		if normalizedDeleteMode(association.DeleteMode) != deleteModeDelete {
+		if options.requireDeleteMode && normalizedDeleteMode(association.DeleteMode) != deleteModeDelete {
 			continue
 		}
 		objectIDs, err := associationObjectIDs(association, payload)
@@ -831,7 +774,7 @@ func newAssociationDeleteOutboxRecords(
 			return nil, nil, err
 		}
 		for _, objectID := range objectIDs {
-			operation := newAssociationDeleteOutboxRecord(association, generation, version, objectID, now)
+			operation := newAssociationOutboxRecord(association, generation, version, objectID, now, options)
 			operations = append(operations, operation)
 			operationIDs = append(operationIDs, operation.ID)
 		}
@@ -1036,12 +979,20 @@ func enqueueIntentOperations(operations []outboxRecord) []enqueueIntentOperation
 	return intentOperations
 }
 
+type associationOutboxOptions struct {
+	operationType     outbox.OperationType
+	trigger           string
+	salt              string
+	requireDeleteMode bool
+}
+
 func newAssociationOutboxRecord(
 	association associationRecord,
 	generation string,
 	version int,
 	objectID string,
 	now string,
+	options associationOutboxOptions,
 ) outboxRecord {
 	id := newOperationID(
 		generation,
@@ -1049,93 +1000,33 @@ func newAssociationOutboxRecord(
 		version,
 		association.ID,
 		objectID,
-		outbox.OperationTypeUpsert,
+		options.operationType,
 	)
-	return outboxRecord{
-		ID:             id,
-		Type:           outbox.OperationTypeUpsert,
-		Path:           association.Path,
-		Version:        version,
-		AssociationID:  association.ID,
-		ObjectID:       objectID,
-		DestinationRef: association.DestinationRef,
-		State:          outboxStatePending,
-		NotBefore:      now,
-		CreatedTime:    now,
-		UpdatedTime:    now,
-		IdempotencyKey: operationIdempotencyKey(
+	if options.salt != "" {
+		id = newOperationIDWithSalt(
 			generation,
 			association.Path,
 			version,
 			association.ID,
 			objectID,
-			outbox.OperationTypeUpsert,
-		),
-		Trigger: outboxTriggerUser,
+			options.operationType,
+			options.salt,
+		)
 	}
-}
-
-func newAssociationManualSyncOutboxRecord(
-	association associationRecord,
-	generation string,
-	version int,
-	objectID string,
-	now string,
-	syncID string,
-) outboxRecord {
-	id := newOperationIDWithSalt(
+	idempotencyKey := operationIdempotencyKey(
 		generation,
 		association.Path,
 		version,
 		association.ID,
 		objectID,
-		outbox.OperationTypeUpsert,
-		syncID,
+		options.operationType,
 	)
-	return outboxRecord{
-		ID:             id,
-		Type:           outbox.OperationTypeUpsert,
-		Path:           association.Path,
-		Version:        version,
-		AssociationID:  association.ID,
-		ObjectID:       objectID,
-		DestinationRef: association.DestinationRef,
-		State:          outboxStatePending,
-		NotBefore:      now,
-		CreatedTime:    now,
-		UpdatedTime:    now,
-		IdempotencyKey: operationIdempotencyKey(
-			generation,
-			association.Path,
-			version,
-			association.ID,
-			objectID,
-			outbox.OperationTypeUpsert,
-		) + ":" + syncID,
-		Trigger: outboxTriggerUser,
+	if options.salt != "" {
+		idempotencyKey += ":" + options.salt
 	}
-}
-
-func newAssociationDriftRepairOutboxRecord(
-	association associationRecord,
-	generation string,
-	version int,
-	objectID string,
-	now string,
-	repairID string,
-) outboxRecord {
-	id := newOperationIDWithSalt(
-		generation,
-		association.Path,
-		version,
-		association.ID,
-		objectID,
-		outbox.OperationTypeUpsert,
-		repairID,
-	)
 	return outboxRecord{
 		ID:             id,
-		Type:           outbox.OperationTypeUpsert,
+		Type:           options.operationType,
 		Path:           association.Path,
 		Version:        version,
 		AssociationID:  association.ID,
@@ -1145,54 +1036,8 @@ func newAssociationDriftRepairOutboxRecord(
 		NotBefore:      now,
 		CreatedTime:    now,
 		UpdatedTime:    now,
-		IdempotencyKey: operationIdempotencyKey(
-			generation,
-			association.Path,
-			version,
-			association.ID,
-			objectID,
-			outbox.OperationTypeUpsert,
-		) + ":" + repairID,
-		Trigger: outboxTriggerDriftRepair,
-	}
-}
-
-func newAssociationDeleteOutboxRecord(
-	association associationRecord,
-	generation string,
-	version int,
-	objectID string,
-	now string,
-) outboxRecord {
-	id := newOperationID(
-		generation,
-		association.Path,
-		version,
-		association.ID,
-		objectID,
-		outbox.OperationTypeDelete,
-	)
-	return outboxRecord{
-		ID:             id,
-		Type:           outbox.OperationTypeDelete,
-		Path:           association.Path,
-		Version:        version,
-		AssociationID:  association.ID,
-		ObjectID:       objectID,
-		DestinationRef: association.DestinationRef,
-		State:          outboxStatePending,
-		NotBefore:      now,
-		CreatedTime:    now,
-		UpdatedTime:    now,
-		IdempotencyKey: operationIdempotencyKey(
-			generation,
-			association.Path,
-			version,
-			association.ID,
-			objectID,
-			outbox.OperationTypeDelete,
-		),
-		Trigger: outboxTriggerUser,
+		IdempotencyKey: idempotencyKey,
+		Trigger:        options.trigger,
 	}
 }
 
