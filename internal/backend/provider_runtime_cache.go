@@ -55,6 +55,9 @@ func (b *secretSyncBackend) destinationRuntime(
 		destinationEpoch := b.runtimeDestinationEpochs[ref]
 		b.cacheMu.Unlock()
 
+		// Opening a provider destination can perform I/O, so it happens outside
+		// cacheMu. Epochs capture cache-wide clears and per-destination
+		// invalidations that occur while the runtime is being built.
 		runtime, err := provider.OpenDestination(ctx, cfg)
 		if err == nil && runtime == nil {
 			err = &providers.Error{
@@ -68,6 +71,8 @@ func (b *secretSyncBackend) destinationRuntime(
 		if err == nil &&
 			cacheEpoch == b.runtimeCacheEpoch &&
 			destinationEpoch == b.runtimeDestinationEpochs[ref] {
+			// Publish only if no invalidation raced with the build. Otherwise the
+			// runtime is returned to this caller but not cached for future calls.
 			if old, ok := b.runtimeCache[ref]; ok {
 				staleRuntime = old.runtime
 			}

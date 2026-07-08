@@ -5,19 +5,39 @@ import "context"
 
 // Provider adapts the core sync engine to one destination type.
 type Provider interface {
+	// Type returns the stable provider type used in storage, API paths, and policy.
 	Type() string
+	// Capabilities describes which sync shapes and safety checks this provider supports.
 	Capabilities() Capabilities
+	// ValidateConfig validates a destination config without opening a long-lived runtime.
+	// Provider-specific validation failures should return *Error with a stable class.
 	ValidateConfig(context.Context, DestinationConfig) error
+	// OpenDestination builds a configured runtime for one destination.
+	// Returning a nil runtime with nil error violates the provider contract.
 	OpenDestination(context.Context, DestinationConfig) (DestinationRuntime, error)
 }
 
 // DestinationRuntime is a configured provider destination ready for operations.
 type DestinationRuntime interface {
+	// Health checks whether the configured destination can be used. It must not mutate
+	// remote state; unhealthy destinations should return HealthResult with ErrorClass set.
 	Health(context.Context) (*HealthResult, error)
+	// Plan reports the action a later Upsert or Delete would take without mutating remote
+	// state. Expected remote conflicts, validation failures, ownership mismatches, and
+	// unavailable dependencies should be represented as PlanResult values, usually with
+	// Action set to PlanActionConflict or PlanActionBlocked and ErrorClass set. Reserve
+	// non-nil errors for failures that prevent producing a provider plan at all.
 	Plan(context.Context, PlanRequest) (*PlanResult, error)
+	// Upsert creates or updates the remote object. Provider-side failures must return
+	// *Error so the core can classify retry, status, and operator diagnostics.
 	Upsert(context.Context, UpsertRequest) (*SyncResult, error)
+	// Delete removes or detaches the remote object according to provider semantics.
+	// Provider-side failures must return *Error so the core can classify the result.
 	Delete(context.Context, DeleteRequest) (*SyncResult, error)
+	// ReadState reports the provider's current view of a remote object without mutating it.
+	// Provider-side failures must return *Error; a missing object is RemoteState.Exists=false.
 	ReadState(context.Context, ReadStateRequest) (*RemoteState, error)
+	// Close releases runtime resources and must be safe to call more than once.
 	Close(context.Context) error
 }
 
@@ -50,11 +70,16 @@ type RuntimeIdentity struct {
 type ErrorClass string
 
 const (
-	PlanActionCreate   = "create"
-	PlanActionUpdate   = "update"
-	PlanActionNoop     = "noop"
+	// PlanActionCreate means the remote object does not exist and would be created.
+	PlanActionCreate = "create"
+	// PlanActionUpdate means the remote object exists and would be updated.
+	PlanActionUpdate = "update"
+	// PlanActionNoop means the remote object already matches desired state.
+	PlanActionNoop = "noop"
+	// PlanActionConflict means a remote object exists but is not owned by this plugin.
 	PlanActionConflict = "conflict"
-	PlanActionBlocked  = "blocked"
+	// PlanActionBlocked means the provider cannot safely produce a mutating operation.
+	PlanActionBlocked = "blocked"
 )
 
 const (
@@ -71,7 +96,9 @@ const (
 )
 
 const (
-	RemoteStateVerificationValue    = "value"
+	// RemoteStateVerificationValue means the provider compared remote payload bytes.
+	RemoteStateVerificationValue = "value"
+	// RemoteStateVerificationMetadata means the provider compared provider metadata only.
 	RemoteStateVerificationMetadata = "metadata"
 )
 
