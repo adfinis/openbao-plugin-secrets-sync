@@ -141,11 +141,50 @@ func (b *secretSyncBackend) reconcileAssociation(
 			objectErr.Error(),
 		)}
 	}
-	if !association.Enabled {
-		return reconcileStaticResults(
+	lookup, failure := b.loadReconcileLookupContext(ctx, storage, association, nil)
+	if failure != nil {
+		return failure.results(association, metadata.CurrentVersion, objectIDs)
+	}
+	results := make([]reconcileObjectResult, 0, len(objectIDs))
+	for _, objectID := range objectIDs {
+		results = append(results, b.reconcileAssociationObject(
+			ctx,
 			association,
+			lookup.provider,
+			lookup.destination,
+			lookup.destinationConfig,
+			lookup.runtimeIdentity,
 			metadata.CurrentVersion,
-			objectIDs,
+			version,
+			objectID,
+			lookup.cfg,
+		))
+	}
+	return results
+}
+
+type reconcileLookupContext struct {
+	provider          providers.Provider
+	destination       destinationRecord
+	destinationConfig providers.DestinationConfig
+	runtimeIdentity   providers.RuntimeIdentity
+	cfg               globalConfig
+}
+
+type reconcileLookupFailure struct {
+	state      domain.SyncState
+	errorClass providers.ErrorClass
+	message    string
+}
+
+func (b *secretSyncBackend) loadReconcileLookupContext(
+	ctx context.Context,
+	storage logical.Storage,
+	association associationRecord,
+	cfg *globalConfig,
+) (reconcileLookupContext, *reconcileLookupFailure) {
+	if !association.Enabled {
+		return reconcileLookupContext{}, newReconcileLookupFailure(
 			domain.SyncStateDisabled,
 			"",
 			"association is disabled",
@@ -153,10 +192,7 @@ func (b *secretSyncBackend) reconcileAssociation(
 	}
 	provider, err := b.providerRegistry.MustGet(association.DestinationType)
 	if err != nil {
-		return reconcileStaticResults(
-			association,
-			metadata.CurrentVersion,
-			objectIDs,
+		return reconcileLookupContext{}, newReconcileLookupFailure(
 			domain.SyncStateValidationError,
 			providers.ErrorClassValidation,
 			"destination provider is unsupported",
@@ -164,52 +200,33 @@ func (b *secretSyncBackend) reconcileAssociation(
 	}
 	destination, err := getDestination(ctx, storage, association.DestinationType, association.DestinationName)
 	if err != nil {
-		return reconcileStaticResults(
-			association,
-			metadata.CurrentVersion,
-			objectIDs,
+		return reconcileLookupContext{}, newReconcileLookupFailure(
 			domain.SyncStateInternalError,
 			providers.ErrorClassInternal,
 			"destination lookup failed",
 		)
 	}
 	if destination == nil {
-		return reconcileStaticResults(
-			association,
-			metadata.CurrentVersion,
-			objectIDs,
+		return reconcileLookupContext{}, newReconcileLookupFailure(
 			domain.SyncStateValidationError,
 			providers.ErrorClassValidation,
 			"destination is missing",
 		)
 	}
 	if destination.Disabled {
-		return reconcileStaticResults(
-			association,
-			metadata.CurrentVersion,
-			objectIDs,
+		return reconcileLookupContext{}, newReconcileLookupFailure(
 			domain.SyncStateDisabled,
 			"",
 			"destination is disabled",
 		)
 	}
-	cfg, err := readGlobalConfig(ctx, storage)
-	if err != nil {
-		return reconcileStaticResults(
-			association,
-			metadata.CurrentVersion,
-			objectIDs,
-			domain.SyncStateInternalError,
-			providers.ErrorClassInternal,
-			"config lookup failed",
-		)
+	lookupCfg, failure := reconcileLookupConfig(ctx, storage, cfg)
+	if failure != nil {
+		return reconcileLookupContext{}, failure
 	}
 	resolvedDestinationConfig, err := destinationConfig(ctx, storage, *destination)
 	if err != nil {
-		return reconcileStaticResults(
-			association,
-			metadata.CurrentVersion,
-			objectIDs,
+		return reconcileLookupContext{}, newReconcileLookupFailure(
 			domain.SyncStateInternalError,
 			providers.ErrorClassInternal,
 			"destination config resolution failed",
@@ -217,29 +234,77 @@ func (b *secretSyncBackend) reconcileAssociation(
 	}
 	runtimeIdentity, err := providerRuntimeIdentity(ctx, storage)
 	if err != nil {
-		return reconcileStaticResults(
-			association,
-			metadata.CurrentVersion,
-			objectIDs,
+		return reconcileLookupContext{}, newReconcileLookupFailure(
 			domain.SyncStateInternalError,
 			providers.ErrorClassInternal,
 			"runtime identity resolution failed",
 		)
 	}
+	return reconcileLookupContext{
+		provider:          provider,
+		destination:       *destination,
+		destinationConfig: resolvedDestinationConfig,
+		runtimeIdentity:   runtimeIdentity,
+		cfg:               lookupCfg,
+	}, nil
+}
+
+func reconcileLookupConfig(
+	ctx context.Context,
+	storage logical.Storage,
+	cfg *globalConfig,
+) (globalConfig, *reconcileLookupFailure) {
+	if cfg != nil {
+		return *cfg, nil
+	}
+	record, err := readGlobalConfig(ctx, storage)
+	if err != nil {
+		return globalConfig{}, newReconcileLookupFailure(
+			domain.SyncStateInternalError,
+			providers.ErrorClassInternal,
+			"config lookup failed",
+		)
+	}
+	return record, nil
+}
+
+func newReconcileLookupFailure(
+	state domain.SyncState,
+	errorClass providers.ErrorClass,
+	message string,
+) *reconcileLookupFailure {
+	return &reconcileLookupFailure{
+		state:      state,
+		errorClass: errorClass,
+		message:    message,
+	}
+}
+
+func (failure reconcileLookupFailure) result(
+	association associationRecord,
+	version int,
+	objectID string,
+) reconcileObjectResult {
+	resolvedName, _ := associationResolvedNameForObject(association, objectID)
+	return newReconcileObjectResult(
+		association,
+		version,
+		objectID,
+		resolvedName,
+		failure.state,
+		failure.errorClass,
+		failure.message,
+	)
+}
+
+func (failure reconcileLookupFailure) results(
+	association associationRecord,
+	version int,
+	objectIDs []string,
+) []reconcileObjectResult {
 	results := make([]reconcileObjectResult, 0, len(objectIDs))
 	for _, objectID := range objectIDs {
-		results = append(results, b.reconcileAssociationObject(
-			ctx,
-			association,
-			provider,
-			*destination,
-			resolvedDestinationConfig,
-			runtimeIdentity,
-			metadata.CurrentVersion,
-			version,
-			objectID,
-			cfg,
-		))
+		results = append(results, failure.result(association, version, objectID))
 	}
 	return results
 }
@@ -507,30 +572,6 @@ func newReconcileObjectResult(
 		errorClass:   errorClass,
 		message:      message,
 	}
-}
-
-func reconcileStaticResults(
-	association associationRecord,
-	version int,
-	objectIDs []string,
-	state domain.SyncState,
-	errorClass providers.ErrorClass,
-	message string,
-) []reconcileObjectResult {
-	results := make([]reconcileObjectResult, 0, len(objectIDs))
-	for _, objectID := range objectIDs {
-		resolvedName, _ := associationResolvedNameForObject(association, objectID)
-		results = append(results, newReconcileObjectResult(
-			association,
-			version,
-			objectID,
-			resolvedName,
-			state,
-			errorClass,
-			message,
-		))
-	}
-	return results
 }
 
 func reconcileObjectResponse(mount string, result reconcileObjectResult) map[string]interface{} { //nolint:forbidigo

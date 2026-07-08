@@ -83,6 +83,88 @@ func TestReconcilePlanRejectsDestinationPolicyBeforeReadState(t *testing.T) {
 	}
 }
 
+func TestLoadReconcileLookupContextFailures(t *testing.T) {
+	testCases := []struct {
+		name        string
+		association associationRecord
+		destination *destinationRecord
+		wantState   domain.SyncState
+		wantClass   providers.ErrorClass
+		wantMessage string
+	}{
+		{
+			name: "association disabled",
+			association: reconcileLookupAssociationFixture(func(record *associationRecord) {
+				record.Enabled = false
+			}),
+			wantState:   domain.SyncStateDisabled,
+			wantMessage: "association is disabled",
+		},
+		{
+			name: "provider unsupported",
+			association: reconcileLookupAssociationFixture(func(record *associationRecord) {
+				record.DestinationType = "unsupported"
+				record.DestinationName = "default"
+				record.DestinationRef = "unsupported/default"
+			}),
+			wantState:   domain.SyncStateValidationError,
+			wantClass:   providers.ErrorClassValidation,
+			wantMessage: "destination provider is unsupported",
+		},
+		{
+			name:        "destination missing",
+			association: reconcileLookupAssociationFixture(),
+			wantState:   domain.SyncStateValidationError,
+			wantClass:   providers.ErrorClassValidation,
+			wantMessage: "destination is missing",
+		},
+		{
+			name:        "destination disabled",
+			association: reconcileLookupAssociationFixture(),
+			destination: &destinationRecord{
+				Type:     providerTypeFake,
+				Name:     "default",
+				Disabled: true,
+			},
+			wantState:   domain.SyncStateDisabled,
+			wantMessage: "destination is disabled",
+		},
+	}
+
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			env := newBackendTestEnv(t)
+			if testCase.destination != nil {
+				if err := putDestination(context.Background(), env.storage, *testCase.destination); err != nil {
+					t.Fatalf("write destination fixture: %v", err)
+				}
+			}
+			cfg := defaultGlobalConfig()
+
+			_, failure := env.b.loadReconcileLookupContext(
+				context.Background(),
+				env.storage,
+				testCase.association,
+				&cfg,
+			)
+			if failure == nil {
+				t.Fatal("loadReconcileLookupContext() failure = nil, want failure")
+			}
+			assertReconcileLookupFailure(t, failure, testCase.wantState, testCase.wantClass, testCase.wantMessage)
+
+			results := failure.results(testCase.association, 7, []string{"username", "password"})
+			if len(results) != 2 {
+				t.Fatalf("failure results = %d, want 2", len(results))
+			}
+			assertReconcileObjectFailure(t, results[0], testCase.wantState, testCase.wantClass, testCase.wantMessage)
+			assertReconcileObjectFailure(t, results[1], testCase.wantState, testCase.wantClass, testCase.wantMessage)
+
+			result := failure.result(testCase.association, 7, "password")
+			assertReconcileObjectFailure(t, result, testCase.wantState, testCase.wantClass, testCase.wantMessage)
+		})
+	}
+}
+
 func TestReconcileApplyMapsReadStateToStatus(t *testing.T) {
 	testCases := []struct {
 		name         string
@@ -178,6 +260,63 @@ func TestReconcileApplyMapsReadStateToStatus(t *testing.T) {
 				t.Fatalf("status contains secret value: %#v", status)
 			}
 		})
+	}
+}
+
+func reconcileLookupAssociationFixture(modifiers ...func(*associationRecord)) associationRecord {
+	record := associationRecord{
+		ID:              "assoc-reconcile-lookup-test",
+		Path:            "app/db",
+		DestinationType: providerTypeFake,
+		DestinationName: "default",
+		DestinationRef:  "fake/default",
+		ResolvedName:    "prod/app/db",
+		Granularity:     syncGranularitySecretPath,
+		Format:          defaultAssociationFormat,
+		DeleteMode:      deleteModeRetain,
+		Enabled:         true,
+	}
+	for _, modifier := range modifiers {
+		modifier(&record)
+	}
+	return record
+}
+
+func assertReconcileLookupFailure(
+	t *testing.T,
+	failure *reconcileLookupFailure,
+	wantState domain.SyncState,
+	wantClass providers.ErrorClass,
+	wantMessage string,
+) {
+	t.Helper()
+	if failure.state != wantState {
+		t.Fatalf("failure state = %s, want %s", failure.state, wantState)
+	}
+	if failure.errorClass != wantClass {
+		t.Fatalf("failure errorClass = %s, want %s", failure.errorClass, wantClass)
+	}
+	if failure.message != wantMessage {
+		t.Fatalf("failure message = %q, want %q", failure.message, wantMessage)
+	}
+}
+
+func assertReconcileObjectFailure(
+	t *testing.T,
+	result reconcileObjectResult,
+	wantState domain.SyncState,
+	wantClass providers.ErrorClass,
+	wantMessage string,
+) {
+	t.Helper()
+	if result.state != wantState {
+		t.Fatalf("result state = %s, want %s", result.state, wantState)
+	}
+	if result.errorClass != wantClass {
+		t.Fatalf("result errorClass = %s, want %s", result.errorClass, wantClass)
+	}
+	if result.message != wantMessage {
+		t.Fatalf("result message = %q, want %q", result.message, wantMessage)
 	}
 }
 
