@@ -144,6 +144,9 @@ func claimOutboxRecord(
 	if err := putOutbox(ctx, storage, record); err != nil {
 		return nil, false, err
 	}
+	// Logical storage does not provide compare-and-swap, so claim ownership is
+	// optimistic: write the claim, then read it back and require the owner,
+	// expiry, and attempt to match before dispatching the operation.
 	claimed, err := getOutbox(ctx, storage, record.ID)
 	if err != nil {
 		return nil, false, err
@@ -1041,6 +1044,10 @@ func (b *secretSyncBackend) commitIfOutboxClaimHeld(
 	b.enqueueMu.Lock()
 	defer b.enqueueMu.Unlock()
 
+	// Provider calls run outside enqueueMu and may outlive their original lease.
+	// Re-check the claim owner and attempt under the enqueue lock before applying
+	// local status or outbox changes, so a reclaimed operation cannot be committed
+	// by the earlier worker.
 	current, err := getOutbox(ctx, storage, record.ID)
 	if err != nil {
 		return false, err

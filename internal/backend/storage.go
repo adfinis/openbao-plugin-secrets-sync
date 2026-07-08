@@ -388,10 +388,15 @@ func putAssociation(ctx context.Context, storage logical.Storage, record associa
 			return err
 		}
 	}
+	// Write secondary indexes before the canonical association record. Readers
+	// tolerate stale indexes, but the record must not become visible before its
+	// destination and name-reservation indexes exist.
 	if err := storage.Put(ctx, entry); err != nil {
 		return err
 	}
 	if existing != nil {
+		// Stale indexes are removed only after the replacement association is
+		// visible, so association updates do not create a lookup gap.
 		return deleteStaleAssociationIndexes(ctx, storage, *existing, record)
 	}
 	return nil
@@ -642,6 +647,9 @@ func deleteOutbox(ctx context.Context, storage logical.Storage, record outboxRec
 		return err
 	}
 	if existing != nil {
+		// The caller may hold an older copy whose state or due-time indexes differ
+		// from storage. Delete both views so claimed/retried records do not leave a
+		// stale queue index behind.
 		return deleteOutboxIndexes(ctx, storage, *existing)
 	}
 	return nil
