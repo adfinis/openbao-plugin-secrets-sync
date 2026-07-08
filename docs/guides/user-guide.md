@@ -74,7 +74,8 @@ bao write secret-sync/data/app/db \
 
 Use `cas=<version>` when you need check-and-set from the CLI. Use the wrapped
 `{"data":{...},"options":{"cas":...}}` body for HTTP clients or when a source
-payload key must be named `data`, `options`, `cas`, or `version`.
+payload key must be named `path`, `data`, `options`, `cas`, or `version`;
+top-level `version` is reserved for reads and is rejected on writes.
 
 Read the latest source version:
 

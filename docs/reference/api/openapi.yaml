@@ -223,7 +223,7 @@ paths:
       tags: [sources]
       operationId: checkSource
       summary: Check source readiness.
-      description: Reports whether a source has an available current version and, when required by config, explicit sync eligibility.
+      description: Reports whether a source has an available current version and, when required by config, explicit opt-in metadata.
       x-openbao-operation: read
       parameters:
         - $ref: "#/components/parameters/SourcePath"
@@ -1326,7 +1326,7 @@ components:
               type: string
             ready:
               type: boolean
-            syncable:
+            source_opt_in_present:
               type: boolean
             source_opt_in_required:
               type: boolean
@@ -1350,7 +1350,7 @@ components:
           required:
             - path
             - ready
-            - syncable
+            - source_opt_in_present
             - source_opt_in_required
             - current_version
             - current_version_available
@@ -1391,7 +1391,7 @@ components:
         delete_version_after:
           type: string
           default: 0s
-          description: Go duration string. Stored for compatibility and future enforcement.
+          description: Go duration string. Only 0s is accepted until timed deletion is implemented.
         custom_metadata:
           type: object
           additionalProperties:
@@ -1448,8 +1448,9 @@ components:
       description: >
         Source writes accept either a wrapped body with data/options or CLI
         shorthand where additional top-level fields become source payload keys.
-        In shorthand mode, data, options, cas, and version are reserved field
-        names.
+        In shorthand mode, path, data, options, cas, and version are reserved
+        field names. cas is the CLI alias for options.cas; version is rejected
+        on writes.
       properties:
         data:
           type: object

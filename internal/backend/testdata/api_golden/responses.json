@@ -182,8 +182,8 @@
   },
   "destinations.read": {
     "data": {
-      "allowed_resolved_name_prefixes": null,
-      "allowed_source_path_prefixes": null,
+      "allowed_resolved_name_prefixes": [],
+      "allowed_source_path_prefixes": [],
       "capabilities": {
         "max_payload_bytes": 1048576,
         "supports_data_map": false,
@@ -468,9 +468,9 @@
       "path": "app/db",
       "queued_operations": 0,
       "ready": false,
+      "source_opt_in_present": false,
       "source_opt_in_required": false,
-      "status_objects": 0,
-      "syncable": false
+      "status_objects": 0
     }
   },
   "sources.check.ready": {
@@ -483,9 +483,9 @@
       "path": "app/db",
       "queued_operations": 0,
       "ready": true,
+      "source_opt_in_present": true,
       "source_opt_in_required": false,
-      "status_objects": 0,
-      "syncable": true
+      "status_objects": 0
     }
   },
   "status.read.pending": {

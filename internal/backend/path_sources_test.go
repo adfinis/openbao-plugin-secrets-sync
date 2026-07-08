@@ -40,6 +40,7 @@ func TestSourceCheckReportsReadiness(t *testing.T) {
 	assertNoErrorResponse(t, initialResp)
 	assertResponseValue(t, initialResp, "ready", false)
 	assertResponseValue(t, initialResp, "source_opt_in_required", false)
+	assertResponseValue(t, initialResp, "source_opt_in_present", false)
 	assertResponseValue(t, initialResp, "current_version", 0)
 	assertStringSlice(t, initialResp.Data["blockers"].([]string), []string{
 		"source_missing",
@@ -64,7 +65,7 @@ func TestSourceCheckReportsReadiness(t *testing.T) {
 	readyResp := env.read("sources/app/db/check")
 	assertNoErrorResponse(t, readyResp)
 	assertResponseValue(t, readyResp, "ready", true)
-	assertResponseValue(t, readyResp, "syncable", true)
+	assertResponseValue(t, readyResp, "source_opt_in_present", true)
 	assertResponseValue(t, readyResp, "association_count", 1)
 	assertResponseValue(t, readyResp, "enabled_association_count", 1)
 	assertResponseValue(t, readyResp, "queued_operations", 1)
@@ -84,6 +85,7 @@ func TestSourceCheckReportsStrictOptInBlocker(t *testing.T) {
 	initialResp := env.read("sources/app/db/check")
 	assertNoErrorResponse(t, initialResp)
 	assertResponseValue(t, initialResp, "source_opt_in_required", true)
+	assertResponseValue(t, initialResp, "source_opt_in_present", false)
 	assertStringSlice(t, initialResp.Data["blockers"].([]string), []string{
 		"source_missing",
 		"source_not_syncable",
@@ -100,6 +102,7 @@ func TestSourceCheckReportsStrictOptInBlocker(t *testing.T) {
 	readyResp := env.read("sources/app/db/check")
 	assertNoErrorResponse(t, readyResp)
 	assertResponseValue(t, readyResp, "ready", true)
+	assertResponseValue(t, readyResp, "source_opt_in_present", true)
 	assertStringSlice(t, readyResp.Data["blockers"].([]string), []string{})
 }
 

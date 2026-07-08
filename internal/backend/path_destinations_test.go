@@ -187,6 +187,8 @@ func TestDestinationLifecycle(t *testing.T) {
 	readResp := env.read("destinations/fake/primary")
 	assertNoErrorResponse(t, readResp)
 	assertResponseValue(t, readResp, "name", "primary")
+	assertStringSlice(t, readResp.Data[destinationAllowedSourcePathPrefixesField].([]string), []string{})
+	assertStringSlice(t, readResp.Data[destinationAllowedResolvedNamePrefixesField].([]string), []string{})
 	if _, ok := readResp.Data["sensitive_config"]; !ok {
 		t.Fatal("destination read must include redacted sensitive_config")
 	}

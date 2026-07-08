@@ -541,6 +541,9 @@ func payloadFromField(data *framework.FieldData) (secretPayload, error) {
 		}
 		return secretPayloadFromMap(rawPayload)
 	}
+	if err := rejectReservedShorthandPayloadFields(data); err != nil {
+		return nil, err
+	}
 
 	payload := make(secretPayload)
 	for key, value := range data.Raw {
@@ -553,6 +556,32 @@ func payloadFromField(data *framework.FieldData) (secretPayload, error) {
 		return nil, fmt.Errorf("data must contain at least one key")
 	}
 	return payload, nil
+}
+
+func rejectReservedShorthandPayloadFields(data *framework.FieldData) error {
+	reserved := []string{}
+	if _, ok := data.Raw["options"]; ok {
+		reserved = append(reserved, "options")
+	}
+	if _, ok := data.Raw["version"]; ok {
+		reserved = append(reserved, "version")
+	}
+	if rawPath, ok := data.Raw["path"]; ok {
+		routePath, _ := data.Get("path").(string)
+		pathValue, valueOK := rawPath.(string)
+		if !valueOK || pathValue != routePath {
+			reserved = append(reserved, "path")
+		}
+	}
+	if len(reserved) == 0 {
+		return nil
+	}
+	sort.Strings(reserved)
+	return fmt.Errorf(
+		"reserved data write field %s cannot be used as a shorthand source payload key; "+
+			"put colliding source keys under data",
+		strings.Join(reserved, ", "),
+	)
 }
 
 func rejectMixedWrappedPayload(raw map[string]interface{}) error { //nolint:forbidigo // OpenBao framework boundary.
