@@ -11,14 +11,14 @@ and runtime identity.
 `backend.go` registers these path groups:
 
 - `info`: defaults, registered providers, and provider capability summaries.
-- `config`: mount-wide pause, restore guard, source opt-in, queue capacity,
+- `config`: mount-wide security posture, pause, restore guard, queue capacity,
   drift work, and event dispatch settings.
 - `destinations`: destination configuration, destination checks, provider
   defaults, provider capabilities, and destination policy fields.
 - `associations`: association plan, create/update/read/list/delete, enable,
   disable, and manual sync.
 - `metadata`: source metadata create/update/read/list/delete.
-- `sources`: source eligibility check and source opt-in helper.
+- `sources`: source eligibility check and source sync enable/disable helpers.
 - `data`: source data create/update/read/delete.
 - `delete`, `undelete`, `destroy`: source version lifecycle mutations.
 - `status`: per-source sync status summary.
@@ -40,7 +40,7 @@ Before committing a source write that can enqueue sync work, the backend:
 2. locks the source path;
 3. loads metadata and applies CAS rules;
 4. identifies enabled associations for the path;
-5. checks source eligibility when strict source opt-in is enabled;
+5. checks source eligibility in hardened posture;
 6. checks queue capacity;
 7. writes enqueue intent;
 8. writes source version and metadata;
@@ -80,9 +80,9 @@ The API accepts the compact `destination=<type>/<name>` selector. The backend
 stores normalized destination type, destination name, and destination reference
 on the association record.
 
-Enabled associations require source eligibility when
-`require_source_opt_in=true`. Mounts default that setting to `false`. In strict
-mode, eligibility requires source custom metadata `syncable=true`.
+Enabled associations require source eligibility in hardened posture. Mounts
+default `security_posture=standard`; in hardened posture, eligibility requires
+source sync to be explicitly enabled.
 
 The backend validates association requests against provider capabilities before
 it accepts them. Capability checks cover secret-path support, secret-key

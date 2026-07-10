@@ -21,7 +21,7 @@ func TestAssociationSecretKeyQueuesAndSyncsPerSourceKey(t *testing.T) {
 		"username": "appuser",
 	})
 	env.createFakeDestination("default")
-	env.markAppDBSyncable()
+	env.enableAppDBSourceSync()
 
 	planResp := env.update("associations/app/db/plan", map[string]interface{}{
 		"destination":   destinationRef(providerTypeFake, "default"),
@@ -88,7 +88,7 @@ func TestAssociationSecretKeyRawFormat(t *testing.T) {
 		"PASSWORD": "initial",
 	})
 	env.createFakeDestination("default")
-	env.markAppDBSyncable()
+	env.enableAppDBSourceSync()
 
 	resp := env.update("associations/app/db/plan", map[string]interface{}{
 		"destination":   destinationRef(providerTypeFake, "default"),
@@ -112,7 +112,7 @@ func TestAssociationRawFormatRequiresSecretKey(t *testing.T) {
 		"password": "initial",
 	})
 	env.createFakeDestination("default")
-	env.markAppDBSyncable()
+	env.enableAppDBSourceSync()
 
 	resp := env.update("associations/app/db", map[string]interface{}{
 		"destination":   destinationRef(providerTypeFake, "default"),
@@ -139,7 +139,7 @@ func TestAssociationGitLabSecretKeyRawFormat(t *testing.T) {
 	if writeResp != nil && writeResp.IsError() {
 		t.Fatalf("unexpected gitlab destination write error: %v", writeResp.Error())
 	}
-	env.markAppDBSyncable()
+	env.enableAppDBSourceSync()
 
 	resp := env.update("associations/app/db", map[string]interface{}{
 		"destination":   destinationRef(gitlab.ProviderType, "prod"),
@@ -172,7 +172,7 @@ func TestAssociationSecretKeyReservesRenderedNamePattern(t *testing.T) {
 		"password": "initial",
 	})
 	env.createFakeDestination("default")
-	env.markAppDBSyncable()
+	env.enableAppDBSourceSync()
 	firstResp := env.update("associations/app/db", map[string]interface{}{
 		"destination":   destinationRef(providerTypeFake, "default"),
 		"name_template": "{{ path }}/{{ key }}",
@@ -186,7 +186,7 @@ func TestAssociationSecretKeyReservesRenderedNamePattern(t *testing.T) {
 			"password": "other",
 		},
 	})
-	env.markSourceSyncable("app")
+	env.enableSourceSync("app")
 	secondResp := env.update("associations/app", map[string]interface{}{
 		"destination":   destinationRef(providerTypeFake, "default"),
 		"name_template": "/app/db/{{ key }}/",
@@ -210,7 +210,7 @@ func TestAssociationSecretKeyReservesConcreteRenderedNames(t *testing.T) {
 		},
 	})
 	env.createFakeDestination("default")
-	env.markSourceSyncable("left")
+	env.enableSourceSync("left")
 	firstResp := env.update("associations/left", map[string]interface{}{
 		"destination":   destinationRef(providerTypeFake, "default"),
 		"name_template": "a{{ key }}",
@@ -224,7 +224,7 @@ func TestAssociationSecretKeyReservesConcreteRenderedNames(t *testing.T) {
 			"a": "right",
 		},
 	})
-	env.markSourceSyncable("right")
+	env.enableSourceSync("right")
 	secondResp := env.update("associations/right", map[string]interface{}{
 		"destination":   destinationRef(providerTypeFake, "default"),
 		"name_template": "{{ key }}a",
@@ -248,7 +248,7 @@ func TestAssociationSecretKeySourceWriteRejectsNewConcreteNameCollision(t *testi
 		},
 	})
 	env.createFakeDestination("default")
-	env.markSourceSyncable("left")
+	env.enableSourceSync("left")
 	firstResp := env.update("associations/left", map[string]interface{}{
 		"destination":   destinationRef(providerTypeFake, "default"),
 		"name_template": "a{{ key }}",
@@ -262,7 +262,7 @@ func TestAssociationSecretKeySourceWriteRejectsNewConcreteNameCollision(t *testi
 			"b": "right",
 		},
 	})
-	env.markSourceSyncable("right")
+	env.enableSourceSync("right")
 	secondResp := env.update("associations/right", map[string]interface{}{
 		"destination":   destinationRef(providerTypeFake, "default"),
 		"name_template": "{{ key }}x",
@@ -337,7 +337,7 @@ func TestAssociationSecretKeyValidation(t *testing.T) {
 		"password": "initial",
 	})
 	env.createFakeDestination("default")
-	env.markAppDBSyncable()
+	env.enableAppDBSourceSync()
 
 	resolvedNameResp := env.update(
 		"associations/app/db",

@@ -28,8 +28,7 @@ func TestConfigDefaults(t *testing.T) {
 	if got := resp.Data["restore_guard_acknowledged_time"]; got == "" {
 		t.Fatal("restore_guard_acknowledged_time must be set for fresh mounts")
 	}
-	assertResponseValue(t, resp, "require_source_opt_in", false)
-	assertResponseValue(t, resp, "delegated_mode", false)
+	assertResponseValue(t, resp, "security_posture", securityPostureStandard)
 	assertResponseValue(t, resp, "drift_repair", driftRepairOff)
 	assertResponseValue(t, resp, "drift_reconcile_interval", defaultDriftInterval)
 	assertResponseValue(t, resp, "drift_reconcile_batch", defaultDriftBatch)
@@ -58,8 +57,7 @@ func TestConfigInitializesDefaultsForExistingStorageWithoutConfig(t *testing.T) 
 	if got := resp.Data["restore_guard_acknowledged_time"]; got == "" {
 		t.Fatal("restore_guard_acknowledged_time must be set")
 	}
-	assertResponseValue(t, resp, "require_source_opt_in", false)
-	assertResponseValue(t, resp, "delegated_mode", false)
+	assertResponseValue(t, resp, "security_posture", securityPostureStandard)
 	assertResponseValue(t, resp, "queue_capacity", defaultQueueCapacity)
 	assertResponseValue(t, resp, "drift_repair", driftRepairOff)
 	assertResponseValue(t, resp, "drift_reconcile_interval", defaultDriftInterval)
@@ -84,8 +82,7 @@ func TestConfigDecodesMissingOptionalFieldsAsDefaults(t *testing.T) {
 	resp := env.read(configPath)
 	assertNoErrorResponse(t, resp)
 	assertResponseValue(t, resp, "restore_guard", false)
-	assertResponseValue(t, resp, "require_source_opt_in", false)
-	assertResponseValue(t, resp, "delegated_mode", false)
+	assertResponseValue(t, resp, "security_posture", securityPostureStandard)
 	assertResponseValue(t, resp, "queue_capacity", 0)
 	assertResponseValue(t, resp, "drift_repair", driftRepairOff)
 	assertResponseValue(t, resp, "drift_reconcile_interval", defaultDriftInterval)
@@ -96,12 +93,6 @@ func TestConfigDecodesMissingOptionalFieldsAsDefaults(t *testing.T) {
 	cfg, err := readGlobalConfig(context.Background(), env.storage)
 	if err != nil {
 		t.Fatalf("read config: %v", err)
-	}
-	if cfg.RequireSourceOptIn {
-		t.Fatal("missing require_source_opt_in must decode as false")
-	}
-	if cfg.DelegatedMode {
-		t.Fatal("missing delegated_mode must decode as false")
 	}
 	if cfg.QueueCapacity != 0 {
 		t.Fatalf("queue_capacity = %d, want 0", cfg.QueueCapacity)
@@ -132,8 +123,7 @@ func TestConfigWriteMergesDefaultsAndValidatesQueueCapacity(t *testing.T) {
 	assertNoErrorResponse(t, readResp)
 	assertResponseValue(t, readResp, "queue_capacity", 12)
 	assertResponseValue(t, readResp, "restore_guard", false)
-	assertResponseValue(t, readResp, "require_source_opt_in", false)
-	assertResponseValue(t, readResp, "delegated_mode", false)
+	assertResponseValue(t, readResp, "security_posture", securityPostureStandard)
 	assertResponseValue(t, readResp, "drift_repair", driftRepairOff)
 	assertResponseValue(t, readResp, "drift_reconcile_interval", defaultDriftInterval)
 	assertResponseValue(t, readResp, "drift_reconcile_batch", defaultDriftBatch)
@@ -141,8 +131,7 @@ func TestConfigWriteMergesDefaultsAndValidatesQueueCapacity(t *testing.T) {
 	assertResponseValue(t, readResp, "event_dispatch_max_operations", defaultEventDispatchMaxOperations)
 
 	zeroResp := env.update(configPath, map[string]interface{}{
-		"queue_capacity":        0,
-		"require_source_opt_in": true,
+		"queue_capacity": 0,
 	})
 	if zeroResp != nil && zeroResp.IsError() {
 		t.Fatalf("unexpected zero queue_capacity error: %v", zeroResp.Error())
@@ -150,7 +139,6 @@ func TestConfigWriteMergesDefaultsAndValidatesQueueCapacity(t *testing.T) {
 	readZeroResp := env.read(configPath)
 	assertNoErrorResponse(t, readZeroResp)
 	assertResponseValue(t, readZeroResp, "queue_capacity", 0)
-	assertResponseValue(t, readZeroResp, "require_source_opt_in", true)
 
 	negativeResp := env.update(configPath, map[string]interface{}{
 		"queue_capacity": -1,
@@ -160,36 +148,55 @@ func TestConfigWriteMergesDefaultsAndValidatesQueueCapacity(t *testing.T) {
 	}
 }
 
-func TestConfigWriteValidatesDelegatedModeRequiresSourceOptIn(t *testing.T) {
+func TestConfigWriteRejectsUnknownFields(t *testing.T) {
 	env := newBackendTestEnv(t)
 
-	delegatedOnlyResp := env.update(configPath, map[string]interface{}{
-		"delegated_mode": true,
+	resp := env.update(configPath, map[string]interface{}{
+		"unexpected": true,
 	})
-	if delegatedOnlyResp == nil || !delegatedOnlyResp.IsError() {
-		t.Fatalf("delegated_mode without source opt-in response = %#v, want error", delegatedOnlyResp)
+	if resp == nil || !resp.IsError() {
+		t.Fatalf("unknown config field response = %#v, want error", resp)
 	}
-	if !strings.Contains(delegatedOnlyResp.Error().Error(), "require_source_opt_in=true") {
-		t.Fatalf("delegated_mode error = %q", delegatedOnlyResp.Error().Error())
+	if !strings.Contains(resp.Error().Error(), `unknown config field "unexpected"`) {
+		t.Fatalf("unknown config field error = %q", resp.Error().Error())
 	}
+}
 
-	enableResp := env.update(configPath, map[string]interface{}{
-		"require_source_opt_in": true,
-		"delegated_mode":        true,
+func TestConfigWriteSecurityPosture(t *testing.T) {
+	env := newBackendTestEnv(t)
+
+	hardenResp := env.update(configPath, map[string]interface{}{
+		"security_posture": securityPostureHardened,
 	})
-	if enableResp != nil && enableResp.IsError() {
-		t.Fatalf("unexpected delegated mode config write error: %v", enableResp.Error())
+	if hardenResp != nil && hardenResp.IsError() {
+		t.Fatalf("unexpected hardened posture config write error: %v", hardenResp.Error())
 	}
 	readResp := env.read(configPath)
 	assertNoErrorResponse(t, readResp)
-	assertResponseValue(t, readResp, "require_source_opt_in", true)
-	assertResponseValue(t, readResp, "delegated_mode", true)
+	assertResponseValue(t, readResp, "security_posture", securityPostureHardened)
 
-	disableSourceOptInResp := env.update(configPath, map[string]interface{}{
-		"require_source_opt_in": false,
+	relaxResp := env.update(configPath, map[string]interface{}{
+		"security_posture": securityPostureStandard,
 	})
-	if disableSourceOptInResp == nil || !disableSourceOptInResp.IsError() {
-		t.Fatalf("disable source opt-in while delegated response = %#v, want error", disableSourceOptInResp)
+	if relaxResp != nil && relaxResp.IsError() {
+		t.Fatalf("unexpected standard posture config write error: %v", relaxResp.Error())
+	}
+	relaxedReadResp := env.read(configPath)
+	assertNoErrorResponse(t, relaxedReadResp)
+	assertResponseValue(t, relaxedReadResp, "security_posture", securityPostureStandard)
+}
+
+func TestConfigWriteRejectsUnknownSecurityPosture(t *testing.T) {
+	env := newBackendTestEnv(t)
+
+	resp := env.update(configPath, map[string]interface{}{
+		"security_posture": "strict",
+	})
+	if resp == nil || !resp.IsError() {
+		t.Fatalf("unknown security posture response = %#v, want error", resp)
+	}
+	if !strings.Contains(resp.Error().Error(), "security_posture must be standard or hardened") {
+		t.Fatalf("unknown security posture error = %q", resp.Error().Error())
 	}
 }
 

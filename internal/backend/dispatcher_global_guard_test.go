@@ -49,7 +49,7 @@ func runDispatchRechecksGlobalSwitchBeforeEachClaim(
 		"password": "initial",
 		"username": "appuser",
 	})
-	env.markAppDBSyncable()
+	env.enableAppDBSourceSync()
 	destinationResp := env.update("destinations/guard/prod")
 	if destinationResp != nil && destinationResp.IsError() {
 		t.Fatalf("unexpected destination write error: %v", destinationResp.Error())

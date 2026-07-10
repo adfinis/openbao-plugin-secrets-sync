@@ -80,6 +80,7 @@ func TestStorageRecordJSONTags(t *testing.T) {
 				"MaxVersions:max_versions",
 				"CASRequired:cas_required",
 				"DeleteVersionAfter:delete_version_after",
+				"SourceSyncEnabled:source_sync_enabled",
 				"CustomMetadata:custom_metadata",
 				"Versions:versions",
 				"UpdatedTime:updated_time",

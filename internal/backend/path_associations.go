@@ -1369,7 +1369,7 @@ func validateDestinationPolicyForObject(
 const destinationUnconstrainedBlocker = "destination_unconstrained"
 
 func destinationDelegationConstraintBlockers(destination destinationRecord, cfg globalConfig) []string {
-	if !cfg.DelegatedMode || destinationHasDelegationConstraints(destination) {
+	if !destinationConstraintsRequired(cfg) || destinationHasDelegationConstraints(destination) {
 		return nil
 	}
 	return []string{destinationUnconstrainedBlocker}
@@ -1389,7 +1389,8 @@ func validateDestinationDelegationConstraints(
 		return nil
 	}
 	return fmt.Errorf(
-		"%s: delegated_mode requires destination %s to set allowed_source_path_prefixes and allowed_resolved_name_prefixes",
+		"%s: security_posture=hardened requires destination %s to set "+
+			"allowed_source_path_prefixes and allowed_resolved_name_prefixes",
 		destinationUnconstrainedBlocker,
 		record.DestinationRef,
 	)
@@ -1431,12 +1432,25 @@ func (b *secretSyncBackend) enqueueAssociationCurrentVersion(
 	metadata metadataRecord,
 	now string,
 ) ([]string, error) {
-	version, err := currentVersionRecord(ctx, storage, record.Path, metadata)
+	return b.enqueueAssociationsCurrentVersion(ctx, storage, []associationRecord{record}, metadata, now)
+}
+
+func (b *secretSyncBackend) enqueueAssociationsCurrentVersion(
+	ctx context.Context,
+	storage logical.Storage,
+	records []associationRecord,
+	metadata metadataRecord,
+	now string,
+) ([]string, error) {
+	if len(records) == 0 {
+		return []string{}, nil
+	}
+	version, err := currentVersionRecord(ctx, storage, records[0].Path, metadata)
 	if err != nil {
 		return nil, err
 	}
 	operations, operationIDs, err := newAssociationOutboxRecords(
-		[]associationRecord{record},
+		records,
 		metadata.Generation,
 		metadata.CurrentVersion,
 		version.Data,
@@ -1472,7 +1486,7 @@ func (b *secretSyncBackend) enqueueAssociationCurrentVersion(
 	if err := putPendingEnqueueIntent(
 		ctx,
 		storage,
-		record.Path,
+		records[0].Path,
 		metadata.Generation,
 		metadata.CurrentVersion,
 		operations,
@@ -1487,7 +1501,7 @@ func (b *secretSyncBackend) enqueueAssociationCurrentVersion(
 	if err := completeEnqueueIntent(
 		ctx,
 		storage,
-		record.Path,
+		records[0].Path,
 		metadata.CurrentVersion,
 		operations,
 		now,
@@ -2178,12 +2192,12 @@ func validateAssociationActivation(record associationRecord, metadata *metadataR
 }
 
 func validateSourceEligibility(metadata *metadataRecord, cfg globalConfig) error {
-	if !cfg.RequireSourceOptIn {
+	if !sourceSyncRequired(cfg) {
 		return nil
 	}
-	if metadata == nil || metadata.CustomMetadata[sourceMetadataKeySyncable] != sourceMetadataValueTrue {
+	if metadata == nil || !metadata.SourceSyncEnabled {
 		return fmt.Errorf(
-			"source path is not eligible for sync: custom_metadata.syncable must be true when require_source_opt_in=true",
+			"source path is not eligible for sync: source sync must be enabled when security_posture=hardened",
 		)
 	}
 	return nil

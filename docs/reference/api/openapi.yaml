@@ -223,7 +223,7 @@ paths:
       tags: [sources]
       operationId: checkSource
       summary: Check source readiness.
-      description: Reports whether a source has an available current version and, when required by config, explicit opt-in metadata.
+      description: Reports whether a source has an available current version and, when required by hardened posture, source sync enabled.
       x-openbao-operation: read
       parameters:
         - $ref: "#/components/parameters/SourcePath"
@@ -239,17 +239,34 @@ paths:
     post:
       tags: [sources]
       operationId: enableSource
-      summary: Mark a source path as syncable.
+      summary: Enable source sync and enqueue current source work.
+      description: Enables source sync for the path and, when the state changes, enqueues the current source version for enabled associations with active destinations.
       x-openbao-operation: update
       parameters:
         - $ref: "#/components/parameters/SourcePath"
       responses:
         "200":
-          description: Source eligibility metadata.
+          description: Source sync metadata.
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/SourceEnableResponse"
+                $ref: "#/components/schemas/SourceSyncResponse"
+
+  /sources/{path}/disable:
+    post:
+      tags: [sources]
+      operationId: disableSource
+      summary: Disable source sync for a path.
+      x-openbao-operation: update
+      parameters:
+        - $ref: "#/components/parameters/SourcePath"
+      responses:
+        "200":
+          description: Source sync metadata.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SourceSyncResponse"
 
   /metadata:
     get:
@@ -947,6 +964,11 @@ components:
     ConfigWriteRequest:
       type: object
       properties:
+        security_posture:
+          type: string
+          enum: [standard, hardened]
+          default: standard
+          description: Mount-wide posture. standard preserves platform-operated defaults; hardened requires source sync enablement and constrained destinations.
         disabled:
           type: boolean
           description: Pause background remote mutations when true.
@@ -958,12 +980,6 @@ components:
           minimum: 0
           default: 1000
           description: Maximum queued operations; 0 rejects new enqueue-producing writes.
-        require_source_opt_in:
-          type: boolean
-          description: Require custom_metadata.syncable=true before enabled associations can enqueue or dispatch remote mutation.
-        delegated_mode:
-          type: boolean
-          description: Require delegated-mode guardrails. Requires require_source_opt_in=true and constrained destinations.
         drift_repair:
           type: string
           enum: [off, detect, repair]
@@ -999,6 +1015,10 @@ components:
     Config:
       type: object
       properties:
+        security_posture:
+          type: string
+          enum: [standard, hardened]
+          description: Mount-wide posture. standard preserves platform-operated defaults; hardened requires source sync enablement and constrained destinations.
         disabled:
           type: boolean
         restore_guard:
@@ -1016,12 +1036,6 @@ components:
         queue_capacity:
           type: integer
           description: Maximum queued operations; 0 rejects new enqueue-producing writes.
-        require_source_opt_in:
-          type: boolean
-          description: Whether source syncable metadata is required before enabled associations can enqueue or dispatch remote mutation.
-        delegated_mode:
-          type: boolean
-          description: Whether delegated association guardrails are enforced for destination constraints.
         drift_repair:
           type: string
           enum: [off, detect, repair]
@@ -1326,9 +1340,9 @@ components:
               type: string
             ready:
               type: boolean
-            source_opt_in_present:
+            source_sync_enabled:
               type: boolean
-            source_opt_in_required:
+            source_sync_required:
               type: boolean
             current_version:
               type: integer
@@ -1346,12 +1360,12 @@ components:
               type: array
               items:
                 type: string
-                enum: [source_missing, current_version_unavailable, source_not_syncable]
+                enum: [source_missing, current_version_unavailable, source_sync_not_enabled]
           required:
             - path
             - ready
-            - source_opt_in_present
-            - source_opt_in_required
+            - source_sync_enabled
+            - source_sync_required
             - current_version
             - current_version_available
             - association_count
@@ -1361,7 +1375,7 @@ components:
             - blockers
       required: [data]
 
-    SourceEnableResponse:
+    SourceSyncResponse:
       type: object
       properties:
         data:
@@ -1369,13 +1383,21 @@ components:
           properties:
             path:
               type: string
-            syncable:
+            source_sync_enabled:
               type: boolean
             changed:
               type: boolean
+            sync_operation_ids:
+              type: array
+              items:
+                type: string
+              description: Operations enqueued by source enablement. Present only on enable responses.
+            sync_state:
+              type: string
+              description: PENDING when source enablement enqueued work; otherwise NO_ASSOCIATION. Present only on enable responses.
             metadata:
               $ref: "#/components/schemas/Metadata"
-          required: [path, syncable, changed, metadata]
+          required: [path, source_sync_enabled, changed, metadata]
       required: [data]
 
     MetadataWriteRequest:
@@ -1422,6 +1444,8 @@ components:
           type: object
           additionalProperties:
             type: string
+        source_sync_enabled:
+          type: boolean
         updated_time:
           type: string
         versions:

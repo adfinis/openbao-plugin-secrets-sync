@@ -1,8 +1,8 @@
 # AWS Secrets Manager secret shapes
 
-Fresh mounts default `require_source_opt_in=false`; if strict source opt-in is
-enabled, mark the source with `sources/<path>/enable` before creating an
-enabled association. Use the [user guide](../../guides/user-guide.md) for
+Fresh mounts default `security_posture=standard`; in hardened posture, mark the
+source with `sources/<path>/enable` before creating an enabled association. Use
+the [user guide](../../guides/user-guide.md) for
 generic association lifecycle commands and
 [Templating](../../concepts/templating.md) for name placeholder behavior.
 

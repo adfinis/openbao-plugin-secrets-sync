@@ -108,8 +108,8 @@ path "secret-sync/metadata/*" {
 ## App writer
 
 App writers manage source payloads and source metadata for their own prefix.
-Grant `sources/<path>/enable` when app writers may mark their own source path
-as syncable.
+Grant `sources/<path>/enable` when app writers may enable sync for their own
+source path.
 
 ```hcl
 path "secret-sync/info" {
@@ -162,17 +162,17 @@ Delegated association owners create and manage associations for their own
 source prefix. Combine this policy with app reader or app writer access when
 the delegated owner also needs source payload access.
 
-Before granting this policy, enable delegated mode and strict source opt-in:
+Before granting this policy, enable hardened posture:
 
 ```sh
-bao write secret-sync/config require_source_opt_in=true delegated_mode=true
+bao write secret-sync/config security_posture=hardened
 ```
 
 Constrain every delegated destination with `allowed_source_path_prefixes` and
 `allowed_resolved_name_prefixes` so delegated owners cannot use a shared
-destination for unrelated source paths or remote names. In delegated mode, the
-backend rejects association create, enable, manual sync, reconcile, and queued
-dispatch through unconstrained destinations.
+destination for unrelated source paths or remote names. In hardened posture,
+the backend rejects association create, enable, manual sync, reconcile, and
+queued dispatch through unconstrained destinations.
 
 ```hcl
 path "secret-sync/info" {
@@ -267,7 +267,7 @@ The backend checks these constraints during association plan, association
 activation, manual sync, enable, manual reconcile, background drift read-state,
 and queued dispatch.
 
-Destination checks report `destination_unconstrained` when delegated mode is
+Destination checks report `destination_unconstrained` when hardened posture is
 enabled and either constraint list is empty:
 
 ```sh

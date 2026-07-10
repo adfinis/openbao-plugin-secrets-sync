@@ -55,17 +55,16 @@ func TestDestinationCheckReportsReady(t *testing.T) {
 	assertStringSlice(t, readyResp.Data["blockers"].([]string), []string{})
 }
 
-func TestDestinationCheckReportsDelegatedModeUnconstrained(t *testing.T) {
+func TestDestinationCheckReportsHardenedPostureUnconstrained(t *testing.T) {
 	env := newBackendTestEnv(t)
 
+	env.createFakeDestination("primary")
 	cfgResp := env.update(configPath, map[string]interface{}{
-		"require_source_opt_in": true,
-		"delegated_mode":        true,
+		"security_posture": securityPostureHardened,
 	})
 	if cfgResp != nil && cfgResp.IsError() {
 		t.Fatalf("unexpected config write error: %v", cfgResp.Error())
 	}
-	env.createFakeDestination("primary")
 
 	readyResp := env.read("destinations/fake/primary/check")
 	assertNoErrorResponse(t, readyResp)
@@ -88,6 +87,36 @@ func TestDestinationCheckReportsDelegatedModeUnconstrained(t *testing.T) {
 	assertNoErrorResponse(t, constrainedResp)
 	assertResponseValue(t, constrainedResp, "ready", true)
 	assertStringSlice(t, constrainedResp.Data["blockers"].([]string), []string{})
+}
+
+func TestHardenedPostureRejectsUnconstrainedDestinationWrite(t *testing.T) {
+	env := newBackendTestEnv(t)
+
+	cfgResp := env.update(configPath, map[string]interface{}{
+		"security_posture": securityPostureHardened,
+	})
+	if cfgResp != nil && cfgResp.IsError() {
+		t.Fatalf("unexpected config write error: %v", cfgResp.Error())
+	}
+
+	unconstrainedResp := env.update("destinations/fake/primary", map[string]interface{}{
+		"description": "unconstrained",
+	})
+	if unconstrainedResp == nil || !unconstrainedResp.IsError() {
+		t.Fatalf("unconstrained destination response = %#v, want error", unconstrainedResp)
+	}
+	if !strings.Contains(unconstrainedResp.Error().Error(), "security_posture=hardened") {
+		t.Fatalf("unconstrained destination error = %q", unconstrainedResp.Error().Error())
+	}
+
+	constrainedResp := env.update("destinations/fake/primary", map[string]interface{}{
+		"description": "constrained",
+		destinationAllowedSourcePathPrefixesField:   "app",
+		destinationAllowedResolvedNamePrefixesField: "prod/app/",
+	})
+	if constrainedResp != nil && constrainedResp.IsError() {
+		t.Fatalf("unexpected constrained destination write error: %v", constrainedResp.Error())
+	}
 }
 
 func TestDestinationCheckReportsValidationFailure(t *testing.T) {

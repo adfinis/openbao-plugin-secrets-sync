@@ -162,8 +162,8 @@ bao write secret-sync/destinations/aws-sm/prod \
   delete_recovery_window_days=7
 ```
 
-Create a source secret. Fresh mounts default `require_source_opt_in=false`, so
-metadata opt-in is not required unless you enable strict source opt-in in
+Create a source secret. Fresh mounts default `security_posture=standard`, so
+source sync enablement is not required unless you enable hardened posture in
 `secret-sync/config`.
 
 ```sh

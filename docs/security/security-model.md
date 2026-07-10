@@ -53,29 +53,30 @@ reconcile/<path>                platform operators when applying status refresh
 Use [Policy examples](policies.md) for concrete OpenBao policy snippets.
 
 Association creation is the highest-risk authorization operation because it
-causes a secret to leave OpenBao. It requires destination authority and, when
-`require_source_opt_in=true`, source eligibility.
+causes a secret to leave OpenBao. It requires destination authority and, in
+hardened posture, source eligibility.
 
-Fresh mounts start in platform-operated mode with `delegated_mode=false`. In
-that mode, a trusted platform operator may own both `destinations/*` and
-`associations/*`, and unconstrained destinations are valid for operator-managed
-sync. When application owners receive association-management policy for their
-own source prefixes, operators should enable `delegated_mode=true` and
-`require_source_opt_in=true`.
+Fresh mounts start with `security_posture=standard`. In that mode, a trusted
+platform operator may own both `destinations/*` and `associations/*`, and
+unconstrained destinations are valid for operator-managed sync. When
+application owners receive association-management policy for their own source
+prefixes, operators should set `security_posture=hardened`.
 
 Source eligibility is local source metadata, not an implicit source-read
-permission check. When strict source opt-in is enabled, the backend requires
-`custom_metadata.syncable=true` before an enabled association can enqueue or
-dispatch sync work. OpenBao policy must therefore control who can update
-`metadata/<path>` or call `sources/<path>/enable`.
+permission check. In hardened posture, the backend requires
+source sync to be explicitly enabled before an enabled association can enqueue
+or dispatch sync work. OpenBao policy must therefore control who can call
+`sources/<path>/enable` and `sources/<path>/disable`.
 
 Delegated association owners do not need source payload read access unless the
 deployment also wants them to inspect the secret value. Combine delegated
 association access with app reader or writer policy only when that is intended.
-`delegated_mode=true` makes this self-service model enforceable: association
-create, enable, manual sync, reconcile, and queued dispatch refuse destinations
-whose `allowed_source_path_prefixes` or `allowed_resolved_name_prefixes` are
-empty, returning the `destination_unconstrained` blocker.
+`security_posture=hardened` makes this self-service model enforceable:
+association create, enable, manual sync, reconcile, and queued dispatch refuse
+destinations whose `allowed_source_path_prefixes` or
+`allowed_resolved_name_prefixes` are empty, returning the
+`destination_unconstrained` blocker. Hardened posture also rejects writes that
+would create or update an unconstrained destination.
 
 Destination authority can be proven through:
 
@@ -96,10 +97,10 @@ all due operations in the queue.
 
 Implemented controls:
 
-- optional `custom_metadata.syncable=true` before enabled association
-  activation when `require_source_opt_in=true`;
-- opt-in `delegated_mode=true`, which requires strict source opt-in and
-  constrained destinations for delegated association use;
+- explicit source sync enablement before enabled association activation in
+  hardened posture;
+- opt-in `security_posture=hardened`, which requires constrained destinations
+  for delegated association use;
 - destination-level allowed source path prefixes;
 - destination-level allowed resolved remote-name prefixes;
 - required ownership metadata;
@@ -107,7 +108,7 @@ Implemented controls:
 
 Delegated app owners must not be able to use a broad platform destination to
 write arbitrary remote names. Destination records can constrain source paths and
-resolved remote-name prefixes. In delegated mode, both constraint lists must be
+resolved remote-name prefixes. In hardened posture, both constraint lists must be
 present. The configured constraints are checked during association plan,
 association activation, manual sync, enable, manual reconcile, background drift
 read-state, and queued dispatch, so a destination policy tightened after enqueue

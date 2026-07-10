@@ -38,6 +38,8 @@ var apiGoldenOpenAPIResponseSchemas = map[string]string{
 	"reconcile.plan.synced":     "ReconcileResponse",
 	"sources.check.empty":       "SourceCheckResponse",
 	"sources.check.ready":       "SourceCheckResponse",
+	"sources.disable":           "SourceSyncResponse",
+	"sources.enable":            "SourceSyncResponse",
 	"status.read.pending":       "StatusResponse",
 	"status.read.synced":        "StatusResponse",
 }

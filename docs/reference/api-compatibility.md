@@ -30,7 +30,7 @@ The source API is not a strict client compatibility layer:
   sync state;
 - metadata deletion is blocked while associations exist;
 - association activation may require source eligibility metadata when
-  `require_source_opt_in=true`;
+  `security_posture=hardened`;
 - sync-specific paths such as `destinations/*`, `associations/*`, `queue/*`,
   and `status/*` are part of the engine contract;
 - exact KV-v2 wire compatibility must be proven by golden tests before it is
@@ -115,7 +115,6 @@ Metadata writes support:
   "cas_required": true,
   "delete_version_after": "0s",
   "custom_metadata": {
-    "syncable": "true",
     "owner": "platform"
   }
 }
@@ -124,26 +123,26 @@ Metadata writes support:
 `delete_version_after` must be omitted or set to `0s`. Non-zero timed deletion
 policy is rejected until the backend enforces it.
 
-Mounts default `require_source_opt_in=false` and `delegated_mode=false`, so
-creating an enabled association is the source authorization step in the
-platform-operated default mode.
+Mounts default `security_posture=standard`, so creating an enabled association
+is the source authorization step in the platform-operated default mode.
 
-When strict source opt-in is enabled, enabled associations require:
-
-```json
-{
-  "custom_metadata": {
-    "syncable": "true"
-  }
-}
-```
-
-Delegated deployments should enable both strict source opt-in and delegated
-mode:
+In hardened posture, enabled associations require source sync to be explicitly
+enabled for the source path:
 
 ```sh
-bao write secret-sync/config require_source_opt_in=true delegated_mode=true
+bao write -force secret-sync/sources/app/db/enable
 ```
 
-This makes sync opt-in at the source path and requires constrained destinations
-before delegated association owners can trigger destination mutation.
+When enablement changes, this request also enqueues the current source version
+for enabled associations with active destinations. If the queue cannot admit
+all required operations, the request fails and source sync remains disabled.
+
+Delegated deployments should enable hardened posture:
+
+```sh
+bao write secret-sync/config security_posture=hardened
+```
+
+This requires explicit source sync enablement at the source path and constrained
+destinations before delegated association owners can trigger destination
+mutation.

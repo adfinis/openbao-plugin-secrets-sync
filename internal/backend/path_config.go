@@ -11,10 +11,20 @@ import (
 
 const configPath = "config"
 
+const (
+	securityPostureStandard = "standard"
+	securityPostureHardened = "hardened"
+)
+
 func pathConfig(b *secretSyncBackend) *framework.Path {
 	return &framework.Path{
 		Pattern: configPath,
 		Fields: map[string]*framework.FieldSchema{
+			"security_posture": {
+				Type: framework.TypeString,
+				Description: "Security posture: standard preserves platform-operated defaults; " +
+					"hardened requires source sync enablement and constrained destinations.",
+			},
 			"disabled": {
 				Type:        framework.TypeBool,
 				Description: "Pause background remote mutations when true.",
@@ -26,16 +36,6 @@ func pathConfig(b *secretSyncBackend) *framework.Path {
 			"queue_capacity": {
 				Type:        framework.TypeInt,
 				Description: "Maximum number of pending outbox operations accepted by the mount.",
-			},
-			"require_source_opt_in": {
-				Type: framework.TypeBool,
-				Description: "Require custom_metadata.syncable=true before enabled associations " +
-					"can enqueue or dispatch remote mutation.",
-			},
-			"delegated_mode": {
-				Type: framework.TypeBool,
-				Description: "Require delegation guardrails for association-driven sync. " +
-					"Requires require_source_opt_in=true and constrained destinations.",
 			},
 			"drift_repair": {
 				Type: framework.TypeString,
@@ -69,8 +69,9 @@ func pathConfig(b *secretSyncBackend) *framework.Path {
 				Summary:  "Update global secret sync configuration.",
 			},
 		},
-		HelpSynopsis:    "Configure global secret sync behavior.",
-		HelpDescription: "Controls mount-wide pause, restore guard, queue capacity, and source opt-in settings.",
+		HelpSynopsis: "Configure global secret sync behavior.",
+		HelpDescription: "Controls mount-wide security posture, pause, restore guard, queue capacity, " +
+			"drift, and event dispatch settings.",
 	}
 }
 
@@ -107,6 +108,7 @@ func (b *secretSyncBackend) pathConfigRead(
 
 func configResponse(state runtimeState, cfg globalConfig) map[string]interface{} { //nolint:forbidigo
 	return newResponseData(
+		responseField("security_posture", cfg.SecurityPosture),
 		responseField("disabled", cfg.Disabled),
 		responseField("restore_guard", cfg.RestoreGuard),
 		responseField("restore_guard_acknowledged_time", cfg.RestoreGuardAcknowledgedTime),
@@ -115,8 +117,6 @@ func configResponse(state runtimeState, cfg globalConfig) map[string]interface{}
 		responseField("storage_schema_version", state.Schema.Version),
 		responseField("storage_schema_min_compatible_version", state.Schema.MinCompatibleVersion),
 		responseField("queue_capacity", cfg.QueueCapacity),
-		responseField("require_source_opt_in", cfg.RequireSourceOptIn),
-		responseField("delegated_mode", cfg.DelegatedMode),
 		responseField("drift_repair", cfg.DriftRepair),
 		responseField("drift_reconcile_interval", cfg.DriftReconcileInterval),
 		responseField("drift_reconcile_batch", cfg.DriftReconcileBatch),
@@ -161,7 +161,7 @@ func (b *secretSyncBackend) pathConfigWrite(
 		}
 		cfg.QueueCapacity = queueCapacity
 	}
-	if err := applyDelegationConfigFields(data, &cfg); err != nil {
+	if err := applySecurityPostureConfigField(data, &cfg); err != nil {
 		return logical.ErrorResponse(err.Error()), nil
 	}
 	if err := applyDriftConfigFields(data, &cfg); err != nil {
@@ -186,14 +186,27 @@ func (b *secretSyncBackend) pathConfigWrite(
 	return nil, nil
 }
 
-func applyDelegationConfigFields(data *framework.FieldData, cfg *globalConfig) error {
-	if value, ok := data.GetOk("require_source_opt_in"); ok {
-		cfg.RequireSourceOptIn = value.(bool)
+func applySecurityPostureConfigField(data *framework.FieldData, cfg *globalConfig) error {
+	if err := rejectUnknownConfigFields(data); err != nil {
+		return err
 	}
-	if value, ok := data.GetOk("delegated_mode"); ok {
-		cfg.DelegatedMode = value.(bool)
+	if value, ok := data.GetOk("security_posture"); ok {
+		posture := value.(string)
+		if err := validateSecurityPosture(posture); err != nil {
+			return err
+		}
+		cfg.SecurityPosture = posture
 	}
-	return validateDelegatedModeConfig(*cfg)
+	return nil
+}
+
+func rejectUnknownConfigFields(data *framework.FieldData) error {
+	for field := range data.Raw {
+		if _, ok := data.Schema[field]; !ok {
+			return fmt.Errorf("unknown config field %q", field)
+		}
+	}
+	return nil
 }
 
 func applyDriftConfigFields(data *framework.FieldData, cfg *globalConfig) error {
@@ -326,6 +339,7 @@ func decodeGlobalConfigEntry(entry *logical.StorageEntry) (globalConfig, bool, e
 		return globalConfig{}, false, err
 	}
 	cfg := globalConfig{
+		SecurityPosture:              securityPostureStandard,
 		Disabled:                     stored.Disabled,
 		RestoreGuardAcknowledgedTime: stored.RestoreGuardAcknowledgedTime,
 		UpdatedTime:                  stored.UpdatedTime,
@@ -338,8 +352,11 @@ func decodeGlobalConfigEntry(entry *logical.StorageEntry) (globalConfig, bool, e
 	} else {
 		cfg.QueueCapacity = *stored.QueueCapacity
 	}
-	cfg.RequireSourceOptIn, changed = optionalBoolConfigValue(stored.RequireSourceOptIn, false, changed)
-	cfg.DelegatedMode, changed = optionalBoolConfigValue(stored.DelegatedMode, false, changed)
+	var err error
+	changed, err = applyDecodedSecurityPosture(stored.SecurityPosture, &cfg, changed)
+	if err != nil {
+		return globalConfig{}, false, err
+	}
 	if stored.DriftRepair == nil {
 		cfg.DriftRepair = defaultDriftRepair
 		changed = true
@@ -380,10 +397,23 @@ func decodeGlobalConfigEntry(entry *logical.StorageEntry) (globalConfig, bool, e
 	if cfg.EventDispatchMaxOperations < 1 {
 		return globalConfig{}, false, fmt.Errorf("stored event_dispatch_max_operations must be greater than or equal to one")
 	}
-	if err := validateDelegatedModeConfig(cfg); err != nil {
-		return globalConfig{}, false, fmt.Errorf("stored %w", err)
-	}
 	return cfg, changed, nil
+}
+
+func applyDecodedSecurityPosture(
+	storedPosture *string,
+	cfg *globalConfig,
+	changed bool,
+) (bool, error) {
+	if storedPosture == nil {
+		changed = true
+	} else {
+		cfg.SecurityPosture = *storedPosture
+	}
+	if err := validateSecurityPosture(cfg.SecurityPosture); err != nil {
+		return false, fmt.Errorf("stored %w", err)
+	}
+	return changed, nil
 }
 
 func optionalBoolConfigValue(value *bool, fallback bool, changed bool) (bool, bool) {
@@ -402,10 +432,9 @@ func initialGlobalConfig(now string) globalConfig {
 
 func defaultGlobalConfig() globalConfig {
 	return globalConfig{
+		SecurityPosture:            securityPostureStandard,
 		RestoreGuard:               false,
 		QueueCapacity:              defaultQueueCapacity,
-		RequireSourceOptIn:         false,
-		DelegatedMode:              false,
 		DriftRepair:                defaultDriftRepair,
 		DriftReconcileInterval:     defaultDriftInterval,
 		DriftReconcileBatch:        defaultDriftBatch,
@@ -415,12 +444,11 @@ func defaultGlobalConfig() globalConfig {
 }
 
 type storedGlobalConfig struct {
+	SecurityPosture              *string `json:"security_posture"`
 	Disabled                     bool    `json:"disabled"`
 	RestoreGuard                 *bool   `json:"restore_guard"`
 	RestoreGuardAcknowledgedTime string  `json:"restore_guard_acknowledged_time"`
 	QueueCapacity                *int    `json:"queue_capacity"`
-	RequireSourceOptIn           *bool   `json:"require_source_opt_in"`
-	DelegatedMode                *bool   `json:"delegated_mode"`
 	DriftRepair                  *string `json:"drift_repair"`
 	DriftReconcileInterval       *string `json:"drift_reconcile_interval"`
 	DriftReconcileBatch          *int    `json:"drift_reconcile_batch"`
@@ -430,12 +458,11 @@ type storedGlobalConfig struct {
 }
 
 type globalConfig struct {
+	SecurityPosture              string `json:"security_posture"`
 	Disabled                     bool   `json:"disabled"`
 	RestoreGuard                 bool   `json:"restore_guard"`
 	RestoreGuardAcknowledgedTime string `json:"restore_guard_acknowledged_time"`
 	QueueCapacity                int    `json:"queue_capacity"`
-	RequireSourceOptIn           bool   `json:"require_source_opt_in"`
-	DelegatedMode                bool   `json:"delegated_mode"`
 	DriftRepair                  string `json:"drift_repair"`
 	DriftReconcileInterval       string `json:"drift_reconcile_interval"`
 	DriftReconcileBatch          int    `json:"drift_reconcile_batch"`
@@ -446,11 +473,21 @@ type globalConfig struct {
 
 const timeFormatRFC3339 = "2006-01-02T15:04:05Z07:00"
 
-func validateDelegatedModeConfig(cfg globalConfig) error {
-	if cfg.DelegatedMode && !cfg.RequireSourceOptIn {
-		return fmt.Errorf("delegated_mode requires require_source_opt_in=true")
+func validateSecurityPosture(posture string) error {
+	switch posture {
+	case securityPostureStandard, securityPostureHardened:
+		return nil
+	default:
+		return fmt.Errorf("security_posture must be standard or hardened")
 	}
-	return nil
+}
+
+func sourceSyncRequired(cfg globalConfig) bool {
+	return cfg.SecurityPosture == securityPostureHardened
+}
+
+func destinationConstraintsRequired(cfg globalConfig) bool {
+	return cfg.SecurityPosture == securityPostureHardened
 }
 
 func validateDriftRepairMode(mode string) error {

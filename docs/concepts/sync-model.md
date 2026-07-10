@@ -112,7 +112,7 @@ structured `next_actions`. Follow `next_actions` before inventing recovery
 commands. Typical actions include:
 
 - acknowledge restore guard after restore review;
-- enable a source path when strict source opt-in blocks sync;
+- enable a source path when hardened posture blocks sync;
 - inspect queue/config when queue capacity is exhausted;
 - run manual association sync after resolving remote missing, drifted, or
   ownership-lost state.

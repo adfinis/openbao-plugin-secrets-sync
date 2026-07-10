@@ -55,11 +55,7 @@ func TestOpenBaoPluginSyncsToKubernetesSecrets(t *testing.T) {
 	assertDestinationValid(t, baoClient)
 	assertDestinationHealthy(t, baoClient)
 	acknowledgeRestoreGuard(t, baoClient)
-	write(t, baoClient, mountPath+"/metadata/app/db", map[string]interface{}{
-		"custom_metadata": map[string]interface{}{
-			"syncable": "true",
-		},
-	})
+	enableSourceSync(t, baoClient)
 	writeSource(t, baoClient, "initial")
 
 	plan := write(t, baoClient, mountPath+"/associations/app/db/plan", associationRequest(remoteName))
@@ -116,11 +112,7 @@ func TestOpenBaoPluginSyncsSourceKeyDataMapWithTokenAuth(t *testing.T) {
 	assertDestinationValidByName(t, baoClient, "token-prod")
 	assertDestinationHealthyByName(t, baoClient, "token-prod")
 	acknowledgeRestoreGuard(t, baoClient)
-	write(t, baoClient, mountPath+"/metadata/app/db", map[string]interface{}{
-		"custom_metadata": map[string]interface{}{
-			"syncable": "true",
-		},
-	})
+	enableSourceSync(t, baoClient)
 	writeSourceData(t, baoClient, map[string]interface{}{
 		"username": "app",
 		"password": "initial-secret",
@@ -197,11 +189,7 @@ func TestOpenBaoPluginReportsKubernetesPolicyFailure(t *testing.T) {
 	assertDestinationValid(t, baoClient)
 	assertDestinationUnhealthy(t, baoClient, "authz")
 	acknowledgeRestoreGuard(t, baoClient)
-	write(t, baoClient, mountPath+"/metadata/app/db", map[string]interface{}{
-		"custom_metadata": map[string]interface{}{
-			"syncable": "true",
-		},
-	})
+	enableSourceSync(t, baoClient)
 	writeSource(t, baoClient, "initial")
 
 	remoteName := fmt.Sprintf("openbao-plugin-secrets-sync-authz-%d", time.Now().UnixNano())
@@ -226,11 +214,7 @@ func TestOpenBaoPluginReportsKubernetesOwnershipLoss(t *testing.T) {
 
 	writeKubernetesDestination(t, baoClient, namespace)
 	acknowledgeRestoreGuard(t, baoClient)
-	write(t, baoClient, mountPath+"/metadata/app/db", map[string]interface{}{
-		"custom_metadata": map[string]interface{}{
-			"syncable": "true",
-		},
-	})
+	enableSourceSync(t, baoClient)
 	writeSource(t, baoClient, "initial")
 	write(t, baoClient, mountPath+"/associations/app/db", associationRequest(remoteName))
 	assertKubernetesSecret(t, ctx, kubeClient, namespace, remoteName, "initial", "1")
@@ -258,11 +242,7 @@ func TestOpenBaoPluginReportsKubernetesImmutableSecret(t *testing.T) {
 
 	writeKubernetesDestination(t, baoClient, namespace)
 	acknowledgeRestoreGuard(t, baoClient)
-	write(t, baoClient, mountPath+"/metadata/app/db", map[string]interface{}{
-		"custom_metadata": map[string]interface{}{
-			"syncable": "true",
-		},
-	})
+	enableSourceSync(t, baoClient)
 	writeSource(t, baoClient, "initial")
 	write(t, baoClient, mountPath+"/associations/app/db", associationRequest(remoteName))
 	assertKubernetesSecret(t, ctx, kubeClient, namespace, remoteName, "initial", "1")
@@ -346,6 +326,11 @@ func writeSourceData(t *testing.T, client *api.Client, data map[string]interface
 	write(t, client, mountPath+"/data/app/db", map[string]interface{}{
 		"data": data,
 	})
+}
+
+func enableSourceSync(t *testing.T, client *api.Client) {
+	t.Helper()
+	write(t, client, mountPath+"/sources/app/db/enable", map[string]interface{}{})
 }
 
 func serviceAccountToken(

@@ -49,7 +49,7 @@ func TestMetadataListPagination(t *testing.T) {
 	env := newBackendTestEnv(t)
 
 	for _, path := range []string{"app/api", "app/cache", "app/db", "shared/db", "team/db"} {
-		env.markSourceSyncable(path)
+		env.enableSourceSync(path)
 	}
 
 	assertListKeys(t,
@@ -163,15 +163,15 @@ func TestMetadataWriteEnforcesCASRequiredAndCustomMetadata(t *testing.T) {
 	metadataResp := env.update("metadata/app/db", map[string]interface{}{
 		"cas_required": true,
 		"custom_metadata": map[string]interface{}{
-			sourceMetadataKeySyncable: sourceMetadataValueTrue,
-			"owner":                   "platform",
+			"owner": "platform",
 		},
 	})
 	assertNoErrorResponse(t, metadataResp)
 	assertResponseValue(t, metadataResp, "cas_required", true)
+	assertResponseValue(t, metadataResp, "source_sync_enabled", false)
 	customMetadata := metadataResp.Data["custom_metadata"].(map[string]string)
-	if got := customMetadata[sourceMetadataKeySyncable]; got != sourceMetadataValueTrue {
-		t.Fatalf("custom_metadata.syncable = %v, want true", got)
+	if got := customMetadata["owner"]; got != "platform" {
+		t.Fatalf("custom_metadata.owner = %v, want platform", got)
 	}
 
 	blockedResp := env.update("data/app/db", map[string]interface{}{

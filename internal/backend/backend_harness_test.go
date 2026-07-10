@@ -100,6 +100,11 @@ func (env *backendTestEnv) createFakeDestination(name string) {
 	createFakeDestination(env.t, env.b, env.storage, name)
 }
 
+func (env *backendTestEnv) createDefaultConstrainedFakeDestination() {
+	env.t.Helper()
+	createDefaultConstrainedFakeDestination(env.t, env.b, env.storage)
+}
+
 func (env *backendTestEnv) createDefaultFakeAssociation() *logical.Response {
 	env.t.Helper()
 	return createDefaultFakeAssociation(env.t, env.b, env.storage)
@@ -130,14 +135,14 @@ func (env *backendTestEnv) planDefaultFakeAssociation(resolvedName string) *logi
 	return planDefaultFakeAssociation(env.t, env.b, env.storage, resolvedName)
 }
 
-func (env *backendTestEnv) markAppDBSyncable() {
+func (env *backendTestEnv) enableAppDBSourceSync() {
 	env.t.Helper()
-	markAppDBSyncable(env.t, env.b, env.storage)
+	enableAppDBSourceSync(env.t, env.b, env.storage)
 }
 
-func (env *backendTestEnv) markSourceSyncable(path string) {
+func (env *backendTestEnv) enableSourceSync(path string) {
 	env.t.Helper()
-	markSourceSyncable(env.t, env.b, env.storage, path)
+	enableSourceSync(env.t, env.b, env.storage, path)
 }
 
 func assertStoredAWSDestinationConfig(t *testing.T, storage logical.Storage) {
@@ -832,9 +837,21 @@ func createFakeDestination(t *testing.T, b logical.Backend, storage logical.Stor
 	}
 }
 
+func createDefaultConstrainedFakeDestination(t *testing.T, b logical.Backend, storage logical.Storage) {
+	t.Helper()
+	resp := handleRequest(t, b, storage, logical.UpdateOperation, "destinations/fake/default", map[string]interface{}{
+		"description": "test destination",
+		destinationAllowedSourcePathPrefixesField:   "app",
+		destinationAllowedResolvedNamePrefixesField: "prod/app/",
+	})
+	if resp != nil && resp.IsError() {
+		t.Fatalf("unexpected constrained destination write error: %v", resp.Error())
+	}
+}
+
 func createDefaultFakeAssociation(t *testing.T, b logical.Backend, storage logical.Storage) *logical.Response {
 	t.Helper()
-	markAppDBSyncable(t, b, storage)
+	enableAppDBSourceSync(t, b, storage)
 	return handleRequest(t, b, storage, logical.UpdateOperation, "associations/app/db", map[string]interface{}{
 		"destination":   destinationRef(providerTypeFake, "default"),
 		"resolved_name": "prod/app/db",
@@ -850,7 +867,7 @@ func createFakeAssociationForPath(
 	path string,
 ) *logical.Response {
 	t.Helper()
-	markSourceSyncable(t, b, storage, path)
+	enableSourceSync(t, b, storage, path)
 	resp := handleRequest(t, b, storage, logical.UpdateOperation, "data/"+path, map[string]interface{}{
 		"data": map[string]interface{}{
 			"password": path,
@@ -874,7 +891,7 @@ func createFakeSecretKeyAssociation(
 	deleteMode string,
 ) *logical.Response {
 	t.Helper()
-	markAppDBSyncable(t, b, storage)
+	enableAppDBSourceSync(t, b, storage)
 	resp := handleRequest(t, b, storage, logical.UpdateOperation, "associations/app/db", map[string]interface{}{
 		"destination":   destinationRef(providerTypeFake, "default"),
 		"name_template": "prod/{{ path }}/{{ key }}",
@@ -892,7 +909,7 @@ func createFakeDeleteModeAssociation(
 	storage logical.Storage,
 ) *logical.Response {
 	t.Helper()
-	markAppDBSyncable(t, b, storage)
+	enableAppDBSourceSync(t, b, storage)
 	resp := handleRequest(t, b, storage, logical.UpdateOperation, "associations/app/db", map[string]interface{}{
 		"destination":   destinationRef(providerTypeFake, "default"),
 		"resolved_name": "prod/app/db",
@@ -911,7 +928,7 @@ func createFakeAssociationWithResolvedName(
 	resolvedName string,
 ) *logical.Response {
 	t.Helper()
-	markAppDBSyncable(t, b, storage)
+	enableAppDBSourceSync(t, b, storage)
 	return handleRequest(t, b, storage, logical.UpdateOperation, "associations/app/db", map[string]interface{}{
 		"destination":   destinationRef(providerTypeFake, "default"),
 		"resolved_name": resolvedName,
@@ -1040,18 +1057,14 @@ func (contextCanceledRuntime) Close(context.Context) error {
 	return nil
 }
 
-func markAppDBSyncable(t *testing.T, b logical.Backend, storage logical.Storage) {
+func enableAppDBSourceSync(t *testing.T, b logical.Backend, storage logical.Storage) {
 	t.Helper()
-	markSourceSyncable(t, b, storage, "app/db")
+	enableSourceSync(t, b, storage, "app/db")
 }
 
-func markSourceSyncable(t *testing.T, b logical.Backend, storage logical.Storage, path string) {
+func enableSourceSync(t *testing.T, b logical.Backend, storage logical.Storage, path string) {
 	t.Helper()
-	resp := handleRequest(t, b, storage, logical.UpdateOperation, "metadata/"+path, map[string]interface{}{
-		"custom_metadata": map[string]interface{}{
-			sourceMetadataKeySyncable: sourceMetadataValueTrue,
-		},
-	})
+	resp := handleRequest(t, b, storage, logical.UpdateOperation, "sources/"+path+"/enable", nil)
 	assertNoErrorResponse(t, resp)
 }
 
