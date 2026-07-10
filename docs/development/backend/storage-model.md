@@ -81,13 +81,22 @@ Primary records are authoritative. Secondary indexes are redundant lookup aids
 and must be dereferenced through the primary record before they affect source,
 queue, association, destination, or remote mutation behavior.
 
+Outbox updates write the replacement path, state, and due-time indexes before
+the canonical record, then remove obsolete indexes after the canonical write.
+An interrupted update therefore leaves either the previous valid canonical
+view or a new canonical record with all required indexes. Queue readers still
+validate every index candidate against the canonical path, state, and due time;
+the dispatcher repeats the due-time check while acquiring the operation claim.
+Enqueue-intent recovery refreshes indexes for canonical operations that already
+exist before pruning the recovered intent.
+
 Crash recovery only replays pending `enqueue_intent/<path>/<version>` records.
 It does not run a general storage compaction pass. Interrupted writes can leave
 orphaned source version records, stale outbox index entries, stale association
-destination indexes, or stale association name reservations. Readers must
-tolerate those records by ignoring index entries whose primary record is
-missing or no longer matches the indexed destination, reservation, state, path,
-or due-time candidate.
+destination indexes, or stale association name reservations. Readers tolerate
+those records by ignoring index entries whose primary record is missing or no
+longer matches the indexed destination, reservation, state, path, or due-time
+candidate.
 
 This means stale derived records can accumulate until source deletion, targeted
 maintenance, or a future bounded compaction feature removes them. They must not

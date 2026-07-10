@@ -61,6 +61,9 @@ func recoverEnqueueIntent(
 			return err
 		}
 		if existing != nil {
+			if err := putOutboxIndexes(ctx, storage, *existing); err != nil {
+				return err
+			}
 			continue
 		}
 		if err := putOutbox(ctx, storage, operation); err != nil {
