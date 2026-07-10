@@ -532,7 +532,9 @@
         "versions": {}
       },
       "path": "app/db",
-      "source_sync_enabled": true
+      "source_sync_enabled": true,
+      "sync_operation_ids": [],
+      "sync_state": "NO_ASSOCIATION"
     }
   },
   "status.read.pending": {

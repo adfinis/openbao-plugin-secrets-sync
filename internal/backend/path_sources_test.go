@@ -1,7 +1,10 @@
 package backend
 
 import (
+	"context"
 	"testing"
+
+	"github.com/adfinis/openbao-plugin-secrets-sync/internal/domain"
 )
 
 func TestSourceEnableDisableUpdatesSourceSyncState(t *testing.T) {
@@ -19,6 +22,8 @@ func TestSourceEnableDisableUpdatesSourceSyncState(t *testing.T) {
 	assertResponseValue(t, enableResp, "path", modelSourcePath)
 	assertResponseValue(t, enableResp, "source_sync_enabled", true)
 	assertResponseValue(t, enableResp, "changed", true)
+	assertResponseValue(t, enableResp, "sync_state", string(domain.SyncStateNoAssociation))
+	assertOperationIDs(t, enableResp.Data, 0)
 	metadata := enableResp.Data["metadata"].(map[string]interface{})
 	if got := metadata["source_sync_enabled"]; got != true {
 		t.Fatalf("metadata.source_sync_enabled = %v, want true", got)
@@ -40,6 +45,92 @@ func TestSourceEnableDisableUpdatesSourceSyncState(t *testing.T) {
 	secondDisableResp := env.update("sources/app/db/disable")
 	assertNoErrorResponse(t, secondDisableResp)
 	assertResponseValue(t, secondDisableResp, "changed", false)
+}
+
+func TestSourceEnableRequeuesCurrentVersionAfterHardenedTransition(t *testing.T) {
+	env := newBackendTestEnv(t)
+
+	env.writeAppDBSecret("initial")
+	env.createDefaultConstrainedFakeDestination()
+	associationResp := env.update("associations/app/db", map[string]interface{}{
+		"destination":   destinationRef(providerTypeFake, "default"),
+		"resolved_name": "prod/app/db",
+		"granularity":   syncObjectIDSecretPath,
+		"format":        defaultAssociationFormat,
+	})
+	assertNoErrorResponse(t, associationResp)
+	operationID := requireSingleOperationID(t, operationIDsFromResponse(t, associationResp), "association")
+
+	cfgResp := env.update("config", map[string]interface{}{
+		"security_posture": securityPostureHardened,
+	})
+	if cfgResp != nil && cfgResp.IsError() {
+		t.Fatalf("unexpected config write error: %v", cfgResp.Error())
+	}
+	env.runPeriodicAllowed("periodic after hardened posture enabled")
+	assertOutboxOperation(t, env.storage, operationID, 1, outboxStateFailedTerminal)
+	assertStatusObjectState(t, env.b, env.storage, domain.SyncStateValidationError)
+
+	enableResp := env.update("sources/app/db/enable")
+	assertNoErrorResponse(t, enableResp)
+	assertResponseValue(t, enableResp, "changed", true)
+	assertResponseValue(t, enableResp, "sync_state", string(domain.SyncStatePending))
+	requeuedOperationID := requireSingleOperationID(t, operationIDsFromResponse(t, enableResp), "source enable")
+	if requeuedOperationID != operationID {
+		t.Fatalf("requeued operation ID = %q, want original deterministic ID %q", requeuedOperationID, operationID)
+	}
+	assertOutboxOperation(t, env.storage, operationID, 1, outboxStatePending)
+
+	env.runPeriodicAllowed("periodic after source sync enabled")
+	assertStatusObjectState(t, env.b, env.storage, domain.SyncStateSynced)
+}
+
+func TestSourceEnableQueueCapacityFailureRollsBackState(t *testing.T) {
+	env := newBackendTestEnv(t)
+
+	env.writeAppDBSecret("initial")
+	env.createDefaultConstrainedFakeDestination()
+	associationResp := env.update("associations/app/db", map[string]interface{}{
+		"destination":   destinationRef(providerTypeFake, "default"),
+		"resolved_name": "prod/app/db",
+		"granularity":   syncObjectIDSecretPath,
+		"format":        defaultAssociationFormat,
+	})
+	assertNoErrorResponse(t, associationResp)
+	operationID := requireSingleOperationID(t, operationIDsFromResponse(t, associationResp), "association")
+
+	cfgResp := env.update("config", map[string]interface{}{
+		"security_posture": securityPostureHardened,
+	})
+	if cfgResp != nil && cfgResp.IsError() {
+		t.Fatalf("unexpected config write error: %v", cfgResp.Error())
+	}
+	env.runPeriodicAllowed("periodic after hardened posture enabled")
+	assertOutboxOperation(t, env.storage, operationID, 1, outboxStateFailedTerminal)
+
+	capacityResp := env.update("config", map[string]interface{}{
+		"queue_capacity": 0,
+	})
+	if capacityResp != nil && capacityResp.IsError() {
+		t.Fatalf("unexpected queue capacity write error: %v", capacityResp.Error())
+	}
+	enableResp := env.update("sources/app/db/enable")
+	if enableResp == nil || !enableResp.IsError() {
+		t.Fatalf("source enable response = %#v, want queue capacity error", enableResp)
+	}
+	assertHintContains(t, enableResp.Data, "Queue capacity is exhausted")
+
+	metadata, err := getMetadata(context.Background(), env.storage, modelSourcePath)
+	if err != nil {
+		t.Fatalf("read metadata: %v", err)
+	}
+	if metadata == nil {
+		t.Fatal("metadata is nil")
+	}
+	if metadata.SourceSyncEnabled {
+		t.Fatal("source sync remained enabled after queue admission failed")
+	}
+	assertOutboxOperation(t, env.storage, operationID, 1, outboxStateFailedTerminal)
 }
 
 func TestSourceCheckReportsReadiness(t *testing.T) {

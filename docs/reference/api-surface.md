@@ -80,7 +80,7 @@ Destination checks report `destination_unconstrained` for that blocker.
 | `data/<path>` | Write, read, or soft-delete local source secret data. |
 | `metadata/<path>` | Manage source version policy and custom metadata. |
 | `metadata/` and `metadata/<path>` with `LIST` | List source metadata keys. |
-| `sources/<path>/enable` | Enable source sync for a path in hardened posture. |
+| `sources/<path>/enable` | Enable source sync and enqueue the current version for enabled associations with active destinations. |
 | `sources/<path>/disable` | Disable source sync for a path in hardened posture. |
 | `sources/<path>/check` | Check source readiness for sync. |
 | `delete/<path>` | Soft-delete selected source versions. |
@@ -114,9 +114,12 @@ field names. `cas` remains the CLI alias for `options.cas`; `version` is
 rejected on writes because it is only meaningful for reads. Use the wrapped
 body when the source payload needs one of those literal top-level keys.
 Mounts default `security_posture=standard`. In hardened posture,
-`sources/<path>/enable` sets plugin-owned source sync state; source checks
-report `source_sync_enabled` and block with `source_sync_not_enabled` only when
-source sync is required and missing.
+`sources/<path>/enable` sets plugin-owned source sync state. When enablement
+changes, it also enqueues the current source version for enabled associations
+with active destinations and returns `sync_operation_ids` plus `sync_state`.
+Queue admission failure rolls the enablement state back. Source checks report
+`source_sync_enabled` and block with `source_sync_not_enabled` only when source
+sync is required and missing.
 Source paths cannot end with reserved association route segments such as
 `plan`, `disable`, `enable`, or `sync`.
 

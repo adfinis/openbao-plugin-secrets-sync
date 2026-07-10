@@ -2,6 +2,7 @@ package backend
 
 import (
 	"context"
+	"fmt"
 
 	"github.com/adfinis/openbao-plugin-secrets-sync/internal/observability"
 	"github.com/openbao/openbao/sdk/v2/framework"
@@ -42,8 +43,9 @@ func pathSources(b *secretSyncBackend) []*framework.Path {
 					Summary:  "Enable source sync for a path.",
 				},
 			},
-			HelpSynopsis:    "Enable source sync eligibility.",
-			HelpDescription: "Marks a source path as explicitly enabled for sync in hardened posture.",
+			HelpSynopsis: "Enable source sync eligibility.",
+			HelpDescription: "Marks a source path as explicitly enabled for sync in hardened posture " +
+				"and enqueues its current version for enabled associations with active destinations.",
 		},
 		{
 			Pattern: "sources/(?P<path>.+)/disable",
@@ -165,15 +167,33 @@ func (b *secretSyncBackend) pathSourceSyncSet(
 	if err != nil {
 		return nil, err
 	}
+	var previousMetadata *metadataRecord
+	if metadata != nil {
+		previous := *metadata
+		previousMetadata = &previous
+	}
 	if metadata == nil {
 		metadata = newMetadataRecordPtr()
 	}
 	changed := metadata.SourceSyncEnabled != enabled
+	operationIDs := []string{}
 	if changed {
 		metadata.SourceSyncEnabled = enabled
 		metadata.UpdatedTime = nowUTC().Format(timeFormatRFC3339)
 		if err := putMetadata(ctx, req.Storage, path, *metadata); err != nil {
 			return nil, err
+		}
+		if enabled {
+			operationIDs, err = b.enqueueSourceCurrentVersion(ctx, req.Storage, path, *metadata)
+			if err != nil {
+				if rollbackErr := rollbackSourceSyncMetadata(ctx, req.Storage, path, previousMetadata); rollbackErr != nil {
+					return nil, rollbackSourceSyncMetadataError(err, rollbackErr)
+				}
+				return errorResponseForOperationError(err, requestMountPath(req)), nil
+			}
+			if len(operationIDs) > 0 {
+				b.signalEventDispatch()
+			}
 		}
 	}
 	queuedOperations, err := listQueuedOutboxIDsForPath(ctx, req.Storage, path)
@@ -184,14 +204,56 @@ func (b *secretSyncBackend) pathSourceSyncSet(
 	if err != nil {
 		return nil, err
 	}
-	return &logical.Response{Data: newResponseData(
+	fields := []responseEntry{
 		responseField("path", path),
 		responseField("source_sync_enabled", enabled),
 		responseField("changed", changed),
 		responseField("metadata", newResponseData(
 			metadataResponseFields(*metadata, len(queuedOperations), len(statusRecords))...,
 		)),
-	)}, nil
+	}
+	if enabled {
+		fields = append(fields,
+			responseField("sync_operation_ids", operationIDs),
+			responseField("sync_state", string(syncStateForOperationIDs(operationIDs))),
+		)
+	}
+	return &logical.Response{Data: newResponseData(fields...)}, nil
+}
+
+func (b *secretSyncBackend) enqueueSourceCurrentVersion(
+	ctx context.Context,
+	storage logical.Storage,
+	path string,
+	metadata metadataRecord,
+) ([]string, error) {
+	associations, err := enabledAssociationsForPath(ctx, storage, path)
+	if err != nil {
+		return nil, err
+	}
+	return b.enqueueAssociationsCurrentVersion(
+		ctx,
+		storage,
+		associations,
+		metadata,
+		nowUTC().Format(timeFormatRFC3339),
+	)
+}
+
+func rollbackSourceSyncMetadata(
+	ctx context.Context,
+	storage logical.Storage,
+	path string,
+	previous *metadataRecord,
+) error {
+	if previous != nil {
+		return putMetadata(ctx, storage, path, *previous)
+	}
+	return deleteMetadata(ctx, storage, path)
+}
+
+func rollbackSourceSyncMetadataError(operationErr error, rollbackErr error) error {
+	return fmt.Errorf("%w; source sync metadata rollback failed: %v", operationErr, rollbackErr)
 }
 
 func sourceReadinessBlockers(

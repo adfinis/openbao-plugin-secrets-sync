@@ -57,7 +57,9 @@ the new version is stored.
 Source metadata controls local version policy and can carry custom metadata.
 In hardened posture, enabled associations require source sync to be explicitly
 enabled through `sources/<path>/enable` before they can enqueue or dispatch
-remote mutation.
+remote mutation. Enabling a source also enqueues its current version for enabled
+associations with active destinations. Queue admission is all-or-nothing: if
+the required operations do not fit, the source remains disabled.
 
 Fresh mounts default `security_posture=standard`. In that platform-operated
 mode, creating or enabling an association is the authorization step that

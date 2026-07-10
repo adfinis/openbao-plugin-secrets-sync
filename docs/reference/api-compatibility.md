@@ -133,6 +133,10 @@ enabled for the source path:
 bao write -force secret-sync/sources/app/db/enable
 ```
 
+When enablement changes, this request also enqueues the current source version
+for enabled associations with active destinations. If the queue cannot admit
+all required operations, the request fails and source sync remains disabled.
+
 Delegated deployments should enable hardened posture:
 
 ```sh

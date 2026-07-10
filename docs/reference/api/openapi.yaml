@@ -239,7 +239,8 @@ paths:
     post:
       tags: [sources]
       operationId: enableSource
-      summary: Enable source sync for a path.
+      summary: Enable source sync and enqueue current source work.
+      description: Enables source sync for the path and, when the state changes, enqueues the current source version for enabled associations with active destinations.
       x-openbao-operation: update
       parameters:
         - $ref: "#/components/parameters/SourcePath"
@@ -1386,6 +1387,14 @@ components:
               type: boolean
             changed:
               type: boolean
+            sync_operation_ids:
+              type: array
+              items:
+                type: string
+              description: Operations enqueued by source enablement. Present only on enable responses.
+            sync_state:
+              type: string
+              description: PENDING when source enablement enqueued work; otherwise NO_ASSOCIATION. Present only on enable responses.
             metadata:
               $ref: "#/components/schemas/Metadata"
           required: [path, source_sync_enabled, changed, metadata]
