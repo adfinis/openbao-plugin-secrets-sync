@@ -121,6 +121,53 @@ func TestPeriodicRecoversIncompleteEnqueueIntent(t *testing.T) {
 	}
 }
 
+func TestRecoveryRepairsIndexesForExistingIntentOperation(t *testing.T) {
+	env := newBackendTestEnv(t)
+
+	env.writeAppDBSecret("initial")
+	env.createFakeDestination("default")
+	associationResp := env.createDefaultFakeAssociation()
+	operationID := requireSingleOperationID(t, operationIDsFromResponse(t, associationResp), "association")
+	operation := assertOutboxOperation(t, env.storage, operationID, 1, outboxStatePending)
+	if err := deleteOutboxIndexes(context.Background(), env.storage, *operation); err != nil {
+		t.Fatalf("delete outbox indexes: %v", err)
+	}
+	intent := newEnqueueIntentRecord(
+		operation.Path,
+		sourceGeneration(t, env.storage),
+		operation.Version,
+		[]outboxRecord{*operation},
+		nil,
+		operation.CreatedTime,
+	)
+	if err := putEnqueueIntent(context.Background(), env.storage, intent); err != nil {
+		t.Fatalf("write incomplete enqueue intent: %v", err)
+	}
+
+	if err := recoverIncompleteEnqueueIntents(context.Background(), env.storage, nowUTC()); err != nil {
+		t.Fatalf("recover incomplete enqueue intent: %v", err)
+	}
+	pathIDs, err := listOutboxIDsForPath(context.Background(), env.storage, operation.Path)
+	if err != nil {
+		t.Fatalf("list repaired path index: %v", err)
+	}
+	assertStringIDs(t, pathIDs, operation.ID)
+	assertOutboxStateIndexed(t, env.storage, operation.State, operation.ID, true)
+	assertOutboxDueIndexed(t, env.storage, outboxDueIndexTime(*operation), operation.ID, true)
+	recoveredIntent, err := getEnqueueIntent(
+		context.Background(),
+		env.storage,
+		operation.Path,
+		operation.Version,
+	)
+	if err != nil {
+		t.Fatalf("read recovered enqueue intent: %v", err)
+	}
+	if recoveredIntent != nil {
+		t.Fatalf("recovered enqueue intent = %#v, want pruned", recoveredIntent)
+	}
+}
+
 func TestRecoveryRestoresDeleteIntentAfterSourceDelete(t *testing.T) {
 	env := newBackendTestEnv(t)
 

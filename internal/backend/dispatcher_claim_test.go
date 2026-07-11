@@ -47,6 +47,38 @@ func TestClaimOutboxRecordAdvancesClaimAttemptOnReclaim(t *testing.T) {
 	}
 }
 
+func TestClaimRejectsOperationBeforeCanonicalNotBefore(t *testing.T) {
+	env := newBackendTestEnv(t)
+
+	env.writeAppDBSecret("initial")
+	env.createFakeDestination("default")
+	associationResp := env.createDefaultFakeAssociation()
+	operationID := requireSingleOperationID(t, operationIDsFromResponse(t, associationResp), "association")
+	operation := assertOutboxOperation(t, env.storage, operationID, 1, outboxStatePending)
+	now := nowUTC()
+	operation.State = outboxStateRetryWait
+	operation.NotBefore = now.Add(time.Minute).Format(timeFormatRFC3339)
+	if err := putOutbox(context.Background(), env.storage, *operation); err != nil {
+		t.Fatalf("write future retry operation: %v", err)
+	}
+
+	claimed, ok, err := env.b.claimDispatchableOutboxRecord(
+		context.Background(),
+		env.storage,
+		operation.ID,
+		"worker",
+		now,
+		observability.OperationPeriodic,
+	)
+	if err != nil {
+		t.Fatalf("claim future operation: %v", err)
+	}
+	if ok || claimed != nil {
+		t.Fatalf("future operation claim = %#v, ok = %t; want no claim", claimed, ok)
+	}
+	assertOutboxOperation(t, env.storage, operation.ID, operation.Version, outboxStateRetryWait)
+}
+
 func TestDispatchSkipsSuccessCommitAfterClaimReclaim(t *testing.T) {
 	env, provider, associationID, operationID := setupBlockingMutationDispatch(t, nil)
 	errCh := runPeriodicAsync(env)

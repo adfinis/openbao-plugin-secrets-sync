@@ -81,7 +81,7 @@ func (b *secretSyncBackend) claimDispatchableOutboxRecord(
 	if err != nil {
 		return nil, false, err
 	}
-	if record == nil || !isDispatchableOutboxState(record.State) {
+	if record == nil || !isDispatchableOutboxState(record.State) || !outboxRecordDue(*record, now) {
 		return nil, false, nil
 	}
 	if !isSupportedOperation(*record) {
@@ -223,6 +223,11 @@ func discardUnsupportedOutboxOperation(ctx context.Context, storage logical.Stor
 
 func isDispatchableOutboxState(state string) bool {
 	return state == outboxStatePending || state == outboxStateRetryWait
+}
+
+func outboxRecordDue(record outboxRecord, now time.Time) bool {
+	dueTime := outboxDueIndexTime(record)
+	return dueTime != "" && dueTime <= now.Format(timeFormatRFC3339)
 }
 
 func (b *secretSyncBackend) processOutboxRecord(

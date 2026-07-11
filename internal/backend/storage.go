@@ -592,10 +592,11 @@ func putOutbox(ctx context.Context, storage logical.Storage, record outboxRecord
 	if err != nil {
 		return err
 	}
-	if existing != nil {
-		if err := deleteOutboxIndexes(ctx, storage, *existing); err != nil {
-			return err
-		}
+	// Write replacement indexes before the canonical record. A failed index or
+	// canonical write can then leave only stale indexes, which readers validate
+	// against the authoritative canonical record.
+	if err := putOutboxIndexes(ctx, storage, record); err != nil {
+		return err
 	}
 	entry, err := logical.StorageEntryJSON(outboxStorageKey(record.ID), record)
 	if err != nil {
@@ -604,33 +605,56 @@ func putOutbox(ctx context.Context, storage logical.Storage, record outboxRecord
 	if err := storage.Put(ctx, entry); err != nil {
 		return err
 	}
-	return putOutboxIndexes(ctx, storage, record)
+	if existing != nil {
+		return deleteStaleOutboxIndexes(ctx, storage, *existing, record)
+	}
+	return nil
 }
 
 func putOutboxIndexes(ctx context.Context, storage logical.Storage, record outboxRecord) error {
-	indexEntry, err := logical.StorageEntryJSON(outboxByPathStorageKey(record.Path, record.ID), record.ID)
-	if err != nil {
-		return err
-	}
-	if err := storage.Put(ctx, indexEntry); err != nil {
-		return err
-	}
-	if record.State == "" {
-		return nil
-	}
-	stateEntry, err := logical.StorageEntryJSON(outboxByStateStorageKey(record.State, record.ID), record.ID)
-	if err != nil {
-		return err
-	}
-	if err := storage.Put(ctx, stateEntry); err != nil {
-		return err
-	}
-	if dueTime := outboxDueIndexTime(record); dueTime != "" {
-		dueEntry, err := logical.StorageEntryJSON(outboxByDueStorageKey(dueTime, record.ID), record.ID)
+	for _, key := range outboxIndexKeys(record) {
+		entry, err := logical.StorageEntryJSON(key, record.ID)
 		if err != nil {
 			return err
 		}
-		return storage.Put(ctx, dueEntry)
+		if err := storage.Put(ctx, entry); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func outboxIndexKeys(record outboxRecord) []string {
+	keys := []string{}
+	if record.Path != "" {
+		keys = append(keys, outboxByPathStorageKey(record.Path, record.ID))
+	}
+	if record.State != "" {
+		keys = append(keys, outboxByStateStorageKey(record.State, record.ID))
+	}
+	if dueTime := outboxDueIndexTime(record); dueTime != "" {
+		keys = append(keys, outboxByDueStorageKey(dueTime, record.ID))
+	}
+	return keys
+}
+
+func deleteStaleOutboxIndexes(
+	ctx context.Context,
+	storage logical.Storage,
+	existing outboxRecord,
+	updated outboxRecord,
+) error {
+	updatedKeys := make(map[string]struct{}, len(outboxIndexKeys(updated)))
+	for _, key := range outboxIndexKeys(updated) {
+		updatedKeys[key] = struct{}{}
+	}
+	for _, key := range outboxIndexKeys(existing) {
+		if _, retained := updatedKeys[key]; retained {
+			continue
+		}
+		if err := storage.Delete(ctx, key); err != nil {
+			return err
+		}
 	}
 	return nil
 }
@@ -656,18 +680,10 @@ func deleteOutbox(ctx context.Context, storage logical.Storage, record outboxRec
 }
 
 func deleteOutboxIndexes(ctx context.Context, storage logical.Storage, record outboxRecord) error {
-	if record.Path != "" {
-		if err := storage.Delete(ctx, outboxByPathStorageKey(record.Path, record.ID)); err != nil {
+	for _, key := range outboxIndexKeys(record) {
+		if err := storage.Delete(ctx, key); err != nil {
 			return err
 		}
-	}
-	if record.State != "" {
-		if err := storage.Delete(ctx, outboxByStateStorageKey(record.State, record.ID)); err != nil {
-			return err
-		}
-	}
-	if dueTime := outboxDueIndexTime(record); dueTime != "" {
-		return storage.Delete(ctx, outboxByDueStorageKey(dueTime, record.ID))
 	}
 	return nil
 }
@@ -706,7 +722,13 @@ func listQueuedOutboxIDs(ctx context.Context, storage logical.Storage) ([]string
 }
 
 func listOutboxIDsForState(ctx context.Context, storage logical.Storage, state string) ([]string, error) {
-	return storage.List(ctx, outboxByStateStoragePrefix+state+"/")
+	ids, err := storage.List(ctx, outboxByStateStoragePrefix+state+"/")
+	if err != nil {
+		return nil, err
+	}
+	return filterOutboxIDs(ctx, storage, ids, func(record outboxRecord) bool {
+		return record.State == state
+	})
 }
 
 func listOutboxIDsForStates(ctx context.Context, storage logical.Storage, states ...string) ([]string, error) {
@@ -732,11 +754,18 @@ func listDueOutboxIDs(ctx context.Context, storage logical.Storage, now time.Tim
 	for _, key := range keys {
 		trimmed := strings.TrimPrefix(key, outboxByDueStoragePrefix)
 		dueTime, id, ok := strings.Cut(trimmed, "/")
-		if !ok {
+		if !ok || id == "" {
 			continue
 		}
 		if dueTime > nowString {
 			break
+		}
+		record, err := getOutbox(ctx, storage, id)
+		if err != nil {
+			return nil, err
+		}
+		if record == nil || outboxDueIndexTime(*record) != dueTime {
+			continue
 		}
 		ids = append(ids, id)
 	}
@@ -752,8 +781,15 @@ func nextFutureOutboxDueTime(ctx context.Context, storage logical.Storage, now t
 	nowString := now.Format(timeFormatRFC3339)
 	for _, key := range keys {
 		trimmed := strings.TrimPrefix(key, outboxByDueStoragePrefix)
-		dueTime, _, ok := strings.Cut(trimmed, "/")
-		if !ok || dueTime <= nowString {
+		dueTime, id, ok := strings.Cut(trimmed, "/")
+		if !ok || id == "" || dueTime <= nowString {
+			continue
+		}
+		record, err := getOutbox(ctx, storage, id)
+		if err != nil {
+			return nil, err
+		}
+		if record == nil || outboxDueIndexTime(*record) != dueTime {
 			continue
 		}
 		next, err := time.Parse(timeFormatRFC3339, dueTime)
@@ -776,7 +812,33 @@ func outboxDueIndexTime(record outboxRecord) string {
 }
 
 func listOutboxIDsForPath(ctx context.Context, storage logical.Storage, path string) ([]string, error) {
-	return storage.List(ctx, outboxByPathStoragePrefix+path+"/")
+	ids, err := storage.List(ctx, outboxByPathStoragePrefix+path+"/")
+	if err != nil {
+		return nil, err
+	}
+	return filterOutboxIDs(ctx, storage, ids, func(record outboxRecord) bool {
+		return record.Path == path
+	})
+}
+
+func filterOutboxIDs(
+	ctx context.Context,
+	storage logical.Storage,
+	ids []string,
+	matches func(outboxRecord) bool,
+) ([]string, error) {
+	filtered := make([]string, 0, len(ids))
+	for _, id := range ids {
+		record, err := getOutbox(ctx, storage, id)
+		if err != nil {
+			return nil, err
+		}
+		if record == nil || !matches(*record) {
+			continue
+		}
+		filtered = append(filtered, id)
+	}
+	return filtered, nil
 }
 
 func deleteQueuedOutboxForAssociation(
