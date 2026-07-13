@@ -18,7 +18,7 @@ Secret access:
 ```yaml
 apiGroups: [""]
 resources: ["secrets"]
-verbs: ["get", "list", "create", "update", "delete"]
+verbs: ["get", "create", "update", "delete"]
 ```
 
 For production, bind equivalent permissions only in namespaces that are
