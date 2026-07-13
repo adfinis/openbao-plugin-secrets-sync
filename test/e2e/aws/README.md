@@ -88,7 +88,7 @@ tofu -chdir=tofu output -raw github_web_identity_role_arn
 
 Pass that role ARN to the manual `AWS Web Identity E2E` workflow dispatch. With
 the default fixture variables, the trust policy accepts only
-`repo:adfinis/openbao-plugin-secrets-sync:ref:refs/heads/feat/aws-web-identity-auth`
+`repo:adfinis/openbao-plugin-secrets-sync:ref:refs/heads/main`
 with audience `sts.amazonaws.com`. Set `github_oidc_branch` when validating a
 different branch. Destroy the fixture after the manual workflow passes.
 

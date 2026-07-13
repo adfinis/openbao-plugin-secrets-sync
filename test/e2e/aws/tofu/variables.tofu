@@ -61,7 +61,7 @@ variable "github_oidc_repo" {
 variable "github_oidc_branch" {
   description = "GitHub branch allowed to assume the web-identity role."
   type        = string
-  default     = "feat/aws-web-identity-auth"
+  default     = "main"
 }
 
 variable "tags" {
