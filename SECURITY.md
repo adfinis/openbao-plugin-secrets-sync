@@ -8,10 +8,10 @@ windows. Treat `main` as the active development line.
 Do not open a public issue with exploit details, secret material, tokens, full
 ciphertexts, or production endpoint data.
 
-Use GitHub private vulnerability reporting when it is available for the
-repository. If private reporting is not available, contact the maintainers
-through the normal Adfinis security contact path and include a minimal summary
-that is safe to route internally.
+Use [GitHub private vulnerability reporting](https://github.com/adfinis/openbao-plugin-secrets-sync/security/advisories/new).
+If private reporting is unavailable, contact the maintainers privately through
+the [Adfinis contact channel](https://www.adfinis.com/en/contact/) and include a
+minimal summary that is safe to route internally.
 
 ## What to include
 

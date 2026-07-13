@@ -5,6 +5,13 @@ install the plugin into OpenBao. Use
 [Release engineering](../development/release-engineering.md) for maintainer
 release automation.
 
+## Compatibility
+
+The preview release is qualified against OpenBao `2.5.5`. Other OpenBao
+versions are not yet qualified. Preview releases do not establish API, storage,
+provider-metadata, upgrade, downgrade, or migration compatibility across
+versions.
+
 ## Artifact set
 
 Release artifacts include Linux plugin binaries, per-binary SBOMs, a dependency
