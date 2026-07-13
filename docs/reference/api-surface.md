@@ -187,7 +187,7 @@ flags.
 | `queue/drain` | Drain due queue work for deterministic testing or controlled catch-up. |
 | `queue/<operation-id>` | Read one queued operation. |
 | `queue/<operation-id>/retry` | Retry one failed or canceled operation. |
-| `queue/<operation-id>/cancel` | Cancel one queued operation. |
+| `queue/<operation-id>/cancel` | Cancel and purge one queued or terminal failed operation. |
 | `status/<path>` | Read per-source sync status. |
 | `reconcile/<path>/plan` | Read provider remote state and calculate local status without changing status or destination secrets. |
 | `reconcile/<path>` | Apply reconcile by refreshing local status from provider read-state results. |

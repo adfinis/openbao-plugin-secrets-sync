@@ -191,7 +191,10 @@ func (b *secretSyncBackend) pathMetadataDelete(
 	if len(associations) > 0 {
 		return logical.ErrorResponse("source path has associations and cannot be deleted"), nil
 	}
-	if err := deleteSourcePath(ctx, req.Storage, path); err != nil {
+	b.enqueueMu.Lock()
+	err = deleteSourcePath(ctx, req.Storage, path)
+	b.enqueueMu.Unlock()
+	if err != nil {
 		return nil, err
 	}
 	return nil, nil

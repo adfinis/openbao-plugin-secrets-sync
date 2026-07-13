@@ -80,7 +80,8 @@ func (b *secretSyncBackend) processDueOutboxLimitWithClock(
 			break
 		}
 	}
-	return processed, nil
+	err = b.pruneTerminalOutboxRecords(ctx, storage, now.Add(clock().Sub(batchStarted)))
+	return processed, err
 }
 
 func (b *secretSyncBackend) claimDispatchableOutboxRecord(

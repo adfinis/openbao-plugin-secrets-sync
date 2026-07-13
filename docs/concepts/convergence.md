@@ -38,8 +38,8 @@ Queue operation states are:
 | --- | --- |
 | `pending` | Ready to dispatch when due and mutation gates allow it. |
 | `retry_wait` | Waiting for bounded automatic retry after a transient provider failure. |
-| `failed_terminal` | Not dispatchable until an operator retries or supersedes it. |
-| `canceled` | Not dispatchable; retained only as historical queue state. |
+| `failed_terminal` | Not dispatchable until an operator retries or purges it; retained for at most seven days and bounded to the newest 1,000 records. |
+| `canceled` | Not dispatchable; returned as a final response snapshot and then removed from durable queue storage. |
 
 Successful operations are removed from the queue after status is persisted. Use
 `status/<path>` to confirm completed sync instead of expecting old successful

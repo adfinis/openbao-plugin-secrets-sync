@@ -215,7 +215,9 @@ bao write -force secret-sync/queue/<operation-id>/retry
 bao write -force secret-sync/queue/<operation-id>/cancel
 ```
 
-Cancel discards queued work; it is not retained in the queue summary.
+Cancel discards pending, retry-wait, or terminal failed work; it is not retained
+in the queue summary. Terminal failures are otherwise retained for at most seven
+days, with the newest 1,000 records taking precedence when the limit is reached.
 
 `queue/drain` can execute remote mutations. Keep it operator-scoped.
 

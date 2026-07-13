@@ -16,8 +16,11 @@ canceled
 ```
 
 Only `pending` and `retry_wait` are dispatchable. Terminal failures remain
-visible for operator inspection and retry decisions. Canceled operations are
-non-dispatchable historical records until pruned or ignored by queue views.
+visible for operator inspection and retry decisions. The backend retains at
+most the newest 1,000 terminal records and prunes terminal records older than
+seven days in bounded batches. Operators can explicitly cancel a terminal
+record to purge it sooner. Canceled operations are removed from durable queue
+storage after returning their final response snapshot.
 
 ## Enqueue Intent
 
