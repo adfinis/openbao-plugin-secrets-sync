@@ -45,6 +45,7 @@ const (
 	statusStoragePrefix       = "status/"
 	providerTypeFake          = "fake"
 	defaultAssociationFormat  = "json"
+	destinationSensitiveNone  = "none"
 	rawAssociationFormat      = "raw"
 	defaultDataMapping        = "payload"
 	dataMappingSourceKeys     = "source-keys"
@@ -117,6 +118,7 @@ type destinationRecord struct {
 	Description                 string            `json:"description"`
 	Disabled                    bool              `json:"disabled"`
 	Config                      map[string]string `json:"config"`
+	SensitiveConfigVersion      string            `json:"sensitive_config_version,omitempty"`
 	AllowedSourcePathPrefixes   []string          `json:"allowed_source_path_prefixes,omitempty"`
 	AllowedResolvedNamePrefixes []string          `json:"allowed_resolved_name_prefixes,omitempty"`
 	CreatedTime                 string            `json:"created_time"`
@@ -279,6 +281,14 @@ func destinationStorageKey(destinationType string, name string) string {
 
 func destinationSensitiveStorageKey(destinationType string, name string) string {
 	return destinationSecretsPrefix + destinationRef(destinationType, name)
+}
+
+func destinationSensitiveVersionStoragePrefix(destinationType string, name string) string {
+	return destinationSensitiveStorageKey(destinationType, name) + "/versions/"
+}
+
+func destinationSensitiveVersionStorageKey(destinationType string, name string, version string) string {
+	return destinationSensitiveVersionStoragePrefix(destinationType, name) + version
 }
 
 func associationStorageKey(path string, id string) string {

@@ -95,6 +95,7 @@ func TestStorageRecordJSONTags(t *testing.T) {
 				"Description:description",
 				"Disabled:disabled",
 				"Config:config",
+				"SensitiveConfigVersion:sensitive_config_version,omitempty",
 				"AllowedSourcePathPrefixes:allowed_source_path_prefixes,omitempty",
 				"AllowedResolvedNamePrefixes:allowed_resolved_name_prefixes,omitempty",
 				"CreatedTime:created_time",

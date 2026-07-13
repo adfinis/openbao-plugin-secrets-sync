@@ -145,7 +145,11 @@ deletion time, and destroy state.
 ## Destination Records
 
 Public destination fields are stored in `destinations/<type>/<name>`. Sensitive
-destination fields are stored in `destinations_secrets/<type>/<name>`.
+destination fields use versioned seal-wrapped records under
+`destinations_secrets/<type>/<name>/versions/<version>`. The public record points
+to the active sensitive version, so readers never combine parts from different
+destination writes. Unversioned sensitive records remain readable only for
+legacy public records.
 
 Public records contain destination identity, description, disabled state,
 non-sensitive provider config, source-path policy prefixes, remote-name policy

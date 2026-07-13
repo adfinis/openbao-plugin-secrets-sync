@@ -429,9 +429,12 @@ func destinationWriteRecordFromFieldData(
 	if err != nil {
 		return destinationRecord{}, nil, "", nil, err
 	}
-	existingSensitive, err := getDestinationSensitiveConfig(ctx, storage, destinationType, name)
-	if err != nil {
-		return destinationRecord{}, nil, "", nil, err
+	var existingSensitive *destinationSensitiveRecord
+	if existing != nil {
+		existingSensitive, err = getDestinationSensitiveConfigForRecord(ctx, storage, *existing)
+		if err != nil {
+			return destinationRecord{}, nil, "", nil, err
+		}
 	}
 	config, err := destinationConfigFromFieldData(destinationType, existing, data)
 	if err != nil {
@@ -450,11 +453,21 @@ func destinationWriteRecordFromFieldData(
 	if err != nil {
 		return destinationRecord{}, nil, "", logical.ErrorResponse(err.Error()), nil
 	}
+	description := data.Get("description").(string)
+	disabled := data.Get("disabled").(bool)
+	if existing != nil {
+		if _, ok := data.Raw["description"]; !ok {
+			description = existing.Description
+		}
+		if _, ok := data.Raw["disabled"]; !ok {
+			disabled = existing.Disabled
+		}
+	}
 	record := destinationRecord{
 		Type:                        destinationType,
 		Name:                        name,
-		Description:                 data.Get("description").(string),
-		Disabled:                    data.Get("disabled").(bool),
+		Description:                 description,
+		Disabled:                    disabled,
 		Config:                      config,
 		AllowedSourcePathPrefixes:   allowedSourcePrefixes,
 		AllowedResolvedNamePrefixes: allowedNamePrefixes,
@@ -463,6 +476,7 @@ func destinationWriteRecordFromFieldData(
 	}
 	if existing != nil {
 		record.CreatedTime = existing.CreatedTime
+		record.SensitiveConfigVersion = existing.SensitiveConfigVersion
 	}
 	sensitiveCreatedTime := ""
 	if existingSensitive != nil {
@@ -509,29 +523,50 @@ func storeDestinationWrite(
 	sensitiveCreatedTime string,
 	now string,
 ) error {
-	if err := putDestination(ctx, storage, record); err != nil {
-		return err
-	}
+	previousSensitiveVersion := record.SensitiveConfigVersion
+	nextSensitiveVersion := destinationSensitiveNone
 	if len(sensitiveConfig) == 0 {
-		if err := deleteDestinationSensitiveConfig(ctx, storage, record.Type, record.Name); err != nil {
+		record.SensitiveConfigVersion = nextSensitiveVersion
+	} else {
+		var err error
+		nextSensitiveVersion, err = newRuntimeID("destination-sensitive")
+		if err != nil {
 			return err
 		}
-		return nil
+		sensitiveRecord := destinationSensitiveRecord{
+			Type:        record.Type,
+			Name:        record.Name,
+			Config:      sensitiveConfig,
+			CreatedTime: now,
+			UpdatedTime: now,
+		}
+		if sensitiveCreatedTime != "" {
+			sensitiveRecord.CreatedTime = sensitiveCreatedTime
+		}
+		if err := putDestinationSensitiveConfig(ctx, storage, nextSensitiveVersion, sensitiveRecord); err != nil {
+			return err
+		}
+		record.SensitiveConfigVersion = nextSensitiveVersion
 	}
-	sensitiveRecord := destinationSensitiveRecord{
-		Type:        record.Type,
-		Name:        record.Name,
-		Config:      sensitiveConfig,
-		CreatedTime: now,
-		UpdatedTime: now,
-	}
-	if sensitiveCreatedTime != "" {
-		sensitiveRecord.CreatedTime = sensitiveCreatedTime
-	}
-	if err := putDestinationSensitiveConfig(ctx, storage, sensitiveRecord); err != nil {
+	if err := putDestination(ctx, storage, record); err != nil {
+		if nextSensitiveVersion != destinationSensitiveNone {
+			_ = deleteDestinationSensitiveConfigVersion(
+				ctx,
+				storage,
+				record.Type,
+				record.Name,
+				nextSensitiveVersion,
+			)
+		}
 		return err
 	}
-	return nil
+	return deleteDestinationSensitiveConfigVersion(
+		ctx,
+		storage,
+		record.Type,
+		record.Name,
+		previousSensitiveVersion,
+	)
 }
 
 func (b *secretSyncBackend) pathDestinationValidate(
@@ -714,7 +749,7 @@ func (b *secretSyncBackend) pathDestinationRead(
 	if err != nil {
 		return logical.ErrorResponse(err.Error()), nil
 	}
-	sensitiveRecord, err := getDestinationSensitiveConfig(ctx, req.Storage, record.Type, record.Name)
+	sensitiveRecord, err := getDestinationSensitiveConfigForRecord(ctx, req.Storage, *record)
 	if err != nil {
 		return nil, err
 	}
@@ -828,7 +863,7 @@ func destinationConfig(
 	record destinationRecord,
 ) (providers.DestinationConfig, error) {
 	config := copyStringMap(record.Config)
-	sensitiveRecord, err := getDestinationSensitiveConfig(ctx, storage, record.Type, record.Name)
+	sensitiveRecord, err := getDestinationSensitiveConfigForRecord(ctx, storage, record)
 	if err != nil {
 		return providers.DestinationConfig{}, err
 	}

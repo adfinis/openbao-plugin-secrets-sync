@@ -57,6 +57,7 @@ paths:
       tags: [config]
       operationId: writeConfig
       summary: Update mount-wide secret sync configuration.
+      description: Applies a partial update. Omitted fields retain their stored values, including across concurrent requests handled by one mount process.
       x-openbao-operation: update
       requestBody:
         required: true
@@ -120,7 +121,7 @@ paths:
       tags: [destinations]
       operationId: writeDestination
       summary: Create or update one destination configuration.
-      description: Validates merged provider config before storage. Non-empty fields outside the selected provider type are rejected.
+      description: Validates merged provider config before storage. On update, omitted fields inherit their stored values. Non-empty fields outside the selected provider type are rejected.
       x-openbao-operation: update
       parameters:
         - $ref: "#/components/parameters/DestinationType"
