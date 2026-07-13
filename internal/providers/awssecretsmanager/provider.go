@@ -420,11 +420,19 @@ func defaultClientFactory(
 	ctx context.Context,
 	providerConfig providers.DestinationConfig,
 ) (secretsManagerClient, error) {
+	return defaultClientFactoryWithResolver(ctx, providerConfig, nil)
+}
+
+func defaultClientFactoryWithResolver(
+	ctx context.Context,
+	providerConfig providers.DestinationConfig,
+	resolver endpointguard.Resolver,
+) (secretsManagerClient, error) {
 	options, err := awsDestinationOptionsFromConfig(providerConfig)
 	if err != nil {
 		return nil, err
 	}
-	if err := validateEndpointResolution(ctx, options, nil); err != nil {
+	if err := validateEndpointResolution(ctx, options, resolver); err != nil {
 		return nil, err
 	}
 	loadOptions := []func(*awsconfig.LoadOptions) error{}
@@ -435,6 +443,8 @@ func defaultClientFactory(
 	if err != nil {
 		return nil, err
 	}
+	// STS calls use the bounded default client. The custom endpoint address
+	// policy applies only to the Secrets Manager client created below.
 	cfg.HTTPClient = defaultAWSHTTPClient()
 	switch options.authMode {
 	case AuthModeAssumeRole:
@@ -466,6 +476,7 @@ func defaultClientFactory(
 		)
 		cfg.Credentials = aws.NewCredentialsCache(webIdentityProvider)
 	}
+	cfg.HTTPClient = awsHTTPClientForOptions(options, resolver)
 	clientOptions := []func(*secretsmanager.Options){}
 	if options.endpointURL != "" {
 		clientOptions = append(clientOptions, func(secretsManagerOptions *secretsmanager.Options) {
@@ -485,6 +496,31 @@ func defaultAWSHTTPClient() *http.Client {
 		Timeout:   defaultHTTPTimeout,
 		Transport: transport,
 	}
+}
+
+func awsHTTPClientForOptions(options awsDestinationOptions, resolver endpointguard.Resolver) *http.Client {
+	client := defaultAWSHTTPClient()
+	if options.endpointURL == "" {
+		return client
+	}
+	transport, ok := client.Transport.(*http.Transport)
+	if !ok {
+		return client
+	}
+	var allowed endpointguard.AddrAllowed
+	switch options.endpointPolicy {
+	case EndpointPolicyLocal:
+		allowed = func(addr netip.Addr) bool {
+			addr = addr.Unmap()
+			return addr.IsLoopback() || addr.IsPrivate()
+		}
+	case EndpointPolicyPrivate:
+		allowed = func(addr netip.Addr) bool { return !isUnsafeEndpointAddr(addr) }
+	default:
+		return client
+	}
+	transport.DialContext = endpointguard.GuardedDialContext(resolver, allowed)
+	return client
 }
 
 type awsDestinationOptions struct {

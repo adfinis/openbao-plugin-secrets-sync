@@ -8,10 +8,13 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"net/http"
+	"net/netip"
 	"net/url"
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	payloadpkg "github.com/adfinis/openbao-plugin-secrets-sync/internal/payload"
 	"github.com/adfinis/openbao-plugin-secrets-sync/internal/providers"
@@ -57,8 +60,9 @@ const (
 	// AuthModeToken uses an explicitly configured Kubernetes bearer token.
 	AuthModeToken = "token"
 
-	secretMaxBytes = 1024 * 1024
-	dataKeyPayload = "payload"
+	secretMaxBytes        = 1024 * 1024
+	dataKeyPayload        = "payload"
+	defaultRequestTimeout = 30 * time.Second
 
 	labelManaged = "openbao.adfinis.com/managed"
 
@@ -358,6 +362,7 @@ func defaultClientFactoryWithResolver(
 	if err != nil {
 		return nil, err
 	}
+	hardenRESTConfig(restConfig, options, resolver)
 	return kubernetes.NewForConfig(restConfig)
 }
 
@@ -486,6 +491,25 @@ func restConfigForToken(options kubernetesDestinationOptions) *rest.Config {
 			ServerName: options.tlsServerName,
 		},
 	}
+}
+
+func hardenRESTConfig(
+	restConfig *rest.Config,
+	options kubernetesDestinationOptions,
+	resolver endpointguard.Resolver,
+) {
+	if restConfig.Timeout <= 0 {
+		restConfig.Timeout = defaultRequestTimeout
+	}
+	if options.authMode != AuthModeToken || options.allowPrivateAPI {
+		return
+	}
+	restConfig.Dial = endpointguard.GuardedDialContext(
+		resolver,
+		func(addr netip.Addr) bool { return !endpointguard.IsRestrictedAddr(addr) },
+	)
+	// A proxy would resolve api_server outside the guarded dial path.
+	restConfig.Proxy = func(*http.Request) (*url.URL, error) { return nil, nil }
 }
 
 func validateNamespace(namespace string) error {

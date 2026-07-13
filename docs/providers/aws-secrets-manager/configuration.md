@@ -79,14 +79,18 @@ client:
 - Use no `endpoint_url` for normal AWS endpoints.
 - Use `endpoint_policy=local` only for local development endpoints. Local
   endpoints may use HTTP or HTTPS, but the host must be `localhost`,
-  `localstack`, a `.localhost` name, or a loopback address.
+  `localstack`, a `.localhost` name, or a loopback address. At connection time,
+  names must resolve only to loopback or private addresses.
 - Use `endpoint_policy=private` only for approved HTTPS private endpoints.
   Private endpoints must not target local development hosts and must not
   resolve to loopback, link-local, multicast, or unspecified addresses.
 - Do not put credentials or userinfo in endpoint URLs.
 
-The provider HTTP client uses a 30-second timeout and does not use ambient proxy
-configuration from the OpenBao process environment.
+The provider resolves custom endpoint names again for every new connection and
+dials an approved address directly, so DNS changes cannot bypass the endpoint
+policy between validation and connection. The provider HTTP client uses a
+30-second timeout and does not use ambient proxy configuration from the
+OpenBao process environment.
 
 ## Value drift detection
 

@@ -64,9 +64,9 @@ rejects common word combinations during first boot. If you override
 quality checks.
 
 The OpenBao container reaches GitLab over the Docker network at
-`http://gitlab`. The e2e destination sets `allow_insecure_http=true` explicitly
-for that local Docker-only URL. Production and default GitLab destinations
-should use HTTPS.
+`http://gitlab`. The e2e destination sets `allow_insecure_http=true` and
+`allow_private_network=true` explicitly for that local Docker-only URL.
+Production and default GitLab destinations should use HTTPS.
 
 ## OpenTofu
 

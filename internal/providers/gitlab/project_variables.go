@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/netip"
 	"net/url"
 	"strconv"
 	"strings"
@@ -327,7 +328,7 @@ func defaultClientFactoryWithResolver(
 	if err := validateBaseURLResolution(ctx, options, resolver); err != nil {
 		return nil, err
 	}
-	return httpProjectVariableClient{client: defaultGitLabHTTPClient()}, nil
+	return httpProjectVariableClient{client: gitLabHTTPClientForOptions(options, resolver)}, nil
 }
 
 func defaultGitLabHTTPClient() *http.Client {
@@ -343,6 +344,22 @@ func defaultGitLabHTTPClient() *http.Client {
 			return http.ErrUseLastResponse
 		},
 	}
+}
+
+func gitLabHTTPClientForOptions(options gitlabDestinationOptions, resolver endpointguard.Resolver) *http.Client {
+	client := defaultGitLabHTTPClient()
+	if options.allowPrivateNet {
+		return client
+	}
+	transport, ok := client.Transport.(*http.Transport)
+	if !ok {
+		return client
+	}
+	transport.DialContext = endpointguard.GuardedDialContext(
+		resolver,
+		func(addr netip.Addr) bool { return !endpointguard.IsRestrictedAddr(addr) },
+	)
+	return client
 }
 
 type gitlabDestinationOptions struct {

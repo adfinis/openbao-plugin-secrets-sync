@@ -39,9 +39,11 @@ or private test network that intentionally uses HTTP, set both
 allowed only when `allow_private_network=true`. Use HTTPS for production
 destinations.
 
-The provider HTTP client uses a 30-second timeout, does not follow redirects,
-and does not use ambient proxy configuration from the OpenBao process
-environment.
+Without the private-network opt-in, the provider resolves the GitLab name again
+for every new connection and dials an approved address directly, so DNS changes
+cannot bypass the address policy between validation and connection. The
+provider HTTP client uses a 30-second timeout, does not follow redirects, and
+does not use ambient proxy configuration from the OpenBao process environment.
 
 ## Variable attributes
 
