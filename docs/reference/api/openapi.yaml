@@ -57,6 +57,7 @@ paths:
       tags: [config]
       operationId: writeConfig
       summary: Update mount-wide secret sync configuration.
+      description: Applies a partial update. Omitted fields retain their stored values, including across concurrent requests handled by one mount process.
       x-openbao-operation: update
       requestBody:
         required: true

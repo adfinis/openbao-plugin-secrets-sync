@@ -130,6 +130,9 @@ func (b *secretSyncBackend) pathConfigWrite(
 	req *logical.Request,
 	data *framework.FieldData,
 ) (*logical.Response, error) {
+	b.configMu.Lock()
+	defer b.configMu.Unlock()
+
 	cfg, err := readGlobalConfig(ctx, req.Storage)
 	if err != nil {
 		return nil, err
@@ -265,6 +268,9 @@ func (b *secretSyncBackend) pathConfigRestoreGuardAcknowledgeWrite(
 	req *logical.Request,
 	_ *framework.FieldData,
 ) (*logical.Response, error) {
+	b.configMu.Lock()
+	defer b.configMu.Unlock()
+
 	state, err := ensureRuntimeState(ctx, req.Storage)
 	if err != nil {
 		return nil, err
