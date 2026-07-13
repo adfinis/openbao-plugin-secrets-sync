@@ -54,7 +54,9 @@ Dispatch claims are stored on the outbox record with a claim owner, expiry
 time, and attempt number. Unexpired claims are skipped. Expired claims are
 reclaimable. Dispatcher claim, queue retry, and queue cancel paths serialize
 their read-check-write/delete sections so an operator action cannot overwrite
-or delete an operation while dispatch is claiming it.
+or delete an operation while dispatch is claiming it. A dispatcher never clears
+another worker's unexpired claim, and sequential batches calculate a fresh lease
+start for each operation rather than reusing the batch start time.
 
 The current dispatcher is intentionally sequential. Dispatch claims already
 allow safe concurrency, so a future throughput step can add a bounded worker
