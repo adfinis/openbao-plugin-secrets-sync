@@ -134,25 +134,31 @@ type destinationSensitiveRecord struct {
 }
 
 type associationRecord struct {
-	ID               string   `json:"id"`
-	Path             string   `json:"path"`
-	DestinationType  string   `json:"destination_type"`
-	DestinationName  string   `json:"destination_name"`
-	DestinationRef   string   `json:"destination_ref"`
-	NameTemplate     string   `json:"name_template"`
-	ResolvedName     string   `json:"resolved_name"`
-	ReservationNames []string `json:"reservation_names,omitempty"`
-	Granularity      string   `json:"granularity"`
-	Format           string   `json:"format"`
-	DataMapping      string   `json:"data_mapping,omitempty"`
-	DataKeyTemplate  string   `json:"data_key_template,omitempty"`
-	DeleteMode       string   `json:"delete_mode"`
-	Enabled          bool     `json:"enabled"`
-	CreatedTime      string   `json:"created_time"`
-	UpdatedTime      string   `json:"updated_time"`
+	ID               string            `json:"id"`
+	Path             string            `json:"path"`
+	DestinationType  string            `json:"destination_type"`
+	DestinationName  string            `json:"destination_name"`
+	DestinationRef   string            `json:"destination_ref"`
+	NameTemplate     string            `json:"name_template"`
+	ResolvedName     string            `json:"resolved_name"`
+	ReservationNames []string          `json:"reservation_names,omitempty"`
+	Granularity      string            `json:"granularity"`
+	Format           string            `json:"format"`
+	DataMapping      string            `json:"data_mapping,omitempty"`
+	DataKeyTemplate  string            `json:"data_key_template,omitempty"`
+	ProviderConfig   map[string]string `json:"provider_config,omitempty"`
+	ProviderIdentity string            `json:"provider_identity,omitempty"`
+	DeleteMode       string            `json:"delete_mode"`
+	Enabled          bool              `json:"enabled"`
+	CreatedTime      string            `json:"created_time"`
+	UpdatedTime      string            `json:"updated_time"`
 }
 
 func (record associationRecord) reservationName() string {
+	return associationReservationKey(record.ProviderIdentity, record.rawReservationName())
+}
+
+func (record associationRecord) rawReservationName() string {
 	if record.Granularity == syncGranularitySecretKey {
 		reservationName, err := secretKeyReservationName(
 			record.NameTemplate,
@@ -171,8 +177,17 @@ func (record associationRecord) reservationName() string {
 func (record associationRecord) reservationNames() []string {
 	names := make([]string, 0, 1+len(record.ReservationNames))
 	names = append(names, record.reservationName())
-	names = append(names, record.ReservationNames...)
+	for _, reservationName := range record.ReservationNames {
+		names = append(names, associationReservationKey(record.ProviderIdentity, reservationName))
+	}
 	return uniqueSortedStrings(names)
+}
+
+func associationReservationKey(providerIdentity string, resolvedName string) string {
+	if providerIdentity == "" {
+		return resolvedName
+	}
+	return providerIdentity + "\x00" + resolvedName
 }
 
 type enqueueIntentRecord struct {

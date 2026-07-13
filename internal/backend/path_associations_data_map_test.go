@@ -129,6 +129,14 @@ func (*capturingDataMapProvider) ValidateConfig(context.Context, providers.Desti
 	return nil
 }
 
+func (*capturingDataMapProvider) NormalizeAssociationConfig(
+	context.Context,
+	providers.DestinationConfig,
+	providers.AssociationConfig,
+) (providers.AssociationConfig, error) {
+	return providers.AssociationConfig{Config: map[string]string{}}, nil
+}
+
 func (p *capturingDataMapProvider) OpenDestination(
 	context.Context,
 	providers.DestinationConfig,

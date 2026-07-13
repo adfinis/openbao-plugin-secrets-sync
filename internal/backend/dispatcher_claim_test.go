@@ -383,6 +383,14 @@ func (*blockingMutationProvider) ValidateConfig(context.Context, providers.Desti
 	return nil
 }
 
+func (*blockingMutationProvider) NormalizeAssociationConfig(
+	context.Context,
+	providers.DestinationConfig,
+	providers.AssociationConfig,
+) (providers.AssociationConfig, error) {
+	return providers.AssociationConfig{Config: map[string]string{}}, nil
+}
+
 func (p *blockingMutationProvider) OpenDestination(
 	context.Context,
 	providers.DestinationConfig,

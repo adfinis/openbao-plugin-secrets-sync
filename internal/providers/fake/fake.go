@@ -47,6 +47,20 @@ func (Provider) ValidateConfig(_ context.Context, cfg providers.DestinationConfi
 	}
 }
 
+func (Provider) NormalizeAssociationConfig(
+	_ context.Context,
+	_ providers.DestinationConfig,
+	cfg providers.AssociationConfig,
+) (providers.AssociationConfig, error) {
+	if len(cfg.Config) > 0 {
+		return providers.AssociationConfig{}, &providers.Error{
+			Class:   providers.ErrorClassValidation,
+			Message: "fake provider does not support association configuration",
+		}
+	}
+	return providers.AssociationConfig{Config: map[string]string{}}, nil
+}
+
 func (Provider) OpenDestination(
 	_ context.Context,
 	cfg providers.DestinationConfig,

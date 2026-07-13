@@ -775,12 +775,6 @@ func TestGitLabDestinationConfigLifecycle(t *testing.T) {
 		"description":                       "gitlab production",
 		gitlab.ConfigKeyBaseURL:             "https://gitlab.example.com",
 		gitlab.ConfigKeyProjectID:           "platform/app",
-		gitlab.ConfigKeyEnvironmentScope:    "production",
-		gitlab.ConfigKeyProtected:           true,
-		gitlab.ConfigKeyMasked:              false,
-		gitlab.ConfigKeyHidden:              false,
-		gitlab.ConfigKeyVariableRaw:         true,
-		gitlab.ConfigKeyVariableType:        gitlab.VariableTypeEnvVar,
 		gitlab.ConfigKeyAllowInsecureHTTP:   true,
 		gitlab.ConfigKeyAllowPrivateNetwork: true,
 		gitlab.ConfigKeyToken:               "glpat-secret",
@@ -837,6 +831,22 @@ func TestGitLabDestinationConfigLifecycle(t *testing.T) {
 	capabilities := validateResp.Data["capabilities"].(map[string]interface{})
 	if got := capabilities["supports_secret_key"]; got != true {
 		t.Fatalf("gitlab supports_secret_key = %v, want true", got)
+	}
+}
+
+func TestGitLabDestinationRejectsAssociationConfig(t *testing.T) {
+	env := newBackendTestEnv(t)
+
+	resp := env.update("destinations/gitlab/prod", map[string]interface{}{
+		gitlab.ConfigKeyProjectID:        "platform/app",
+		gitlab.ConfigKeyToken:            "glpat-secret",
+		gitlab.ConfigKeyEnvironmentScope: "production",
+	})
+	if resp == nil || !resp.IsError() {
+		t.Fatalf("GitLab destination association config response = %#v, want error", resp)
+	}
+	if !strings.Contains(resp.Error().Error(), gitlab.ConfigKeyEnvironmentScope) {
+		t.Fatalf("GitLab destination error = %q, want field name", resp.Error().Error())
 	}
 }
 

@@ -8,7 +8,6 @@ variables:
 ```sh
 bao write secret-sync/destinations/gitlab/prod \
   project_id=platform/app \
-  environment_scope=production \
   token="$GITLAB_TOKEN"
 ```
 
@@ -19,9 +18,6 @@ GitLab:
 bao write secret-sync/destinations/gitlab/prod \
   base_url=https://gitlab.example.com \
   project_id=platform/app \
-  environment_scope=production \
-  protected=true \
-  variable_raw=true \
   token="$GITLAB_TOKEN"
 ```
 
@@ -45,10 +41,24 @@ cannot bypass the address policy between validation and connection. The
 provider HTTP client uses a 30-second timeout, does not follow redirects, and
 does not use ambient proxy configuration from the OpenBao process environment.
 
-## Variable attributes
+## Association variable attributes
 
-GitLab destination config controls the attributes written to created or updated
-project variables:
+Each GitLab association controls the attributes written to the project
+variables it creates or updates. For example:
+
+```sh
+bao write secret-sync/associations/app/ci \
+  destination=gitlab/prod \
+  name_template='APP_{{ key }}' \
+  granularity=secret-key \
+  format=raw \
+  delete_mode=delete \
+  environment_scope=production \
+  protected=true \
+  variable_raw=true
+```
+
+The association fields are:
 
 - `environment_scope`: GitLab environment scope. The default is `*`.
 - `protected`: whether GitLab exposes the variable only to protected refs.
@@ -83,16 +93,21 @@ masked variable character set. For ordinary masked CI/CD variables, prefer
 
 The provider uses `environment_scope` when reading, updating, and deleting
 variables, so the same variable key can be managed independently for different
-GitLab environment scopes.
+GitLab environment scopes. The scope participates in association identity and
+remote-name reservations. Supplying a different scope on the association write
+route creates a separate association instead of renaming an existing one.
+
+The backend normalizes all six fields and returns their effective string values
+under `provider_config` in association read, write, and plan responses.
 
 ## Sensitive fields
 
 The backend stores `token` under the seal-wrapped destination secret prefix and
 redacts it on destination reads.
 
-Destination reads can show non-sensitive variable attributes such as
-`project_id`, `environment_scope`, `protected`, `masked`, `hidden`,
-`variable_raw`, and `variable_type`.
+Destination reads show connection-level fields such as `base_url`, `project_id`,
+and network policy options. Association reads show non-sensitive variable
+attributes under `provider_config`.
 
 ## Validation and check commands
 
@@ -100,6 +115,7 @@ Read destination config. Sensitive fields are redacted:
 
 ```sh
 bao read secret-sync/destinations/gitlab/prod
+bao read secret-sync/associations/app/ci
 ```
 
 Check destination readiness:

@@ -12,6 +12,10 @@ type Provider interface {
 	// ValidateConfig validates a destination config without opening a long-lived runtime.
 	// Provider-specific validation failures should return *Error with a stable class.
 	ValidateConfig(context.Context, DestinationConfig) error
+	// NormalizeAssociationConfig validates provider-specific association settings,
+	// applies stable defaults, and returns the opaque provider identity component
+	// used by the core for association identity and remote-name reservations.
+	NormalizeAssociationConfig(context.Context, DestinationConfig, AssociationConfig) (AssociationConfig, error)
 	// OpenDestination builds a configured runtime for one destination.
 	// Returning a nil runtime with nil error violates the provider contract.
 	OpenDestination(context.Context, DestinationConfig) (DestinationRuntime, error)
@@ -58,6 +62,14 @@ type Capabilities struct {
 type DestinationConfig struct {
 	Name   string
 	Config map[string]string
+}
+
+// AssociationConfig is provider-specific configuration applied to every remote
+// object produced by one association. Identity must be stable, non-sensitive,
+// and derived only by the provider during normalization.
+type AssociationConfig struct {
+	Config   map[string]string
+	Identity string
 }
 
 // RuntimeIdentity identifies the OpenBao mount instance that produced a provider request.
@@ -135,6 +147,7 @@ func (e *Error) Error() string {
 // PlanRequest describes a dry-run provider operation.
 type PlanRequest struct {
 	Runtime       RuntimeIdentity
+	Association   AssociationConfig
 	ResolvedName  string
 	Format        string
 	PayloadSHA256 string
@@ -162,6 +175,7 @@ type PlanResult struct {
 // UpsertRequest describes a remote create or update operation.
 type UpsertRequest struct {
 	Runtime        RuntimeIdentity
+	Association    AssociationConfig
 	ResolvedName   string
 	Format         string
 	Payload        []byte
@@ -182,6 +196,7 @@ func (r UpsertRequest) OwnershipIdentity() RequestIdentity {
 // DeleteRequest describes a remote delete operation.
 type DeleteRequest struct {
 	Runtime        RuntimeIdentity
+	Association    AssociationConfig
 	ResolvedName   string
 	IdempotencyKey string
 	DataMap        bool
@@ -199,6 +214,7 @@ func (r DeleteRequest) OwnershipIdentity() RequestIdentity {
 // ReadStateRequest describes a remote state lookup.
 type ReadStateRequest struct {
 	Runtime       RuntimeIdentity
+	Association   AssociationConfig
 	ResolvedName  string
 	PayloadSHA256 string
 	DataMap       bool

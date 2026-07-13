@@ -242,6 +242,14 @@ func (contractProvider) ValidateConfig(_ context.Context, cfg providers.Destinat
 	return nil
 }
 
+func (contractProvider) NormalizeAssociationConfig(
+	_ context.Context,
+	_ providers.DestinationConfig,
+	cfg providers.AssociationConfig,
+) (providers.AssociationConfig, error) {
+	return providers.AssociationConfig{Config: cfg.Config, Identity: cfg.Identity}, nil
+}
+
 func (contractProvider) OpenDestination(
 	_ context.Context,
 	cfg providers.DestinationConfig,

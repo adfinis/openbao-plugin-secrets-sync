@@ -120,6 +120,19 @@ func (Provider) ValidateConfig(_ context.Context, cfg providers.DestinationConfi
 	return err
 }
 
+func (Provider) NormalizeAssociationConfig(
+	_ context.Context,
+	_ providers.DestinationConfig,
+	cfg providers.AssociationConfig,
+) (providers.AssociationConfig, error) {
+	if len(cfg.Config) > 0 {
+		return providers.AssociationConfig{}, providerHelpers.ValidationError(
+			"k8s does not support association configuration",
+		)
+	}
+	return providers.AssociationConfig{Config: map[string]string{}}, nil
+}
+
 func (p Provider) OpenDestination(
 	ctx context.Context,
 	cfg providers.DestinationConfig,

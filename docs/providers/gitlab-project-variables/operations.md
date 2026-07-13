@@ -30,11 +30,9 @@ readback with the desired payload hash. Manual value edits are detected even
 when the variable description still contains the previous payload hash, and the
 next manual sync or background `drift_repair=repair` pass repairs owned drift.
 
-Changing a GitLab destination updates stored config and validates the merged
-provider settings, but it does not enqueue sync work for existing associations.
-If a change to `protected`, `masked`, `variable_raw`, or `variable_type` needs
-to be reflected in existing GitLab variables, plan the association and then
-trigger a manual sync:
+Connection and credential settings belong to the GitLab destination. Variable
+attributes belong to each association. Plan an attribute change when desired,
+then write it to the association:
 
 ```sh
 bao write secret-sync/associations/app/db/plan \
@@ -42,16 +40,33 @@ bao write secret-sync/associations/app/db/plan \
   name_template='APP_{{ key }}' \
   granularity=secret-key \
   format=raw \
-  delete_mode=delete
+  delete_mode=delete \
+  environment_scope=production \
+  protected=true \
+  masked=true
 
-bao write secret-sync/associations/app/db/sync destination=gitlab/prod
+bao write secret-sync/associations/app/db \
+  destination=gitlab/prod \
+  environment_scope=production \
+  protected=true \
+  masked=true
+
 bao write secret-sync/queue/drain max_operations=10
 ```
 
-For variables owned by this plugin, the provider repairs these attribute
-changes even when the source payload has not changed. The `hidden` flag is
-different: GitLab accepts hidden variables only at creation time, so existing
-visible variables cannot be converted to hidden variables by a sync.
+Changing `protected`, `masked`, `hidden`, `variable_raw`, or `variable_type` on
+an enabled association automatically enqueues the current source version. The
+provider converges owned variable attributes even when the source payload has
+not changed. The `hidden` flag is different: GitLab accepts hidden variables
+only at creation time, so existing visible variables cannot be converted to
+hidden variables by a sync.
+
+`environment_scope` is an association identity field. A write with a new scope
+creates a separate association, allowing the same variable key to be managed in
+multiple scopes. Once multiple associations point to the same destination,
+include `environment_scope` for writes and plans; use association-ID lifecycle
+routes for disable, enable, sync, and delete when destination selection is
+ambiguous.
 
 Remote delete is sent only when the association uses `delete_mode=delete`.
 Missing owned variables are treated idempotently.

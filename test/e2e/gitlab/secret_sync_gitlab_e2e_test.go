@@ -54,7 +54,7 @@ func TestOpenBaoPluginSyncsToGitLabProjectVariables(t *testing.T) {
 		})
 	}
 
-	writeGitLabDestination(t, baoClient, nil)
+	writeGitLabDestination(t, baoClient)
 	assertDestinationValid(t, baoClient)
 	assertDestinationHealthy(t, baoClient)
 	acknowledgeRestoreGuard(t, baoClient)
@@ -72,7 +72,6 @@ func TestOpenBaoPluginSyncsToGitLabProjectVariables(t *testing.T) {
 	if ids := stringSlice(t, association.Data["sync_operation_ids"]); len(ids) != 1 {
 		t.Fatalf("sync_operation_ids = %v, want one operation", ids)
 	}
-	associationID := associationIDFromResponse(t, association)
 	drainQueue(t, baoClient, 1)
 	assertStatusObject(t, baoClient, variableKey, "SYNCED", "")
 	assertGitLabVariable(t, ctx, gitLabClient, variableKey, "initial", "1")
@@ -101,17 +100,20 @@ func TestOpenBaoPluginSyncsToGitLabProjectVariables(t *testing.T) {
 	assertGitLabVariable(t, ctx, gitLabClient, variableKey, "token_123", "3")
 	assertGitLabVariableAttributes(t, ctx, gitLabClient, variableKey, false, false, true, gitlab.VariableTypeEnvVar)
 
-	writeGitLabDestination(t, baoClient, map[string]interface{}{
+	attributeUpdate := associationRequest()
+	attributeUpdate[gitlab.ConfigKeyProtected] = true
+	attributeUpdate[gitlab.ConfigKeyMasked] = true
+	attributeSync := write(t, baoClient, mountPath+"/associations/app/db", attributeUpdate)
+	if ids := stringSlice(t, attributeSync.Data["sync_operation_ids"]); len(ids) != 1 {
+		t.Fatalf("attribute update sync_operation_ids = %v, want one operation", ids)
+	}
+	attributePlan := write(t, baoClient, mountPath+"/associations/app/db/plan", map[string]interface{}{
+		"destination":             "gitlab/local",
 		gitlab.ConfigKeyProtected: "true",
 		gitlab.ConfigKeyMasked:    "true",
 	})
-	attributePlan := write(t, baoClient, mountPath+"/associations/app/db/plan", associationRequest())
 	if got := attributePlan.Data["action"]; got != "update" {
 		t.Fatalf("attribute drift plan action = %v, want update", got)
-	}
-	sync := write(t, baoClient, mountPath+"/associations/app/db/"+associationID+"/sync", map[string]interface{}{})
-	if ids := stringSlice(t, sync.Data["sync_operation_ids"]); len(ids) != 1 {
-		t.Fatalf("attribute drift sync_operation_ids = %v, want one operation", ids)
 	}
 	drainQueue(t, baoClient, 1)
 	assertGitLabVariable(t, ctx, gitLabClient, variableKey, "token_123", "3")
@@ -126,31 +128,28 @@ func TestOpenBaoPluginSyncsToGitLabProjectVariables(t *testing.T) {
 	assertStatusObject(t, baoClient, variableKey, "REMOTE_MISSING", "")
 }
 
-func writeGitLabDestination(t *testing.T, client *api.Client, overrides map[string]interface{}) {
+func writeGitLabDestination(t *testing.T, client *api.Client) {
 	t.Helper()
 	config := map[string]interface{}{
 		gitlab.ConfigKeyBaseURL:             env("E2E_GITLAB_BASE_URL_IN_BAO", "http://gitlab"),
 		gitlab.ConfigKeyProjectID:           env("E2E_GITLAB_PROJECT_PATH", "root/openbao-plugin-secrets-sync-e2e"),
-		gitlab.ConfigKeyEnvironmentScope:    env("E2E_GITLAB_ENVIRONMENT_SCOPE", "production"),
 		gitlab.ConfigKeyToken:               env("E2E_GITLAB_TOKEN", "glpat-openbao-plugin-secrets-sync-e2e-token-000000"),
-		gitlab.ConfigKeyVariableRaw:         "true",
-		gitlab.ConfigKeyVariableType:        gitlab.VariableTypeEnvVar,
 		gitlab.ConfigKeyAllowInsecureHTTP:   "true",
 		gitlab.ConfigKeyAllowPrivateNetwork: "true",
-	}
-	for key, value := range overrides {
-		config[key] = value
 	}
 	write(t, client, mountPath+"/destinations/gitlab/local", config)
 }
 
 func associationRequest() map[string]interface{} {
 	return map[string]interface{}{
-		"destination":   "gitlab/local",
-		"name_template": "{{ key }}",
-		"granularity":   "secret-key",
-		"format":        "raw",
-		"delete_mode":   "delete",
+		"destination":                    "gitlab/local",
+		"name_template":                  "{{ key }}",
+		"granularity":                    "secret-key",
+		"format":                         "raw",
+		"delete_mode":                    "delete",
+		gitlab.ConfigKeyEnvironmentScope: env("E2E_GITLAB_ENVIRONMENT_SCOPE", "production"),
+		gitlab.ConfigKeyVariableRaw:      true,
+		gitlab.ConfigKeyVariableType:     gitlab.VariableTypeEnvVar,
 	}
 }
 
@@ -909,15 +908,6 @@ func unescapeMetadataDescriptionValue(value string) (string, error) {
 		return "", fmt.Errorf("trailing escape character")
 	}
 	return builder.String(), nil
-}
-
-func associationIDFromResponse(t *testing.T, secret *api.Secret) string {
-	t.Helper()
-	id, ok := secret.Data["association_id"].(string)
-	if !ok || id == "" {
-		t.Fatalf("association_id = %v, want non-empty string", secret.Data["association_id"])
-	}
-	return id
 }
 
 func metadataOperationIDs(t *testing.T, secret *api.Secret) []string {
