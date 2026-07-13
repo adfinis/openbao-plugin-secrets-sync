@@ -28,7 +28,9 @@ operation types, association IDs, object IDs, and destination references.
 Periodic work, queue drains, and event-triggered dispatch recover incomplete
 enqueue intents before processing due outbox records. Upsert intents recover
 only while the source version is live. Delete intents recover only when the
-referenced source version is deleted or unavailable.
+referenced source version is deleted or unavailable. Recovery repairs source
+metadata from the committed version record before restoring missing outbox
+records, and prunes the intent only after both records are consistent.
 
 The source generation is part of operation identity and idempotency. Deleting
 and recreating a source path therefore does not reuse historical operation IDs
