@@ -62,6 +62,7 @@ const (
 
 	secretMaxBytes        = 1024 * 1024
 	dataKeyPayload        = "payload"
+	healthCheckSecretName = "openbao-secret-sync-health-check"
 	defaultRequestTimeout = 30 * time.Second
 
 	labelManaged = "openbao.adfinis.com/managed"
@@ -149,7 +150,8 @@ func (p Provider) OpenDestination(
 }
 
 func (r destinationRuntime) Health(ctx context.Context) (*providers.HealthResult, error) {
-	if _, err := r.secretClient().List(ctx, metav1.ListOptions{Limit: 1}); err != nil {
+	_, err := r.secretClient().Get(ctx, healthCheckSecretName, metav1.GetOptions{})
+	if err != nil && !apierrors.IsNotFound(err) {
 		return &providers.HealthResult{
 			Healthy:    false,
 			Message:    "k8s health check failed",
@@ -210,10 +212,18 @@ func (r destinationRuntime) Plan(ctx context.Context, req providers.PlanRequest)
 			}, nil
 		}
 	}
-	if payloadSHA256ForMode(secret, req.DataMap) == req.PayloadSHA256 {
+	payloadMatches := payloadMatchesRequest(secret, req.DataMap, req.PayloadSHA256)
+	if payloadMatches && managedMetadataMatches(
+		secret,
+		req.SourceVersion,
+		req.PayloadSHA256,
+		req.Format,
+		req.DataMap,
+		req.DataMapKeys,
+	) {
 		return &providers.PlanResult{Action: providers.PlanActionNoop}, nil
 	}
-	if isImmutable(secret) {
+	if !payloadMatches && isImmutable(secret) {
 		return &providers.PlanResult{
 			Action:     providers.PlanActionBlocked,
 			ErrorClass: providers.ErrorClassValidation,
@@ -247,16 +257,27 @@ func (r destinationRuntime) Upsert(ctx context.Context, req providers.UpsertRequ
 	if remoteSourceVersionNewer(secret.Annotations, req.SourceVersion) {
 		return nil, providerHelpers.ProviderError(providers.ErrorClassDrift)
 	}
-	if payloadSHA256ForMode(secret, false) == req.PayloadSHA256 {
+	payloadMatches := payloadMatchesRequest(secret, false, req.PayloadSHA256)
+	if payloadMatches && managedMetadataMatches(
+		secret,
+		req.SourceVersion,
+		req.PayloadSHA256,
+		req.Format,
+		false,
+		nil,
+	) {
 		return &providers.SyncResult{RemoteVersion: secret.ResourceVersion}, nil
 	}
-	if isImmutable(secret) {
+	if !payloadMatches && isImmutable(secret) {
 		return nil, providerHelpers.ProviderError(providers.ErrorClassValidation)
 	}
 	updated := secret.DeepCopy()
-	updated.Type = corev1.SecretTypeOpaque
-	updated.Data = map[string][]byte{dataKeyPayload: req.Payload}
+	if !payloadMatches {
+		updated.Type = corev1.SecretTypeOpaque
+		updated.Data = map[string][]byte{dataKeyPayload: req.Payload}
+	}
 	applyOwnershipMetadata(updated, req.OwnershipIdentity(), req.SourceVersion, req.PayloadSHA256, req.Format)
+	removeDataMapMetadata(updated)
 	result, err := secretClient.Update(ctx, updated, metav1.UpdateOptions{})
 	if err != nil {
 		return nil, providerHelpers.ProviderError(classifyKubernetesError(err))
@@ -285,7 +306,7 @@ func (r destinationRuntime) Delete(ctx context.Context, req providers.DeleteRequ
 	if req.DataMap {
 		return r.deleteDataMap(ctx, secret, req)
 	}
-	if err := secretClient.Delete(ctx, req.ResolvedName, metav1.DeleteOptions{}); err != nil {
+	if err := secretClient.Delete(ctx, req.ResolvedName, deleteOptionsForSecret(secret)); err != nil {
 		return nil, providerHelpers.ProviderError(classifyKubernetesError(err))
 	}
 	return &providers.SyncResult{RemoteVersion: secret.ResourceVersion}, nil
@@ -665,10 +686,19 @@ func (r destinationRuntime) upsertDataMap(
 	if remoteSourceVersionNewer(secret.Annotations, req.SourceVersion) {
 		return nil, providerHelpers.ProviderError(providers.ErrorClassDrift)
 	}
-	if payloadSHA256ForMode(secret, true) == req.PayloadSHA256 {
+	desiredKeys := dataMapKeys(req.DataMap)
+	payloadMatches := payloadMatchesRequest(secret, true, req.PayloadSHA256)
+	if payloadMatches && managedMetadataMatches(
+		secret,
+		req.SourceVersion,
+		req.PayloadSHA256,
+		req.Format,
+		true,
+		desiredKeys,
+	) {
 		return &providers.SyncResult{RemoteVersion: secret.ResourceVersion}, nil
 	}
-	if isImmutable(secret) {
+	if !payloadMatches && isImmutable(secret) {
 		return nil, providerHelpers.ProviderError(providers.ErrorClassValidation)
 	}
 	managedKeys, err := managedDataKeysForMutation(secret)
@@ -683,7 +713,7 @@ func (r destinationRuntime) upsertDataMap(
 	updated.Type = corev1.SecretTypeOpaque
 	updated.Data = mergedDataMap(secret.Data, managedKeys, req.DataMap)
 	applyOwnershipMetadata(updated, req.OwnershipIdentity(), req.SourceVersion, req.PayloadSHA256, req.Format)
-	applyDataMapMetadata(updated, dataMapKeys(req.DataMap))
+	applyDataMapMetadata(updated, desiredKeys)
 	result, err := secretClient.Update(ctx, updated, metav1.UpdateOptions{})
 	if err != nil {
 		return nil, providerHelpers.ProviderError(classifyKubernetesError(err))
@@ -726,7 +756,7 @@ func (r destinationRuntime) deleteDataMap(
 	secretClient := r.secretClient()
 	updatedData := mergedDataMap(secret.Data, managedKeys, nil)
 	if len(updatedData) == 0 {
-		if err := secretClient.Delete(ctx, req.ResolvedName, metav1.DeleteOptions{}); err != nil {
+		if err := secretClient.Delete(ctx, req.ResolvedName, deleteOptionsForSecret(secret)); err != nil {
 			return nil, providerHelpers.ProviderError(classifyKubernetesError(err))
 		}
 		return &providers.SyncResult{RemoteVersion: secret.ResourceVersion}, nil
@@ -778,6 +808,10 @@ func applyDataMapMetadata(secret *corev1.Secret, dataKeys []string) {
 		return
 	}
 	secret.Annotations[annotationDataKeys] = string(payload)
+}
+
+func removeDataMapMetadata(secret *corev1.Secret) {
+	delete(secret.Annotations, annotationDataKeys)
 }
 
 func removeOwnershipMetadata(secret *corev1.Secret) {
@@ -850,15 +884,83 @@ func payloadSHA256ForMode(secret *corev1.Secret, dataMap bool) string {
 	return payloadSHA256(secret)
 }
 
+func payloadMatchesRequest(secret *corev1.Secret, dataMap bool, payloadSHA256 string) bool {
+	if payloadSHA256ForMode(secret, dataMap) != payloadSHA256 {
+		return false
+	}
+	if dataMap {
+		return true
+	}
+	return len(secret.Data) == 1
+}
+
+func managedMetadataMatches(
+	secret *corev1.Secret,
+	sourceVersion int,
+	payloadSHA256 string,
+	format string,
+	dataMap bool,
+	desiredDataKeys []string,
+) bool {
+	if secret.Type != corev1.SecretTypeOpaque ||
+		annotationValue(secret.Annotations, annotationSourceVersion) != strconv.Itoa(sourceVersion) ||
+		annotationValue(secret.Annotations, annotationPayloadSHA256) != payloadSHA256 ||
+		annotationValue(secret.Annotations, annotationFormat) != format {
+		return false
+	}
+	if !dataMap {
+		return annotationValue(secret.Annotations, annotationDataKeys) == ""
+	}
+	managedKeys, err := managedDataKeys(secret)
+	desiredKeys := append([]string(nil), desiredDataKeys...)
+	sort.Strings(desiredKeys)
+	return err == nil && equalStrings(managedKeys, desiredKeys)
+}
+
+func equalStrings(left []string, right []string) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for index := range left {
+		if left[index] != right[index] {
+			return false
+		}
+	}
+	return true
+}
+
+func deleteOptionsForSecret(secret *corev1.Secret) metav1.DeleteOptions {
+	if secret == nil {
+		return metav1.DeleteOptions{}
+	}
+	preconditions := &metav1.Preconditions{}
+	if secret.UID != "" {
+		uid := secret.UID
+		preconditions.UID = &uid
+	}
+	if secret.ResourceVersion != "" {
+		resourceVersion := secret.ResourceVersion
+		preconditions.ResourceVersion = &resourceVersion
+	}
+	if preconditions.UID == nil && preconditions.ResourceVersion == nil {
+		return metav1.DeleteOptions{}
+	}
+	return metav1.DeleteOptions{Preconditions: preconditions}
+}
+
 func payloadSHA256(secret *corev1.Secret) string {
-	if secret.Data == nil {
+	if len(secret.Data) == 0 {
 		return ""
 	}
 	payload, ok := secret.Data[dataKeyPayload]
-	if !ok {
+	if ok && len(secret.Data) == 1 {
+		return payloadSHA256Bytes(payload)
+	}
+	dataMapPayload, err := payloadpkg.BuildDataMap(secret.Data)
+	if err != nil {
 		return ""
 	}
-	return payloadSHA256Bytes(payload)
+	return dataMapPayload.SHA256
 }
 
 func dataMapPayloadSHA256(secret *corev1.Secret) string {
