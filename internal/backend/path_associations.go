@@ -1179,7 +1179,7 @@ func (b *secretSyncBackend) pathAssociationDelete(
 		return nil, nil
 	}
 	b.enqueueMu.Lock()
-	if err := deleteQueuedOutboxForAssociation(ctx, req.Storage, *record); err != nil {
+	if err := deleteOutboxForAssociation(ctx, req.Storage, *record); err != nil {
 		b.enqueueMu.Unlock()
 		if isQueuedOperationClaimedError(err) {
 			return logical.ErrorResponse(err.Error()), nil

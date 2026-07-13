@@ -164,6 +164,9 @@ func (b *secretSyncBackend) periodic(ctx context.Context, req *logical.Request) 
 	if err != nil {
 		return err
 	}
+	if err := b.pruneTerminalOutboxRecords(ctx, req.Storage, nowUTC()); err != nil {
+		return err
+	}
 	if cfg.Disabled {
 		b.recordRemoteMutationBlocked(ctx, observability.OperationPeriodic, observability.ReasonDisabled)
 		return nil

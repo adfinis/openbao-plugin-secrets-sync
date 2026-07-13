@@ -758,7 +758,7 @@ paths:
     post:
       tags: [queue]
       operationId: cancelQueueOperation
-      summary: Discard one pending or retry-wait operation.
+      summary: Discard one pending, retry-wait, or terminal failed operation.
       x-openbao-operation: update
       parameters:
         - $ref: "#/components/parameters/OperationID"
