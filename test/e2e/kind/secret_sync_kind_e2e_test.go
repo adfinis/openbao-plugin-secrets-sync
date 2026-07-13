@@ -37,6 +37,17 @@ const (
 	dataKeyPayload   = "payload"
 	testPollInterval = 500 * time.Millisecond
 	testTimeout      = 90 * time.Second
+
+	kubernetesManagedLabel             = "openbao.org/secrets-sync-managed"
+	kubernetesAssociationIDAnnotation  = "openbao.org/secrets-sync-association-id"
+	kubernetesSourcePathAnnotation     = "openbao.org/secrets-sync-source-path"
+	kubernetesSourceVersionAnnotation  = "openbao.org/secrets-sync-source-version"
+	kubernetesObjectIDAnnotation       = "openbao.org/secrets-sync-object-id"
+	kubernetesPayloadSHA256Annotation  = "openbao.org/secrets-sync-payload-sha256"
+	kubernetesFormatAnnotation         = "openbao.org/secrets-sync-format"
+	kubernetesDataKeysAnnotation       = "openbao.org/secrets-sync-data-keys"
+	kubernetesPluginInstanceAnnotation = "openbao.org/secrets-sync-plugin-instance"
+	kubernetesRestoreEpochAnnotation   = "openbao.org/secrets-sync-restore-epoch"
 )
 
 func TestOpenBaoPluginSyncsToKubernetesSecrets(t *testing.T) {
@@ -220,7 +231,7 @@ func TestOpenBaoPluginReportsKubernetesOwnershipLoss(t *testing.T) {
 	assertKubernetesSecret(t, ctx, kubeClient, namespace, remoteName, "initial", "1")
 
 	secret := getKubernetesSecret(t, ctx, kubeClient, namespace, remoteName)
-	secret.Labels["openbao.adfinis.com/managed"] = "false"
+	secret.Labels[kubernetesManagedLabel] = "false"
 	updateKubernetesSecret(t, ctx, kubeClient, namespace, secret)
 
 	writeSource(t, baoClient, "updated")
@@ -586,13 +597,13 @@ func assertKubernetesSecret(
 		}
 		expectedSHA := "sha256:" + sha256Hex(payload)
 		expectedAnnotations := map[string]string{
-			"openbao.adfinis.com/source-path":    "app/db",
-			"openbao.adfinis.com/source-version": expectedSourceVersion,
-			"openbao.adfinis.com/object-id":      "secret-path",
-			"openbao.adfinis.com/payload-sha256": expectedSHA,
-			"openbao.adfinis.com/format":         "json",
+			kubernetesSourcePathAnnotation:    "app/db",
+			kubernetesSourceVersionAnnotation: expectedSourceVersion,
+			kubernetesObjectIDAnnotation:      "secret-path",
+			kubernetesPayloadSHA256Annotation: expectedSHA,
+			kubernetesFormatAnnotation:        "json",
 		}
-		if got := secret.Labels["openbao.adfinis.com/managed"]; got != "true" {
+		if got := secret.Labels[kubernetesManagedLabel]; got != "true" {
 			return fmt.Errorf("managed label = %q, want true", got)
 		}
 		for key, expected := range expectedAnnotations {
@@ -600,8 +611,14 @@ func assertKubernetesSecret(
 				return fmt.Errorf("annotation %s = %q, want %q", key, got, expected)
 			}
 		}
-		if got := secret.Annotations["openbao.adfinis.com/association-id"]; got == "" {
-			return errors.New("association-id annotation is missing")
+		for _, key := range []string{
+			kubernetesAssociationIDAnnotation,
+			kubernetesPluginInstanceAnnotation,
+			kubernetesRestoreEpochAnnotation,
+		} {
+			if secret.Annotations[key] == "" {
+				return fmt.Errorf("annotation %s is missing", key)
+			}
 		}
 		return nil
 	})
@@ -677,13 +694,13 @@ func assertKubernetesDataMapSecret(
 			return err
 		}
 		expectedAnnotations := map[string]string{
-			"openbao.adfinis.com/source-path":    "app/db",
-			"openbao.adfinis.com/source-version": expected.SourceVersion,
-			"openbao.adfinis.com/object-id":      "secret-path",
-			"openbao.adfinis.com/payload-sha256": expectedSHA,
-			"openbao.adfinis.com/format":         payloadpkg.FormatDataMap,
+			kubernetesSourcePathAnnotation:    "app/db",
+			kubernetesSourceVersionAnnotation: expected.SourceVersion,
+			kubernetesObjectIDAnnotation:      "secret-path",
+			kubernetesPayloadSHA256Annotation: expectedSHA,
+			kubernetesFormatAnnotation:        payloadpkg.FormatDataMap,
 		}
-		if got := secret.Labels["openbao.adfinis.com/managed"]; got != "true" {
+		if got := secret.Labels[kubernetesManagedLabel]; got != "true" {
 			return fmt.Errorf("managed label = %q, want true", got)
 		}
 		for key, expectedValue := range expectedAnnotations {
@@ -691,8 +708,14 @@ func assertKubernetesDataMapSecret(
 				return fmt.Errorf("annotation %s = %q, want %q", key, got, expectedValue)
 			}
 		}
-		if got := secret.Annotations["openbao.adfinis.com/association-id"]; got == "" {
-			return errors.New("association-id annotation is missing")
+		for _, key := range []string{
+			kubernetesAssociationIDAnnotation,
+			kubernetesPluginInstanceAnnotation,
+			kubernetesRestoreEpochAnnotation,
+		} {
+			if secret.Annotations[key] == "" {
+				return fmt.Errorf("annotation %s is missing", key)
+			}
 		}
 		return assertDataKeysAnnotation(secret, sortedMapKeys(expected.Managed))
 	})
@@ -714,17 +737,19 @@ func assertKubernetesSecretPreservedAfterDataMapDelete(
 		if len(secret.Data) != 1 || string(secret.Data["FOREIGN"]) != "preserved" {
 			return fmt.Errorf("secret data after delete = %#v, want only FOREIGN", secret.Data)
 		}
-		if got := secret.Labels["openbao.adfinis.com/managed"]; got != "" {
+		if got := secret.Labels[kubernetesManagedLabel]; got != "" {
 			return fmt.Errorf("managed label = %q, want removed", got)
 		}
 		for key := range secret.Annotations {
-			if key == "openbao.adfinis.com/association-id" ||
-				key == "openbao.adfinis.com/source-path" ||
-				key == "openbao.adfinis.com/source-version" ||
-				key == "openbao.adfinis.com/object-id" ||
-				key == "openbao.adfinis.com/payload-sha256" ||
-				key == "openbao.adfinis.com/format" ||
-				key == "openbao.adfinis.com/data-keys" {
+			if key == kubernetesAssociationIDAnnotation ||
+				key == kubernetesSourcePathAnnotation ||
+				key == kubernetesSourceVersionAnnotation ||
+				key == kubernetesObjectIDAnnotation ||
+				key == kubernetesPayloadSHA256Annotation ||
+				key == kubernetesFormatAnnotation ||
+				key == kubernetesDataKeysAnnotation ||
+				key == kubernetesPluginInstanceAnnotation ||
+				key == kubernetesRestoreEpochAnnotation {
 				return fmt.Errorf("managed annotation %s must be removed", key)
 			}
 		}
@@ -985,7 +1010,7 @@ func dataMapSHA(values map[string]string) (string, error) {
 }
 
 func assertDataKeysAnnotation(secret *corev1.Secret, expected []string) error {
-	raw := secret.Annotations["openbao.adfinis.com/data-keys"]
+	raw := secret.Annotations[kubernetesDataKeysAnnotation]
 	if raw == "" {
 		return errors.New("data-keys annotation is missing")
 	}

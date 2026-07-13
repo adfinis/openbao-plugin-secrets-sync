@@ -15,18 +15,23 @@ The exact carrier is provider-specific:
 - Kubernetes Secrets store ownership in labels and annotations.
 - GitLab project variables store ownership in the variable description.
 
-The metadata records the fields each provider can carry, including:
+The logical ownership record includes the fields each provider can carry:
 
 ```text
-openbao-sync=true
-openbao-sync-plugin-instance=<plugin-instance-id>
-openbao-sync-restore-epoch=<restore-epoch>
-openbao-sync-association=<association-id>
-openbao-sync-path=<source-path>
-openbao-sync-version=<source-version>
-openbao-sync-object=<object-id>
-openbao-sync-payload-sha256=<hash>
+managed=<true>
+plugin_instance=<plugin-instance-id>
+restore_epoch=<restore-epoch>
+association_id=<association-id>
+source_path=<source-path>
+source_version=<source-version>
+object_id=<object-id>
+payload_sha256=<hash>
 ```
+
+The carrier and exact spelling are provider-specific. AWS uses
+`openbao-sync-*` tags, Kubernetes uses `openbao.org/secrets-sync-*` labels and
+annotations, and GitLab encodes the fields in a human-readable variable
+description. See the provider operations page for the exact remote contract.
 
 Providers verify this metadata before owned updates and deletes. Missing or
 mismatched ownership is treated as ownership loss, not as permission to take
