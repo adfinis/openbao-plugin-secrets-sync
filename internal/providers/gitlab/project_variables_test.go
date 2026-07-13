@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/netip"
@@ -905,6 +906,51 @@ func TestDefaultClientFactoryUsesHardenedHTTPClient(t *testing.T) {
 	if transport.Proxy != nil {
 		t.Fatal("default GitLab HTTP client must not use ambient proxy configuration")
 	}
+}
+
+func TestDefaultClientFactoryRejectsDNSRebindingAtDial(t *testing.T) {
+	resolverCalls := 0
+	client, err := defaultClientFactoryWithResolver(
+		context.Background(),
+		defaultDestinationConfig(),
+		func(context.Context, string, string) ([]netip.Addr, error) {
+			resolverCalls++
+			if resolverCalls == 1 {
+				return []netip.Addr{netip.MustParseAddr("203.0.113.10")}, nil
+			}
+			return []netip.Addr{netip.MustParseAddr("127.0.0.1")}, nil
+		},
+	)
+	if err != nil {
+		t.Fatalf("default client factory: %v", err)
+	}
+	httpClient := client.(httpProjectVariableClient)
+	transport := httpClient.client.Transport.(*http.Transport)
+	_, err = transport.DialContext(context.Background(), "tcp", "gitlab.com:443")
+	if err == nil || !strings.Contains(err.Error(), "endpoint address is not allowed") {
+		t.Fatalf("dial error = %v, want disallowed rebound address", err)
+	}
+	if resolverCalls != 2 {
+		t.Fatalf("resolver calls = %d, want validation and dial lookups", resolverCalls)
+	}
+}
+
+func TestPrivateNetworkOptInDoesNotInstallDialGuard(t *testing.T) {
+	listener, err := net.Listen("tcp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	defer func() { _ = listener.Close() }()
+
+	options := defaultOptions()
+	options.allowPrivateNet = true
+	client := gitLabHTTPClientForOptions(options, nil)
+	transport := client.Transport.(*http.Transport)
+	conn, err := transport.DialContext(context.Background(), "tcp4", listener.Addr().String())
+	if err != nil {
+		t.Fatalf("dial explicitly allowed private network: %v", err)
+	}
+	_ = conn.Close()
 }
 
 func TestHTTPClientDoesNotFollowRedirects(t *testing.T) {

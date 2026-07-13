@@ -27,6 +27,7 @@ import (
 	"k8s.io/apimachinery/pkg/util/validation/field"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/kubernetes/fake"
+	"k8s.io/client-go/rest"
 	k8stesting "k8s.io/client-go/testing"
 )
 
@@ -468,6 +469,63 @@ func TestTokenRESTConfig(t *testing.T) {
 	}
 	if restConfig.ServerName != "kubernetes.default.svc" {
 		t.Fatalf("server name = %s, want kubernetes.default.svc", restConfig.ServerName)
+	}
+	hardenRESTConfig(restConfig, options, nil)
+	if restConfig.Timeout != defaultRequestTimeout {
+		t.Fatalf("timeout = %s, want %s", restConfig.Timeout, defaultRequestTimeout)
+	}
+	if restConfig.Dial == nil {
+		t.Fatal("public token api server must revalidate DNS when dialing")
+	}
+	if restConfig.Proxy == nil {
+		t.Fatal("public token api server must disable ambient proxy resolution")
+	}
+	proxyURL, err := restConfig.Proxy(nil)
+	if err != nil || proxyURL != nil {
+		t.Fatalf("proxy = %v, %v, want no proxy", proxyURL, err)
+	}
+}
+
+func TestTokenRESTConfigRejectsDNSRebindingAtDial(t *testing.T) {
+	resolverCalls := 0
+	resolver := func(context.Context, string, string) ([]netip.Addr, error) {
+		resolverCalls++
+		if resolverCalls == 1 {
+			return []netip.Addr{netip.MustParseAddr("203.0.113.10")}, nil
+		}
+		return []netip.Addr{netip.MustParseAddr("127.0.0.1")}, nil
+	}
+	options := kubernetesDestinationOptions{
+		authMode:  AuthModeToken,
+		apiServer: "https://kubernetes.example.com",
+	}
+	if err := validateAPIServerResolution(context.Background(), options, resolver); err != nil {
+		t.Fatalf("validate api server resolution: %v", err)
+	}
+	restConfig := restConfigForToken(options)
+	hardenRESTConfig(restConfig, options, resolver)
+	_, err := restConfig.Dial(context.Background(), "tcp", "kubernetes.example.com:443")
+	if err == nil || !strings.Contains(err.Error(), "endpoint address is not allowed") {
+		t.Fatalf("dial error = %v, want disallowed rebound address", err)
+	}
+	if resolverCalls != 2 {
+		t.Fatalf("resolver calls = %d, want validation and dial lookups", resolverCalls)
+	}
+}
+
+func TestRESTConfigHardeningPreservesExplicitTimeoutAndPrivateOptIn(t *testing.T) {
+	explicitTimeout := 5 * time.Second
+	restConfig := &rest.Config{Timeout: explicitTimeout}
+	options := kubernetesDestinationOptions{authMode: AuthModeToken, allowPrivateAPI: true}
+	hardenRESTConfig(restConfig, options, nil)
+	if restConfig.Timeout != explicitTimeout {
+		t.Fatalf("timeout = %s, want configured %s", restConfig.Timeout, explicitTimeout)
+	}
+	if restConfig.Dial != nil {
+		t.Fatal("private api server opt in must allow the standard dialer")
+	}
+	if restConfig.Proxy != nil {
+		t.Fatal("private api server opt in must preserve proxy configuration")
 	}
 }
 

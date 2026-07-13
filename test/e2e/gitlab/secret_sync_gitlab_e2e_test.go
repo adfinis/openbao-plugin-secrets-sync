@@ -129,13 +129,14 @@ func TestOpenBaoPluginSyncsToGitLabProjectVariables(t *testing.T) {
 func writeGitLabDestination(t *testing.T, client *api.Client, overrides map[string]interface{}) {
 	t.Helper()
 	config := map[string]interface{}{
-		gitlab.ConfigKeyBaseURL:           env("E2E_GITLAB_BASE_URL_IN_BAO", "http://gitlab"),
-		gitlab.ConfigKeyProjectID:         env("E2E_GITLAB_PROJECT_PATH", "root/openbao-plugin-secrets-sync-e2e"),
-		gitlab.ConfigKeyEnvironmentScope:  env("E2E_GITLAB_ENVIRONMENT_SCOPE", "production"),
-		gitlab.ConfigKeyToken:             env("E2E_GITLAB_TOKEN", "glpat-openbao-plugin-secrets-sync-e2e-token-000000"),
-		gitlab.ConfigKeyVariableRaw:       "true",
-		gitlab.ConfigKeyVariableType:      gitlab.VariableTypeEnvVar,
-		gitlab.ConfigKeyAllowInsecureHTTP: "true",
+		gitlab.ConfigKeyBaseURL:             env("E2E_GITLAB_BASE_URL_IN_BAO", "http://gitlab"),
+		gitlab.ConfigKeyProjectID:           env("E2E_GITLAB_PROJECT_PATH", "root/openbao-plugin-secrets-sync-e2e"),
+		gitlab.ConfigKeyEnvironmentScope:    env("E2E_GITLAB_ENVIRONMENT_SCOPE", "production"),
+		gitlab.ConfigKeyToken:               env("E2E_GITLAB_TOKEN", "glpat-openbao-plugin-secrets-sync-e2e-token-000000"),
+		gitlab.ConfigKeyVariableRaw:         "true",
+		gitlab.ConfigKeyVariableType:        gitlab.VariableTypeEnvVar,
+		gitlab.ConfigKeyAllowInsecureHTTP:   "true",
+		gitlab.ConfigKeyAllowPrivateNetwork: "true",
 	}
 	for key, value := range overrides {
 		config[key] = value
@@ -912,13 +913,9 @@ func unescapeMetadataDescriptionValue(value string) (string, error) {
 
 func associationIDFromResponse(t *testing.T, secret *api.Secret) string {
 	t.Helper()
-	association, ok := secret.Data["association"].(map[string]interface{})
-	if !ok {
-		t.Fatalf("association = %T, want map[string]interface{}", secret.Data["association"])
-	}
-	id, ok := association["id"].(string)
+	id, ok := secret.Data["association_id"].(string)
 	if !ok || id == "" {
-		t.Fatalf("association id = %v, want non-empty string", association["id"])
+		t.Fatalf("association_id = %v, want non-empty string", secret.Data["association_id"])
 	}
 	return id
 }

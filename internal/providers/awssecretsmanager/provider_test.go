@@ -3,9 +3,11 @@ package awssecretsmanager
 import (
 	"context"
 	"errors"
+	"net"
 	"net/http"
 	"net/netip"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -404,6 +406,63 @@ func TestDefaultAWSHTTPClientIsBoundedAndProxyFree(t *testing.T) {
 	}
 	if transport.Proxy != nil {
 		t.Fatal("default AWS HTTP client must not use ambient proxy configuration")
+	}
+}
+
+func TestPrivateEndpointRejectsDNSRebindingAtDial(t *testing.T) {
+	resolverCalls := 0
+	resolver := func(context.Context, string, string) ([]netip.Addr, error) {
+		resolverCalls++
+		if resolverCalls == 1 {
+			return []netip.Addr{netip.MustParseAddr("10.0.0.5")}, nil
+		}
+		return []netip.Addr{netip.MustParseAddr("127.0.0.1")}, nil
+	}
+	options := awsDestinationOptions{
+		endpointURL:    "https://vpce-1234567890abcdef.secretsmanager.eu-central-1.vpce.amazonaws.com",
+		endpointPolicy: EndpointPolicyPrivate,
+	}
+	if err := validateEndpointResolution(context.Background(), options, resolver); err != nil {
+		t.Fatalf("validate endpoint resolution: %v", err)
+	}
+	client := awsHTTPClientForOptions(options, resolver)
+	transport := client.Transport.(*http.Transport)
+	_, err := transport.DialContext(context.Background(), "tcp", "vpce.example.com:443")
+	if err == nil || !strings.Contains(err.Error(), "endpoint address is not allowed") {
+		t.Fatalf("dial error = %v, want disallowed rebound address", err)
+	}
+	if resolverCalls != 2 {
+		t.Fatalf("resolver calls = %d, want validation and dial lookups", resolverCalls)
+	}
+}
+
+func TestLocalEndpointDialGuardAllowsLoopbackAndRejectsPublicAddresses(t *testing.T) {
+	listener, err := net.Listen("tcp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	defer func() { _ = listener.Close() }()
+	_, port, err := net.SplitHostPort(listener.Addr().String())
+	if err != nil {
+		t.Fatalf("split listener address: %v", err)
+	}
+
+	resolvedAddr := netip.MustParseAddr("127.0.0.1")
+	resolver := func(context.Context, string, string) ([]netip.Addr, error) {
+		return []netip.Addr{resolvedAddr}, nil
+	}
+	options := awsDestinationOptions{endpointURL: testEndpointURL, endpointPolicy: EndpointPolicyLocal}
+	transport := awsHTTPClientForOptions(options, resolver).Transport.(*http.Transport)
+	conn, err := transport.DialContext(context.Background(), "tcp4", net.JoinHostPort("localstack", port))
+	if err != nil {
+		t.Fatalf("dial local endpoint: %v", err)
+	}
+	_ = conn.Close()
+
+	resolvedAddr = netip.MustParseAddr("203.0.113.10")
+	_, err = transport.DialContext(context.Background(), "tcp", "localstack:4566")
+	if err == nil || !strings.Contains(err.Error(), "endpoint address is not allowed") {
+		t.Fatalf("dial error = %v, want public address rejection", err)
 	}
 }
 
