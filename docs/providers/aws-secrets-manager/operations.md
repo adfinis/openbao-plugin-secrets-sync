@@ -13,6 +13,12 @@ Manager name prefix. The provider uses these AWS APIs:
 - `secretsmanager:RestoreSecret` for owned scheduled-delete recovery;
 - `secretsmanager:TagResource` for ownership metadata.
 
+AWS does not support resource-level permissions for `ListSecrets`, so the
+health-check statement must use `Resource: "*"`. The API returns secret
+metadata, not secret values. If this account-wide metadata permission is not
+acceptable, destination health reports an authorization failure even when the
+more narrowly scoped sync APIs are permitted.
+
 When `value_drift_detection=true`, also grant
 `secretsmanager:GetSecretValue`. If that permission is missing, explicit plan,
 upsert, and read-state operations that need value readback fail visibly instead
@@ -51,10 +57,23 @@ detect and automatically repair manual AWS value edits, configure the
 destination with `value_drift_detection=true`; otherwise background drift work
 can only reason from ownership tags and payload-hash metadata.
 
-`delete_recovery_window_days` controls the AWS Secrets Manager scheduled-delete
-recovery window used when an association with `delete_mode=delete` deletes an
-owned remote secret. The default is `7`. AWS accepts values from `7` through
-`30`.
+`delete_recovery_window_days` is association configuration. It controls the AWS
+Secrets Manager scheduled-delete recovery window used when that association has
+`delete_mode=delete` and deletes an owned remote secret. The default is `7`.
+AWS accepts values from `7` through `30`. Changing only this operational policy
+does not enqueue a sync; it applies to the association's next delete.
+
+```sh
+bao write secret-sync/associations/app/db \
+  destination=aws-sm/prod \
+  resolved_name=prod/app/db \
+  delete_mode=delete \
+  delete_recovery_window_days=14
+```
+
+After `DescribeSecret` proves ownership, the provider binds value readback,
+restore, update, tag, and delete calls to the described secret ARN. Creation
+still uses the resolved secret name.
 
 AWS Secrets Manager keeps deleted secrets in a scheduled-deletion state during
 the configured recovery window. During that window, creating a new secret with
