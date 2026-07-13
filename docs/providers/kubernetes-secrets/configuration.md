@@ -46,6 +46,12 @@ resolve to those ranges are rejected by default. Set
 `allow_private_api_server=true` only for an approved internal Kubernetes API
 endpoint. In-cluster and kubeconfig auth do not use this field.
 
+For public token-auth endpoints, the provider resolves the API server name
+again for every new connection and dials an approved address directly. Ambient
+proxy configuration is disabled on this guarded path so proxy-side DNS cannot
+bypass the address policy. Provider-created Kubernetes clients use a 30-second
+request timeout unless a kubeconfig supplies an explicit positive timeout.
+
 Validation is strict about mixing auth fields:
 
 - `namespace` must be a valid DNS-1123 Kubernetes namespace label.

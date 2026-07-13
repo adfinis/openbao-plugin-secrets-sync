@@ -12,6 +12,8 @@ import (
 	"github.com/adfinis/openbao-plugin-secrets-sync/internal/outbox"
 	payloadpkg "github.com/adfinis/openbao-plugin-secrets-sync/internal/payload"
 	"github.com/adfinis/openbao-plugin-secrets-sync/internal/providers"
+	"github.com/adfinis/openbao-plugin-secrets-sync/internal/providers/awssecretsmanager"
+	"github.com/adfinis/openbao-plugin-secrets-sync/internal/providers/gitlab"
 	"github.com/openbao/openbao/sdk/v2/framework"
 	"github.com/openbao/openbao/sdk/v2/logical"
 )
@@ -22,6 +24,34 @@ var (
 	errSourcePathDoesNotExist          = errors.New("source path does not exist")
 	errCurrentSourceVersionUnavailable = errors.New("current source version is unavailable")
 )
+
+var associationProviderConfigFieldKeys = []string{
+	awssecretsmanager.ConfigKeyDeleteRecoveryWindowDays,
+	gitlab.ConfigKeyEnvironmentScope,
+	gitlab.ConfigKeyProtected,
+	gitlab.ConfigKeyMasked,
+	gitlab.ConfigKeyHidden,
+	gitlab.ConfigKeyVariableRaw,
+	gitlab.ConfigKeyVariableType,
+}
+
+var associationProviderConfigFieldKeysByType = map[string][]string{
+	awssecretsmanager.ProviderType: {
+		awssecretsmanager.ConfigKeyDeleteRecoveryWindowDays,
+	},
+	gitlab.ProviderType: {
+		gitlab.ConfigKeyEnvironmentScope,
+		gitlab.ConfigKeyProtected,
+		gitlab.ConfigKeyMasked,
+		gitlab.ConfigKeyHidden,
+		gitlab.ConfigKeyVariableRaw,
+		gitlab.ConfigKeyVariableType,
+	},
+}
+
+var associationProviderIdentityFieldKeysByType = map[string][]string{
+	gitlab.ProviderType: {gitlab.ConfigKeyEnvironmentScope},
+}
 
 func pathAssociations(b *secretSyncBackend) []*framework.Path {
 	return []*framework.Path{
@@ -227,9 +257,38 @@ func associationRequestFields() map[string]*framework.FieldSchema {
 			Type:        framework.TypeString,
 			Description: "Remote delete behavior for this association: retain, delete, or orphan.",
 		},
+		awssecretsmanager.ConfigKeyDeleteRecoveryWindowDays: {
+			Type: framework.TypeInt,
+			Description: "AWS Secrets Manager scheduled-delete recovery window in days for this association. " +
+				"Defaults to 7; AWS accepts 7 through 30.",
+		},
 		"enabled": {
 			Type:        framework.TypeBool,
 			Description: "Whether the association should enqueue sync work.",
+		},
+		gitlab.ConfigKeyEnvironmentScope: {
+			Type:        framework.TypeString,
+			Description: "GitLab variable environment scope. Defaults to * and participates in remote object identity.",
+		},
+		gitlab.ConfigKeyProtected: {
+			Type:        framework.TypeBool,
+			Description: "Whether GitLab variables produced by this association are protected.",
+		},
+		gitlab.ConfigKeyMasked: {
+			Type:        framework.TypeBool,
+			Description: "Whether GitLab variables produced by this association are masked.",
+		},
+		gitlab.ConfigKeyHidden: {
+			Type:        framework.TypeBool,
+			Description: "Whether GitLab variables are created as masked and hidden.",
+		},
+		gitlab.ConfigKeyVariableRaw: {
+			Type:        framework.TypeBool,
+			Description: "Whether GitLab variable reference expansion is disabled. Defaults to true.",
+		},
+		gitlab.ConfigKeyVariableType: {
+			Type:        framework.TypeString,
+			Description: "GitLab variable type: env_var or file.",
 		},
 	}
 }
@@ -456,7 +515,7 @@ func (b *secretSyncBackend) pathAssociationWrite(
 	if err != nil {
 		return logical.ErrorResponse(err.Error()), nil
 	}
-	baseRecord, response, err := associationUpdateBase(ctx, req, path, data)
+	baseRecord, response, err := b.associationUpdateBase(ctx, req, path, data)
 	if response != nil || err != nil {
 		return response, err
 	}
@@ -508,19 +567,28 @@ func (b *secretSyncBackend) associationWritePlan(
 	if existing != nil {
 		record.CreatedTime = existing.CreatedTime
 	}
-	shouldEnqueue := record.Enabled && (existing == nil || !existing.Enabled)
+	desiredStateChanged := existing != nil && associationDesiredStateChanged(*existing, record)
+	shouldEnqueue := record.Enabled && (existing == nil || !existing.Enabled || desiredStateChanged)
 	if err := putAssociation(ctx, storage, record); err != nil {
 		return associationWritePlan{}, nil, err
 	}
 	operationIDs := []string{}
 	if shouldEnqueue {
-		operationIDs, err = b.enqueueAssociationCurrentVersion(
-			ctx,
-			storage,
-			record,
-			*metadata,
-			nowUTC().Format(timeFormatRFC3339),
-		)
+		now := nowUTC().Format(timeFormatRFC3339)
+		if desiredStateChanged {
+			operationIDs, err = b.enqueueAssociationCurrentVersionWithSalt(
+				ctx,
+				storage,
+				record,
+				*metadata,
+				now,
+				"association-config",
+				false,
+				outboxTriggerUser,
+			)
+		} else {
+			operationIDs, err = b.enqueueAssociationCurrentVersion(ctx, storage, record, *metadata, now)
+		}
 		if err != nil {
 			if rollbackErr := rollbackAssociationPersistence(ctx, storage, record, existing); rollbackErr != nil {
 				return associationWritePlan{}, nil, rollbackAssociationPersistenceError(err, rollbackErr)
@@ -536,6 +604,50 @@ func (b *secretSyncBackend) associationWritePlan(
 		operationIDs:       operationIDs,
 		existingWasEnabled: existingWasEnabled,
 	}, nil, nil
+}
+
+func associationDesiredStateChanged(existing associationRecord, updated associationRecord) bool {
+	return existing.Format != updated.Format ||
+		existing.DataMapping != updated.DataMapping ||
+		existing.DataKeyTemplate != updated.DataKeyTemplate ||
+		associationProviderDesiredStateChanged(existing, updated)
+}
+
+func associationProviderDesiredStateChanged(existing associationRecord, updated associationRecord) bool {
+	ignoredKey := ""
+	if existing.DestinationType == awssecretsmanager.ProviderType &&
+		updated.DestinationType == awssecretsmanager.ProviderType {
+		ignoredKey = awssecretsmanager.ConfigKeyDeleteRecoveryWindowDays
+	}
+	for key, existingValue := range existing.ProviderConfig {
+		if key == ignoredKey {
+			continue
+		}
+		if updated.ProviderConfig[key] != existingValue {
+			return true
+		}
+	}
+	for key := range updated.ProviderConfig {
+		if key == ignoredKey {
+			continue
+		}
+		if _, ok := existing.ProviderConfig[key]; !ok {
+			return true
+		}
+	}
+	return false
+}
+
+func stringMapsEqual(left map[string]string, right map[string]string) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for key, leftValue := range left {
+		if right[key] != leftValue {
+			return false
+		}
+	}
+	return true
 }
 
 func rollbackAssociationPersistence(
@@ -655,7 +767,7 @@ func (b *secretSyncBackend) pathAssociationPlan(
 	if response != nil || err != nil {
 		return response, err
 	}
-	baseRecord, response, err := associationUpdateBase(ctx, req, path, data)
+	baseRecord, response, err := b.associationUpdateBase(ctx, req, path, data)
 	if response != nil || err != nil {
 		return response, err
 	}
@@ -835,6 +947,7 @@ func providerPlanRequest(
 	}
 	return providers.PlanRequest{
 		Runtime:       runtimeIdentity,
+		Association:   providerAssociationConfig(record),
 		ResolvedName:  resolvedName,
 		Format:        preparedPayload.Format,
 		PayloadSHA256: preparedPayload.SHA256,
@@ -958,6 +1071,7 @@ func (b *secretSyncBackend) planSecretKeyObject(
 	if providerErr == nil {
 		plan, providerErr = runtime.Plan(ctx, providers.PlanRequest{
 			Runtime:       runtimeIdentity,
+			Association:   providerAssociationConfig(record),
 			ResolvedName:  resolvedName,
 			Format:        payload.Format,
 			PayloadSHA256: payload.SHA256,
@@ -1073,8 +1187,16 @@ func associationSummaryFields(record associationRecord) []responseEntry {
 		responseField("format", record.Format),
 		responseField("data_mapping", normalizedDataMapping(record.DataMapping)),
 		responseField("data_key_template", record.DataKeyTemplate),
+		responseField("provider_config", copyStringMap(record.ProviderConfig)),
 		responseField("delete_mode", normalizedDeleteMode(record.DeleteMode)),
 		responseField("enabled", record.Enabled),
+	}
+}
+
+func providerAssociationConfig(record associationRecord) providers.AssociationConfig {
+	return providers.AssociationConfig{
+		Config:   copyStringMap(record.ProviderConfig),
+		Identity: record.ProviderIdentity,
 	}
 }
 
@@ -1179,7 +1301,7 @@ func (b *secretSyncBackend) pathAssociationDelete(
 		return nil, nil
 	}
 	b.enqueueMu.Lock()
-	if err := deleteQueuedOutboxForAssociation(ctx, req.Storage, *record); err != nil {
+	if err := deleteOutboxForAssociation(ctx, req.Storage, *record); err != nil {
 		b.enqueueMu.Unlock()
 		if isQueuedOperationClaimedError(err) {
 			return logical.ErrorResponse(err.Error()), nil
@@ -1706,9 +1828,29 @@ func (b *secretSyncBackend) associationRecordFromFieldData(
 	if err != nil {
 		return associationRecord{}, err
 	}
-	provider, err := b.associationProvider(ctx, storage, destinationType, destinationName)
+	provider, destination, destinationConfig, err := b.associationProvider(
+		ctx,
+		storage,
+		destinationType,
+		destinationName,
+	)
 	if err != nil {
 		return associationRecord{}, err
+	}
+	providerConfig, err := associationProviderConfigFromFieldData(destinationType, base, data)
+	if err != nil {
+		return associationRecord{}, err
+	}
+	normalizedProviderConfig, err := provider.NormalizeAssociationConfig(
+		ctx,
+		destinationConfig,
+		providers.AssociationConfig{Config: providerConfig},
+	)
+	if err != nil {
+		return associationRecord{}, err
+	}
+	if destination.Type != destinationType || destination.Name != destinationName {
+		return associationRecord{}, fmt.Errorf("destination identity changed during association validation")
 	}
 
 	granularity := stringFromField(data, "granularity", associationGranularityDefault(base))
@@ -1758,26 +1900,34 @@ func (b *secretSyncBackend) associationRecordFromFieldData(
 		return associationRecord{}, err
 	}
 
-	id := newAssociationID(path, destinationType, destinationName, reservationName, granularity)
+	id := newAssociationID(
+		path,
+		destinationType,
+		destinationName,
+		associationReservationKey(normalizedProviderConfig.Identity, reservationName),
+		granularity,
+	)
 	destinationReference := destinationRef(destinationType, destinationName)
 
 	now := nowUTC().Format(timeFormatRFC3339)
 	return associationRecord{
-		ID:              id,
-		Path:            path,
-		DestinationType: destinationType,
-		DestinationName: destinationName,
-		DestinationRef:  destinationReference,
-		NameTemplate:    nameTemplate,
-		ResolvedName:    resolvedName,
-		Granularity:     granularity,
-		Format:          format,
-		DataMapping:     dataMapping,
-		DataKeyTemplate: dataKeyTemplate,
-		DeleteMode:      deleteMode,
-		Enabled:         boolFromField(data, "enabled", associationEnabledDefault(base)),
-		CreatedTime:     now,
-		UpdatedTime:     now,
+		ID:               id,
+		Path:             path,
+		DestinationType:  destinationType,
+		DestinationName:  destinationName,
+		DestinationRef:   destinationReference,
+		NameTemplate:     nameTemplate,
+		ResolvedName:     resolvedName,
+		Granularity:      granularity,
+		Format:           format,
+		DataMapping:      dataMapping,
+		DataKeyTemplate:  dataKeyTemplate,
+		ProviderConfig:   copyStringMap(normalizedProviderConfig.Config),
+		ProviderIdentity: normalizedProviderConfig.Identity,
+		DeleteMode:       deleteMode,
+		Enabled:          boolFromField(data, "enabled", associationEnabledDefault(base)),
+		CreatedTime:      now,
+		UpdatedTime:      now,
 	}, nil
 }
 
@@ -1788,10 +1938,22 @@ func validateAssociationIdentityUpdate(base *associationRecord, record associati
 	if record.Granularity != base.Granularity {
 		return associationIdentityChangeError("granularity", base.ID)
 	}
+	if record.ProviderIdentity != base.ProviderIdentity {
+		return associationIdentityChangeError(associationProviderIdentityField(*base, record), base.ID)
+	}
 	if record.reservationName() != base.reservationName() {
 		return associationIdentityChangeError(associationReservationIdentityField(*base), base.ID)
 	}
 	return nil
+}
+
+func associationProviderIdentityField(base associationRecord, updated associationRecord) string {
+	for _, field := range associationProviderIdentityFieldKeysByType[updated.DestinationType] {
+		if base.ProviderConfig[field] != updated.ProviderConfig[field] {
+			return field
+		}
+	}
+	return "provider configuration"
 }
 
 func associationReservationIdentityField(record associationRecord) string {
@@ -1810,7 +1972,7 @@ func associationIdentityChangeError(field string, associationID string) error {
 	)
 }
 
-func associationUpdateBase(
+func (b *secretSyncBackend) associationUpdateBase(
 	ctx context.Context,
 	req *logical.Request,
 	path string,
@@ -1826,6 +1988,16 @@ func associationUpdateBase(
 	if destinationType == "" || destinationName == "" {
 		return nil, nil, nil
 	}
+	providerIdentity, identitySpecified, err := b.associationProviderIdentitySelector(
+		ctx,
+		req.Storage,
+		destinationType,
+		destinationName,
+		data,
+	)
+	if err != nil {
+		return nil, logical.ErrorResponse(err.Error()), nil
+	}
 	records, err := listAssociationsForPath(ctx, req.Storage, path)
 	if err != nil {
 		return nil, nil, err
@@ -1835,9 +2007,13 @@ func associationUpdateBase(
 		if records[i].DestinationType != destinationType || records[i].DestinationName != destinationName {
 			continue
 		}
+		if identitySpecified && records[i].ProviderIdentity != providerIdentity {
+			continue
+		}
 		if match != nil {
 			return nil, logical.ErrorResponse(
-				"association update is ambiguous for destination %s/%s; delete or address one association explicitly",
+				"association update is ambiguous for destination %s/%s; "+
+					"include provider identity fields or address one association explicitly",
 				destinationType,
 				destinationName,
 			), nil
@@ -1845,6 +2021,47 @@ func associationUpdateBase(
 		match = &records[i]
 	}
 	return match, nil, nil
+}
+
+func (b *secretSyncBackend) associationProviderIdentitySelector(
+	ctx context.Context,
+	storage logical.Storage,
+	destinationType string,
+	destinationName string,
+	data *framework.FieldData,
+) (string, bool, error) {
+	identitySpecified := false
+	for _, field := range associationProviderIdentityFieldKeysByType[destinationType] {
+		if _, ok := data.Raw[field]; ok {
+			identitySpecified = true
+			break
+		}
+	}
+	if !identitySpecified {
+		return "", false, nil
+	}
+	provider, _, destinationConfig, err := b.associationProvider(
+		ctx,
+		storage,
+		destinationType,
+		destinationName,
+	)
+	if err != nil {
+		return "", false, err
+	}
+	providerConfig, err := associationProviderConfigFromFieldData(destinationType, nil, data)
+	if err != nil {
+		return "", false, err
+	}
+	normalized, err := provider.NormalizeAssociationConfig(
+		ctx,
+		destinationConfig,
+		providers.AssociationConfig{Config: providerConfig},
+	)
+	if err != nil {
+		return "", false, err
+	}
+	return normalized.Identity, true, nil
 }
 
 func associationDestinationFromFieldData(
@@ -1941,22 +2158,52 @@ func (b *secretSyncBackend) associationProvider(
 	storage logical.Storage,
 	destinationType string,
 	destinationName string,
-) (providers.Provider, error) {
+) (providers.Provider, destinationRecord, providers.DestinationConfig, error) {
 	provider, err := b.providerRegistry.MustGet(destinationType)
 	if err != nil {
-		return nil, err
+		return nil, destinationRecord{}, providers.DestinationConfig{}, err
 	}
 	destination, err := getDestination(ctx, storage, destinationType, destinationName)
 	if err != nil {
-		return nil, err
+		return nil, destinationRecord{}, providers.DestinationConfig{}, err
 	}
 	if destination == nil {
-		return nil, fmt.Errorf("destination %s/%s does not exist", destinationType, destinationName)
+		return nil, destinationRecord{}, providers.DestinationConfig{}, fmt.Errorf(
+			"destination %s/%s does not exist",
+			destinationType,
+			destinationName,
+		)
 	}
 	if destination.Disabled {
-		return nil, fmt.Errorf("destination %s/%s is disabled", destinationType, destinationName)
+		return nil, destinationRecord{}, providers.DestinationConfig{}, fmt.Errorf(
+			"destination %s/%s is disabled",
+			destinationType,
+			destinationName,
+		)
 	}
-	return provider, nil
+	resolvedConfig, err := destinationConfig(ctx, storage, *destination)
+	if err != nil {
+		return nil, destinationRecord{}, providers.DestinationConfig{}, err
+	}
+	return provider, *destination, resolvedConfig, nil
+}
+
+func associationProviderConfigFromFieldData(
+	destinationType string,
+	base *associationRecord,
+	data *framework.FieldData,
+) (map[string]string, error) {
+	var existingConfig map[string]string
+	if base != nil {
+		existingConfig = base.ProviderConfig
+	}
+	return providerConfigMapFromFieldData(
+		destinationType,
+		existingConfig,
+		associationProviderConfigFieldKeysByType[destinationType],
+		associationProviderConfigFieldKeys,
+		data,
+	)
 }
 
 func resolveAssociationNames(
@@ -2234,6 +2481,7 @@ func associationResponse(record associationRecord) map[string]interface{} { //no
 		responseField("format", record.Format),
 		responseField("data_mapping", normalizedDataMapping(record.DataMapping)),
 		responseField("data_key_template", record.DataKeyTemplate),
+		responseField("provider_config", copyStringMap(record.ProviderConfig)),
 		responseField("delete_mode", normalizedDeleteMode(record.DeleteMode)),
 		responseField("enabled", record.Enabled),
 		responseField("created_time", record.CreatedTime),

@@ -2,6 +2,7 @@ package backend
 
 import (
 	"context"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -77,6 +78,97 @@ func TestClaimRejectsOperationBeforeCanonicalNotBefore(t *testing.T) {
 		t.Fatalf("future operation claim = %#v, ok = %t; want no claim", claimed, ok)
 	}
 	assertOutboxOperation(t, env.storage, operation.ID, operation.Version, outboxStateRetryWait)
+}
+
+func TestSequentialDispatchRefreshesClaimTimePerOperation(t *testing.T) {
+	env := newBackendTestEnv(t)
+	env.writeAppDBSecretData(map[string]interface{}{
+		"password": "initial",
+		"username": "appuser",
+	})
+	env.createFakeDestination("default")
+	associationResp := env.createFakeSecretKeyAssociation(deleteModeRetain)
+	if got := len(operationIDsFromResponse(t, associationResp)); got != 2 {
+		t.Fatalf("queued operations = %d, want 2", got)
+	}
+	env.acknowledgeRestoreGuard()
+	storage := &claimExpiryRecordingStorage{Storage: env.storage}
+	batchNow := nowUTC().Add(time.Minute)
+	clock := newSequenceClock(
+		batchNow,
+		batchNow,
+		batchNow.Add(3*time.Minute),
+	)
+
+	processed, err := env.b.processDueOutboxLimitWithClock(
+		context.Background(),
+		storage,
+		batchNow,
+		2,
+		observability.OperationPeriodic,
+		clock,
+	)
+	if err != nil {
+		t.Fatalf("process sequential operations: %v", err)
+	}
+	if processed != 2 {
+		t.Fatalf("processed operations = %d, want 2", processed)
+	}
+	expires := storage.claimExpiries()
+	if len(expires) != 2 {
+		t.Fatalf("recorded claim expiries = %v, want two", expires)
+	}
+	first, err := time.Parse(timeFormatRFC3339, expires[0])
+	if err != nil {
+		t.Fatalf("parse first claim expiry: %v", err)
+	}
+	second, err := time.Parse(timeFormatRFC3339, expires[1])
+	if err != nil {
+		t.Fatalf("parse second claim expiry: %v", err)
+	}
+	if got := second.Sub(first); got != 3*time.Minute {
+		t.Fatalf("claim expiry advance = %s, want 3m", got)
+	}
+}
+
+func newSequenceClock(times ...time.Time) func() time.Time {
+	index := 0
+	return func() time.Time {
+		if index >= len(times) {
+			return times[len(times)-1]
+		}
+		now := times[index]
+		index++
+		return now
+	}
+}
+
+type claimExpiryRecordingStorage struct {
+	logical.Storage
+
+	mu       sync.Mutex
+	expiries []string
+}
+
+func (storage *claimExpiryRecordingStorage) Put(ctx context.Context, entry *logical.StorageEntry) error {
+	if strings.HasPrefix(entry.Key, outboxStoragePrefix) {
+		var record outboxRecord
+		if err := entry.DecodeJSON(&record); err != nil {
+			return err
+		}
+		if record.ClaimOwner != "" {
+			storage.mu.Lock()
+			storage.expiries = append(storage.expiries, record.ClaimExpiresTime)
+			storage.mu.Unlock()
+		}
+	}
+	return storage.Storage.Put(ctx, entry)
+}
+
+func (storage *claimExpiryRecordingStorage) claimExpiries() []string {
+	storage.mu.Lock()
+	defer storage.mu.Unlock()
+	return append([]string(nil), storage.expiries...)
 }
 
 func TestDispatchSkipsSuccessCommitAfterClaimReclaim(t *testing.T) {
@@ -289,6 +381,14 @@ func (p *blockingMutationProvider) Capabilities() providers.Capabilities {
 
 func (*blockingMutationProvider) ValidateConfig(context.Context, providers.DestinationConfig) error {
 	return nil
+}
+
+func (*blockingMutationProvider) NormalizeAssociationConfig(
+	context.Context,
+	providers.DestinationConfig,
+	providers.AssociationConfig,
+) (providers.AssociationConfig, error) {
+	return providers.AssociationConfig{Config: map[string]string{}}, nil
 }
 
 func (p *blockingMutationProvider) OpenDestination(

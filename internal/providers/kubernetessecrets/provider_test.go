@@ -27,6 +27,7 @@ import (
 	"k8s.io/apimachinery/pkg/util/validation/field"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/kubernetes/fake"
+	"k8s.io/client-go/rest"
 	k8stesting "k8s.io/client-go/testing"
 )
 
@@ -39,6 +40,7 @@ const (
 	testObjectID        = "secret-path"
 	testPayloadSHAOld   = "sha256:6a81041dee1ed86a0d590b7d8c555c789cd4de82fbfa5b4e6881f4ebba1b6f41"
 	testPayloadSHANew   = "sha256:4cc28eb0fcebad7dbacc0970586ee420fd24ef182cf76c955e833f3da4a5ad3d"
+	testPayloadNew      = `{"password":"new"}`
 	testPluginInstance  = "inst-test"
 	testRestoreEpoch    = "epoch-test"
 )
@@ -126,7 +128,7 @@ func TestProviderConformance(t *testing.T) {
 				Action:  providers.PlanActionUpdate,
 			},
 			Update: providertest.UpsertCase{
-				Request: defaultUpsertRequest(testPayloadSHANew, []byte(`{"password":"new"}`), 2),
+				Request: defaultUpsertRequest(testPayloadSHANew, []byte(testPayloadNew), 2),
 			},
 			StateAfterUpdate: providertest.ReadStateCase{
 				Request:        defaultReadStateRequest(testPayloadSHANew, 2),
@@ -469,6 +471,63 @@ func TestTokenRESTConfig(t *testing.T) {
 	if restConfig.ServerName != "kubernetes.default.svc" {
 		t.Fatalf("server name = %s, want kubernetes.default.svc", restConfig.ServerName)
 	}
+	hardenRESTConfig(restConfig, options, nil)
+	if restConfig.Timeout != defaultRequestTimeout {
+		t.Fatalf("timeout = %s, want %s", restConfig.Timeout, defaultRequestTimeout)
+	}
+	if restConfig.Dial == nil {
+		t.Fatal("public token api server must revalidate DNS when dialing")
+	}
+	if restConfig.Proxy == nil {
+		t.Fatal("public token api server must disable ambient proxy resolution")
+	}
+	proxyURL, err := restConfig.Proxy(nil)
+	if err != nil || proxyURL != nil {
+		t.Fatalf("proxy = %v, %v, want no proxy", proxyURL, err)
+	}
+}
+
+func TestTokenRESTConfigRejectsDNSRebindingAtDial(t *testing.T) {
+	resolverCalls := 0
+	resolver := func(context.Context, string, string) ([]netip.Addr, error) {
+		resolverCalls++
+		if resolverCalls == 1 {
+			return []netip.Addr{netip.MustParseAddr("203.0.113.10")}, nil
+		}
+		return []netip.Addr{netip.MustParseAddr("127.0.0.1")}, nil
+	}
+	options := kubernetesDestinationOptions{
+		authMode:  AuthModeToken,
+		apiServer: "https://kubernetes.example.com",
+	}
+	if err := validateAPIServerResolution(context.Background(), options, resolver); err != nil {
+		t.Fatalf("validate api server resolution: %v", err)
+	}
+	restConfig := restConfigForToken(options)
+	hardenRESTConfig(restConfig, options, resolver)
+	_, err := restConfig.Dial(context.Background(), "tcp", "kubernetes.example.com:443")
+	if err == nil || !strings.Contains(err.Error(), "endpoint address is not allowed") {
+		t.Fatalf("dial error = %v, want disallowed rebound address", err)
+	}
+	if resolverCalls != 2 {
+		t.Fatalf("resolver calls = %d, want validation and dial lookups", resolverCalls)
+	}
+}
+
+func TestRESTConfigHardeningPreservesExplicitTimeoutAndPrivateOptIn(t *testing.T) {
+	explicitTimeout := 5 * time.Second
+	restConfig := &rest.Config{Timeout: explicitTimeout}
+	options := kubernetesDestinationOptions{authMode: AuthModeToken, allowPrivateAPI: true}
+	hardenRESTConfig(restConfig, options, nil)
+	if restConfig.Timeout != explicitTimeout {
+		t.Fatalf("timeout = %s, want configured %s", restConfig.Timeout, explicitTimeout)
+	}
+	if restConfig.Dial != nil {
+		t.Fatal("private api server opt in must allow the standard dialer")
+	}
+	if restConfig.Proxy != nil {
+		t.Fatal("private api server opt in must preserve proxy configuration")
+	}
 }
 
 func TestPlanActions(t *testing.T) {
@@ -486,13 +545,29 @@ func TestPlanActions(t *testing.T) {
 		},
 		{
 			name:    "noop owned matching hash",
-			secret:  ownedSecret(testPayloadSHANew, 1, []byte(`{"password":"new"}`)),
+			secret:  ownedSecret(testPayloadSHANew, 1, []byte(testPayloadNew)),
 			request: defaultPlanRequest(testPayloadSHANew, 1),
 			action:  providers.PlanActionNoop,
 		},
 		{
 			name:    "update owned different hash",
 			secret:  ownedSecret(testPayloadSHAOld, 1, []byte(`{"password":"old"}`)),
+			request: defaultPlanRequest(testPayloadSHANew, 1),
+			action:  providers.PlanActionUpdate,
+		},
+		{
+			name:    "update matching payload with stale source metadata",
+			secret:  ownedSecret(testPayloadSHANew, 1, []byte(testPayloadNew)),
+			request: defaultPlanRequest(testPayloadSHANew, 2),
+			action:  providers.PlanActionUpdate,
+		},
+		{
+			name: "update matching payload with unexpected data key",
+			secret: func() *corev1.Secret {
+				secret := ownedSecret(testPayloadSHANew, 1, []byte(testPayloadNew))
+				secret.Data["foreign"] = []byte("remove")
+				return secret
+			}(),
 			request: defaultPlanRequest(testPayloadSHANew, 1),
 			action:  providers.PlanActionUpdate,
 		},
@@ -557,6 +632,27 @@ func TestPlanUpdatesWhenSecretDataDriftsWithMatchingMetadata(t *testing.T) {
 	}
 }
 
+func TestPlanUpdatesDataMapWithMatchingPayloadAndStaleMetadata(t *testing.T) {
+	payload := mustDataMapPayload(t, map[string][]byte{
+		"username": []byte("app"),
+		"password": []byte("secret"),
+	})
+	secret := ownedDataMapSecret(payload.SHA256, payload.Data, dataMapKeys(payload.Data))
+	client := fake.NewSimpleClientset(secret)
+	request := defaultPlanRequest(payload.SHA256, 2)
+	request.Format = payload.Format
+	request.DataMap = true
+	request.DataMapKeys = dataMapKeys(payload.Data)
+
+	result, err := runtimeWithClient(t, client).Plan(context.Background(), request)
+	if err != nil {
+		t.Fatalf("plan data map: %v", err)
+	}
+	if result.Action != providers.PlanActionUpdate {
+		t.Fatalf("action = %s, want %s", result.Action, providers.PlanActionUpdate)
+	}
+}
+
 func TestUpsertCreatesSecretWithOwnershipMetadata(t *testing.T) {
 	client := fake.NewSimpleClientset()
 	result, err := runtimeWithClient(t, client).Upsert(context.Background(), defaultUpsertRequest(
@@ -598,7 +694,7 @@ func TestUpsertUpdatesOwnedSecretAndPreservesForeignMetadata(t *testing.T) {
 
 	_, err := runtimeWithClient(t, client).Upsert(context.Background(), defaultUpsertRequest(
 		testPayloadSHANew,
-		[]byte(`{"password":"new"}`),
+		[]byte(testPayloadNew),
 		1,
 	))
 	if err != nil {
@@ -612,7 +708,7 @@ func TestUpsertUpdatesOwnedSecretAndPreservesForeignMetadata(t *testing.T) {
 	if err != nil {
 		t.Fatalf("get secret: %v", err)
 	}
-	if got := string(updated.Data[dataKeyPayload]); got != `{"password":"new"}` {
+	if got := string(updated.Data[dataKeyPayload]); got != testPayloadNew {
 		t.Fatalf("secret payload = %s, want updated payload", got)
 	}
 	assertLabel(t, updated, "app", "demo")
@@ -626,7 +722,7 @@ func TestUpsertRepairsSecretDataDriftWithMatchingMetadata(t *testing.T) {
 
 	_, err := runtimeWithClient(t, client).Upsert(context.Background(), defaultUpsertRequest(
 		testPayloadSHANew,
-		[]byte(`{"password":"new"}`),
+		[]byte(testPayloadNew),
 		1,
 	))
 	if err != nil {
@@ -640,8 +736,85 @@ func TestUpsertRepairsSecretDataDriftWithMatchingMetadata(t *testing.T) {
 	if err != nil {
 		t.Fatalf("get secret: %v", err)
 	}
-	if got := string(updated.Data[dataKeyPayload]); got != `{"password":"new"}` {
+	if got := string(updated.Data[dataKeyPayload]); got != testPayloadNew {
 		t.Fatalf("secret payload = %s, want updated payload", got)
+	}
+}
+
+func TestUpsertRefreshesMetadataForMatchingPayload(t *testing.T) {
+	secret := ownedSecret(testPayloadSHANew, 1, []byte(testPayloadNew))
+	secret.Annotations[annotationPayloadSHA256] = testPayloadSHAOld
+	client := fake.NewSimpleClientset(secret)
+
+	_, err := runtimeWithClient(t, client).Upsert(context.Background(), defaultUpsertRequest(
+		testPayloadSHANew,
+		[]byte(testPayloadNew),
+		2,
+	))
+	if err != nil {
+		t.Fatalf("upsert: %v", err)
+	}
+	updated, err := client.CoreV1().Secrets(testNamespace).Get(
+		context.Background(),
+		testResolvedName,
+		metav1.GetOptions{},
+	)
+	if err != nil {
+		t.Fatalf("get secret: %v", err)
+	}
+	assertAnnotation(t, updated, annotationSourceVersion, "2")
+	assertAnnotation(t, updated, annotationPayloadSHA256, testPayloadSHANew)
+	if got := string(updated.Data[dataKeyPayload]); got != testPayloadNew {
+		t.Fatalf("secret payload = %s, want unchanged payload", got)
+	}
+}
+
+func TestUpsertRefreshesImmutableSecretMetadataForMatchingPayload(t *testing.T) {
+	secret := immutableSecret(ownedSecret(testPayloadSHANew, 1, []byte(testPayloadNew)))
+	client := fake.NewSimpleClientset(secret)
+
+	_, err := runtimeWithClient(t, client).Upsert(context.Background(), defaultUpsertRequest(
+		testPayloadSHANew,
+		[]byte(testPayloadNew),
+		2,
+	))
+	if err != nil {
+		t.Fatalf("upsert immutable metadata: %v", err)
+	}
+	updated, err := client.CoreV1().Secrets(testNamespace).Get(
+		context.Background(),
+		testResolvedName,
+		metav1.GetOptions{},
+	)
+	if err != nil {
+		t.Fatalf("get secret: %v", err)
+	}
+	assertAnnotation(t, updated, annotationSourceVersion, "2")
+}
+
+func TestUpsertMatchingPayloadRemovesUnexpectedDataKeys(t *testing.T) {
+	secret := ownedSecret(testPayloadSHANew, 1, []byte(testPayloadNew))
+	secret.Data["foreign"] = []byte("remove")
+	client := fake.NewSimpleClientset(secret)
+
+	_, err := runtimeWithClient(t, client).Upsert(context.Background(), defaultUpsertRequest(
+		testPayloadSHANew,
+		[]byte(testPayloadNew),
+		1,
+	))
+	if err != nil {
+		t.Fatalf("upsert: %v", err)
+	}
+	updated, err := client.CoreV1().Secrets(testNamespace).Get(
+		context.Background(),
+		testResolvedName,
+		metav1.GetOptions{},
+	)
+	if err != nil {
+		t.Fatalf("get secret: %v", err)
+	}
+	if len(updated.Data) != 1 || string(updated.Data[dataKeyPayload]) != testPayloadNew {
+		t.Fatalf("secret data = %#v, want only managed payload", updated.Data)
 	}
 }
 
@@ -716,6 +889,33 @@ func TestUpsertDataMapRemovesStaleManagedKeysAndPreservesForeignKeys(t *testing.
 	assertDataKeysAnnotation(t, updated, []string{"token", "username"})
 }
 
+func TestUpsertDataMapRefreshesMetadataForMatchingPayload(t *testing.T) {
+	payload := mustDataMapPayload(t, map[string][]byte{
+		"username": []byte("app"),
+		"password": []byte("secret"),
+	})
+	secret := ownedDataMapSecret(payload.SHA256, payload.Data, dataMapKeys(payload.Data))
+	client := fake.NewSimpleClientset(secret)
+
+	_, err := runtimeWithClient(t, client).Upsert(
+		context.Background(),
+		defaultDataMapUpsertRequest(payload, 2),
+	)
+	if err != nil {
+		t.Fatalf("upsert data map: %v", err)
+	}
+	updated, err := client.CoreV1().Secrets(testNamespace).Get(
+		context.Background(),
+		testResolvedName,
+		metav1.GetOptions{},
+	)
+	if err != nil {
+		t.Fatalf("get secret: %v", err)
+	}
+	assertAnnotation(t, updated, annotationSourceVersion, "2")
+	assertDataKeysAnnotation(t, updated, []string{"password", "username"})
+}
+
 func TestUpsertDataMapRejectsUnmanagedDataKeyConflict(t *testing.T) {
 	initialPayload := mustDataMapPayload(t, map[string][]byte{
 		"username": []byte("old"),
@@ -779,6 +979,30 @@ func TestDeleteDataMapRemovesManagedKeysAndPreservesForeignKeys(t *testing.T) {
 	}
 }
 
+func TestDeleteDataMapUsesPreconditionsWhenDeletingSecret(t *testing.T) {
+	payload := mustDataMapPayload(t, map[string][]byte{"password": []byte("secret")})
+	secret := ownedDataMapSecret(payload.SHA256, payload.Data, dataMapKeys(payload.Data))
+	secret.UID = "uid-data-map"
+	client := fake.NewSimpleClientset(secret)
+	client.PrependReactor("delete", "secrets", func(action k8stesting.Action) (bool, runtime.Object, error) {
+		deleteAction := action.(k8stesting.DeleteAction)
+		preconditions := deleteAction.GetDeleteOptions().Preconditions
+		if preconditions == nil || preconditions.UID == nil || string(*preconditions.UID) != "uid-data-map" {
+			t.Fatalf("delete preconditions = %#v, want data-map UID", preconditions)
+		}
+		if preconditions.ResourceVersion == nil || *preconditions.ResourceVersion != "rv-1" {
+			t.Fatalf("delete preconditions = %#v, want data-map resource version", preconditions)
+		}
+		return false, nil, nil
+	})
+	request := defaultDeleteRequest(1)
+	request.DataMap = true
+
+	if _, err := runtimeWithClient(t, client).Delete(context.Background(), request); err != nil {
+		t.Fatalf("delete data map: %v", err)
+	}
+}
+
 func TestUpsertRejectsUnsafeRemoteState(t *testing.T) {
 	tests := []struct {
 		name       string
@@ -806,7 +1030,7 @@ func TestUpsertRejectsUnsafeRemoteState(t *testing.T) {
 			client := fake.NewSimpleClientset(tt.secret)
 			_, err := runtimeWithClient(t, client).Upsert(context.Background(), defaultUpsertRequest(
 				testPayloadSHANew,
-				[]byte(`{"password":"new"}`),
+				[]byte(testPayloadNew),
 				1,
 			))
 			assertProviderErrorClass(t, err, tt.errorClass)
@@ -815,8 +1039,8 @@ func TestUpsertRejectsUnsafeRemoteState(t *testing.T) {
 }
 
 func TestOwnedByRequestRejectsRuntimeIdentityMismatch(t *testing.T) {
-	request := defaultUpsertRequest(testPayloadSHANew, []byte(`{"password":"new"}`), 1)
-	secret := ownedSecret(testPayloadSHANew, 1, []byte(`{"password":"new"}`))
+	request := defaultUpsertRequest(testPayloadSHANew, []byte(testPayloadNew), 1)
+	secret := ownedSecret(testPayloadSHANew, 1, []byte(testPayloadNew))
 	secret.Annotations[annotationPluginInstance] = testPluginInstance
 	secret.Annotations[annotationRestoreEpoch] = testRestoreEpoch
 	if !ownedByRequest(secret, request.OwnershipIdentity()) {
@@ -829,7 +1053,23 @@ func TestOwnedByRequestRejectsRuntimeIdentityMismatch(t *testing.T) {
 }
 
 func TestDeleteUsesOwnershipMetadata(t *testing.T) {
-	client := fake.NewSimpleClientset(ownedSecret(testPayloadSHAOld, 1, []byte(`{"password":"old"}`)))
+	secret := ownedSecret(testPayloadSHAOld, 1, []byte(`{"password":"old"}`))
+	secret.UID = "uid-1"
+	client := fake.NewSimpleClientset(secret)
+	client.PrependReactor("delete", "secrets", func(action k8stesting.Action) (bool, runtime.Object, error) {
+		deleteAction, ok := action.(k8stesting.DeleteAction)
+		if !ok {
+			t.Fatalf("delete action = %T, want DeleteAction", action)
+		}
+		preconditions := deleteAction.GetDeleteOptions().Preconditions
+		if preconditions == nil || preconditions.UID == nil || string(*preconditions.UID) != "uid-1" {
+			t.Fatalf("delete UID precondition = %#v, want uid-1", preconditions)
+		}
+		if preconditions.ResourceVersion == nil || *preconditions.ResourceVersion != "rv-1" {
+			t.Fatalf("delete resource version precondition = %#v, want rv-1", preconditions)
+		}
+		return false, nil, nil
+	})
 	_, err := runtimeWithClient(t, client).Delete(context.Background(), defaultDeleteRequest(1))
 	if err != nil {
 		t.Fatalf("delete: %v", err)
@@ -909,6 +1149,23 @@ func TestReadStateReportsSecretDataDriftDespiteMatchingMetadata(t *testing.T) {
 	}
 }
 
+func TestReadStateReportsUnexpectedPayloadModeDataKeyAsDrift(t *testing.T) {
+	secret := ownedSecret(testPayloadSHANew, 1, []byte(testPayloadNew))
+	secret.Data["foreign"] = []byte("drift")
+	client := fake.NewSimpleClientset(secret)
+
+	state, err := runtimeWithClient(t, client).ReadState(
+		context.Background(),
+		defaultReadStateRequest(testPayloadSHANew, 1),
+	)
+	if err != nil {
+		t.Fatalf("read state: %v", err)
+	}
+	if state.PayloadSHA256 == "" || state.PayloadSHA256 == testPayloadSHANew {
+		t.Fatalf("payload sha = %q, want whole-secret drift hash", state.PayloadSHA256)
+	}
+}
+
 func TestReadStateReportsDataMapPayloadHashFromManagedKeys(t *testing.T) {
 	payload := mustDataMapPayload(t, map[string][]byte{
 		"username": []byte("app"),
@@ -961,7 +1218,7 @@ func TestReadStateReportsDataMapDriftDespiteMatchingMetadata(t *testing.T) {
 
 func TestHealthClassifiesKubernetesFailure(t *testing.T) {
 	client := fake.NewSimpleClientset()
-	client.PrependReactor("list", "secrets", func(k8stesting.Action) (bool, runtime.Object, error) {
+	client.PrependReactor("get", "secrets", func(k8stesting.Action) (bool, runtime.Object, error) {
 		return true, nil, apierrors.NewForbidden(secretsResource, "", errors.New("denied"))
 	})
 	result, err := runtimeWithClient(t, client).Health(context.Background())
@@ -973,6 +1230,22 @@ func TestHealthClassifiesKubernetesFailure(t *testing.T) {
 	}
 	if result.ErrorClass != providers.ErrorClassAuthz {
 		t.Fatalf("health error class = %s, want %s", result.ErrorClass, providers.ErrorClassAuthz)
+	}
+}
+
+func TestHealthUsesGetWithoutSecretListPermission(t *testing.T) {
+	client := fake.NewSimpleClientset()
+	result, err := runtimeWithClient(t, client).Health(context.Background())
+	if err != nil {
+		t.Fatalf("health: %v", err)
+	}
+	if !result.Healthy {
+		t.Fatalf("health result = %#v, want healthy missing probe secret", result)
+	}
+	for _, action := range client.Actions() {
+		if action.GetVerb() == "list" {
+			t.Fatalf("health action = %#v, must not list secrets", action)
+		}
 	}
 }
 
@@ -1042,7 +1315,7 @@ func kubernetesMaturityMatrix() *providertest.MaturityMatrix {
 				Name:            "upsert-unowned-secret",
 				Provider:        Provider{client: fake.NewSimpleClientset(unownedSecret())},
 				Operation:       providertest.OperationUpsert,
-				UpsertRequest:   defaultUpsertRequest(testPayloadSHANew, []byte(`{"password":"new"}`), 1),
+				UpsertRequest:   defaultUpsertRequest(testPayloadSHANew, []byte(testPayloadNew), 1),
 				ErrorClass:      providers.ErrorClassOwnership,
 				NoResultOnError: true,
 			},
@@ -1051,7 +1324,7 @@ func kubernetesMaturityMatrix() *providertest.MaturityMatrix {
 			Name:            "get-unauthorized",
 			Provider:        Provider{client: clientWithGetError(apierrors.NewUnauthorized("bad token"))},
 			Operation:       providertest.OperationUpsert,
-			UpsertRequest:   defaultUpsertRequest(testPayloadSHANew, []byte(`{"password":"new"}`), 1),
+			UpsertRequest:   defaultUpsertRequest(testPayloadSHANew, []byte(testPayloadNew), 1),
 			ErrorClass:      providers.ErrorClassAuthn,
 			NoResultOnError: true,
 		},
@@ -1061,7 +1334,7 @@ func kubernetesMaturityMatrix() *providertest.MaturityMatrix {
 				apierrors.NewTooManyRequests("slow down", 1),
 			)},
 			Operation:       providertest.OperationUpsert,
-			UpsertRequest:   defaultUpsertRequest(testPayloadSHANew, []byte(`{"password":"new"}`), 1),
+			UpsertRequest:   defaultUpsertRequest(testPayloadSHANew, []byte(testPayloadNew), 1),
 			ErrorClass:      providers.ErrorClassRateLimit,
 			NoResultOnError: true,
 		},
@@ -1081,7 +1354,7 @@ func kubernetesMaturityMatrix() *providertest.MaturityMatrix {
 					ownedSecret(testPayloadSHAOld, 1, []byte(`{"password":"old"}`)),
 				)},
 				Operation:     providertest.OperationUpsert,
-				UpsertRequest: defaultUpsertRequest(testPayloadSHANew, []byte(`{"password":"new"}`), 1),
+				UpsertRequest: defaultUpsertRequest(testPayloadSHANew, []byte(testPayloadNew), 1),
 				RemoteVersion: "rv-1",
 			},
 		},
@@ -1091,7 +1364,7 @@ func kubernetesMaturityMatrix() *providertest.MaturityMatrix {
 				ownedSecret(testPayloadSHAOld, 2, []byte(`{"password":"old"}`)),
 			)},
 			Operation:       providertest.OperationUpsert,
-			UpsertRequest:   defaultUpsertRequest(testPayloadSHANew, []byte(`{"password":"new"}`), 1),
+			UpsertRequest:   defaultUpsertRequest(testPayloadSHANew, []byte(testPayloadNew), 1),
 			ErrorClass:      providers.ErrorClassDrift,
 			NoResultOnError: true,
 		},

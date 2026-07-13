@@ -28,6 +28,7 @@ type Provider interface {
     Type() string
     Capabilities() Capabilities
     ValidateConfig(context.Context, DestinationConfig) error
+    NormalizeAssociationConfig(context.Context, DestinationConfig, AssociationConfig) (AssociationConfig, error)
     OpenDestination(context.Context, DestinationConfig) (DestinationRuntime, error)
 }
 ```
@@ -69,6 +70,32 @@ dispatch, and reconcile.
 Provider config validation rejects unsupported auth modes, unsupported
 sensitive fields, unsafe endpoints, invalid names, and provider-specific
 configuration conflicts before the backend stores the destination.
+
+## Association config
+
+Settings that may differ for remote objects sharing one destination are stored
+on the association:
+
+```go
+type AssociationConfig struct {
+    Config   map[string]string
+    Identity string
+}
+```
+
+The backend passes request fields to `NormalizeAssociationConfig` during every
+association write or plan. The provider validates the fields, applies stable
+defaults, and returns the complete canonical config persisted by the backend.
+`Identity` is an opaque, non-sensitive component used by the core for
+association IDs, selection, and remote-name reservations. Only the provider may
+derive it; runtimes must use `Config`, not parse `Identity`.
+
+An identity component distinguishes remote objects that may otherwise share a
+resolved name. GitLab uses `environment_scope`, allowing the same project
+variable key in multiple scopes. A provider must keep its identity derivation
+stable because changing it changes association ownership and reservation keys.
+Providers without per-association settings reject non-empty config and return
+an empty canonical map.
 
 ## Provider rules
 
@@ -133,6 +160,7 @@ the response must not include secret payload values:
 ```go
 type PlanRequest struct {
     Runtime       RuntimeIdentity
+    Association   AssociationConfig
     ResolvedName  string
     Format        string
     PayloadSHA256 string
@@ -169,6 +197,7 @@ Upsert requests receive prepared payload bytes and payload metadata:
 ```go
 type UpsertRequest struct {
     Runtime        RuntimeIdentity
+    Association    AssociationConfig
     ResolvedName   string
     Format         string
     Payload        []byte
@@ -204,6 +233,7 @@ and the provider advertises owned delete support:
 ```go
 type DeleteRequest struct {
     Runtime        RuntimeIdentity
+    Association    AssociationConfig
     ResolvedName   string
     IdempotencyKey string
     DataMap        bool
@@ -231,6 +261,7 @@ requests:
 ```go
 type ReadStateRequest struct {
     Runtime       RuntimeIdentity
+    Association   AssociationConfig
     ResolvedName  string
     PayloadSHA256 string
     DataMap       bool
@@ -300,8 +331,9 @@ Templates are validated at association creation and revalidated during sync.
 Rendered templates that still contain `{{` or `}}` are rejected as
 unsupported.
 
-The backend maintains a reservation index for resolved or rendered remote names
-so two associations do not manage the same remote object for one destination.
+The backend maintains a reservation index for provider identity plus resolved
+or rendered remote name, so two associations do not manage the same remote
+object for one destination while provider-distinct objects may coexist.
 
 Template changes do not silently rename existing remote objects. Operators
 must create a new association, review the plan, and delete the old association
@@ -375,6 +407,7 @@ harness locks down the common contract:
 - stable non-empty provider type;
 - declared capability bits and payload limits;
 - destination validation error classes;
+- valid association normalization;
 - health diagnostics;
 - plan action mapping;
 - upsert and delete success results where implemented;
@@ -463,6 +496,13 @@ The provider writes project CI/CD variables, stores ownership metadata in the
 variable description, validates variable attributes and masked payloads,
 repairs value and attribute drift, supports owned update, owned delete, value
 readback, read-state, health checks, and HTTP error classification.
+
+GitLab connection, project, credential, and endpoint policy fields are
+destination config. `environment_scope`, `protected`, `masked`, `hidden`,
+`variable_raw`, and `variable_type` are normalized association config.
+`environment_scope` is the provider identity component; the other attributes
+are mutable desired state and an enabled association update enqueues the current
+source version.
 
 GitLab base URLs reject localhost, private, link-local, multicast, unspecified,
 and DNS-resolved private or local targets by default. Approved self-managed

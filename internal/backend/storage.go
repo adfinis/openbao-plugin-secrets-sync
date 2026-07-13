@@ -95,6 +95,22 @@ func listVersionKeys(ctx context.Context, storage logical.Storage, path string) 
 }
 
 func deleteSourcePath(ctx context.Context, storage logical.Storage, path string) error {
+	terminalIDs, err := listOutboxIDsForState(ctx, storage, outboxStateFailedTerminal)
+	if err != nil {
+		return err
+	}
+	for _, id := range terminalIDs {
+		record, err := getOutbox(ctx, storage, id)
+		if err != nil {
+			return err
+		}
+		if record == nil || record.Path != path {
+			continue
+		}
+		if err := deleteOutbox(ctx, storage, *record); err != nil {
+			return err
+		}
+	}
 	versionKeys, err := listVersionKeys(ctx, storage, path)
 	if err != nil {
 		return err
@@ -314,9 +330,14 @@ func listDestinationNamesPage(
 func putDestinationSensitiveConfig(
 	ctx context.Context,
 	storage logical.Storage,
+	version string,
 	record destinationSensitiveRecord,
 ) error {
-	entry, err := logical.StorageEntryJSON(destinationSensitiveStorageKey(record.Type, record.Name), record)
+	key := destinationSensitiveStorageKey(record.Type, record.Name)
+	if version != "" {
+		key = destinationSensitiveVersionStorageKey(record.Type, record.Name, version)
+	}
+	entry, err := logical.StorageEntryJSON(key, record)
 	if err != nil {
 		return err
 	}
@@ -329,18 +350,37 @@ func getDestinationSensitiveConfig(
 	destinationType string,
 	name string,
 ) (*destinationSensitiveRecord, error) {
-	entry, err := storage.Get(ctx, destinationSensitiveStorageKey(destinationType, name))
+	record, err := getDestination(ctx, storage, destinationType, name)
+	if err != nil || record == nil {
+		return nil, err
+	}
+	return getDestinationSensitiveConfigForRecord(ctx, storage, *record)
+}
+
+func getDestinationSensitiveConfigForRecord(
+	ctx context.Context,
+	storage logical.Storage,
+	record destinationRecord,
+) (*destinationSensitiveRecord, error) {
+	if record.SensitiveConfigVersion == destinationSensitiveNone {
+		return nil, nil
+	}
+	key := destinationSensitiveStorageKey(record.Type, record.Name)
+	if record.SensitiveConfigVersion != "" {
+		key = destinationSensitiveVersionStorageKey(record.Type, record.Name, record.SensitiveConfigVersion)
+	}
+	entry, err := storage.Get(ctx, key)
 	if err != nil {
 		return nil, err
 	}
 	if entry == nil {
 		return nil, nil
 	}
-	var record destinationSensitiveRecord
-	if err := entry.DecodeJSON(&record); err != nil {
+	var sensitiveRecord destinationSensitiveRecord
+	if err := entry.DecodeJSON(&sensitiveRecord); err != nil {
 		return nil, err
 	}
-	return &record, nil
+	return &sensitiveRecord, nil
 }
 
 func deleteDestinationSensitiveConfig(
@@ -349,7 +389,39 @@ func deleteDestinationSensitiveConfig(
 	destinationType string,
 	name string,
 ) error {
-	return storage.Delete(ctx, destinationSensitiveStorageKey(destinationType, name))
+	if err := storage.Delete(ctx, destinationSensitiveStorageKey(destinationType, name)); err != nil {
+		return err
+	}
+	prefix := destinationSensitiveVersionStoragePrefix(destinationType, name)
+	versions, err := storage.List(ctx, prefix)
+	if err != nil {
+		return err
+	}
+	for _, version := range versions {
+		if strings.HasSuffix(version, "/") {
+			continue
+		}
+		if err := storage.Delete(ctx, prefix+version); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func deleteDestinationSensitiveConfigVersion(
+	ctx context.Context,
+	storage logical.Storage,
+	destinationType string,
+	name string,
+	version string,
+) error {
+	if version == destinationSensitiveNone {
+		return nil
+	}
+	if version == "" {
+		return storage.Delete(ctx, destinationSensitiveStorageKey(destinationType, name))
+	}
+	return storage.Delete(ctx, destinationSensitiveVersionStorageKey(destinationType, name, version))
 }
 
 func putAssociation(ctx context.Context, storage logical.Storage, record associationRecord) error {
@@ -841,12 +913,12 @@ func filterOutboxIDs(
 	return filtered, nil
 }
 
-func deleteQueuedOutboxForAssociation(
+func deleteOutboxForAssociation(
 	ctx context.Context,
 	storage logical.Storage,
 	association associationRecord,
 ) error {
-	ids, err := listQueuedOutboxIDsForPath(ctx, storage, association.Path)
+	ids, err := listOutboxIDsForPath(ctx, storage, association.Path)
 	if err != nil {
 		return err
 	}
@@ -866,6 +938,107 @@ func deleteQueuedOutboxForAssociation(
 		}
 	}
 	return nil
+}
+
+func (b *secretSyncBackend) pruneTerminalOutboxRecords(
+	ctx context.Context,
+	storage logical.Storage,
+	now time.Time,
+) error {
+	b.enqueueMu.Lock()
+	defer b.enqueueMu.Unlock()
+	_, err := pruneTerminalOutboxRecordsLimit(
+		ctx,
+		storage,
+		now,
+		maxRetainedTerminalOutboxRecords,
+		defaultTerminalOutboxPruneLimit,
+	)
+	return err
+}
+
+func pruneTerminalOutboxRecordsLimit(
+	ctx context.Context,
+	storage logical.Storage,
+	now time.Time,
+	maxRecords int,
+	expiredLimit int,
+) (int, error) {
+	records, err := terminalOutboxRecords(ctx, storage)
+	if err != nil {
+		return 0, err
+	}
+	sort.Slice(records, func(i int, j int) bool {
+		left := terminalOutboxRetentionTime(records[i])
+		right := terminalOutboxRetentionTime(records[j])
+		if left.Equal(right) {
+			return records[i].ID < records[j].ID
+		}
+		return left.Before(right)
+	})
+	excess := max(len(records)-maxRecords, 0)
+	cutoff := now.Add(-terminalOutboxRetention)
+	deleted := 0
+	expiredDeleted := 0
+	for index, record := range records {
+		retentionTime := terminalOutboxRetentionTime(record)
+		expired := !retentionTime.IsZero() && !retentionTime.After(cutoff)
+		if !shouldPruneTerminalOutboxRecord(index, excess, expired, expiredDeleted, expiredLimit) {
+			continue
+		}
+		if err := deleteOutbox(ctx, storage, record); err != nil {
+			return deleted, err
+		}
+		deleted++
+		if expired && index >= excess {
+			expiredDeleted++
+		}
+	}
+	return deleted, nil
+}
+
+func terminalOutboxRecords(ctx context.Context, storage logical.Storage) ([]outboxRecord, error) {
+	ids, err := listOutboxIDsForState(ctx, storage, outboxStateFailedTerminal)
+	if err != nil {
+		return nil, err
+	}
+	records := make([]outboxRecord, 0, len(ids))
+	for _, id := range ids {
+		record, err := getOutbox(ctx, storage, id)
+		if err != nil {
+			return nil, err
+		}
+		if record != nil && record.State == outboxStateFailedTerminal {
+			records = append(records, *record)
+		}
+	}
+	return records, nil
+}
+
+func shouldPruneTerminalOutboxRecord(
+	index int,
+	excess int,
+	expired bool,
+	expiredDeleted int,
+	expiredLimit int,
+) bool {
+	if index < excess {
+		return true
+	}
+	if !expired {
+		return false
+	}
+	return expiredLimit <= 0 || expiredDeleted < expiredLimit
+}
+
+func terminalOutboxRetentionTime(record outboxRecord) time.Time {
+	for _, value := range []string{record.UpdatedTime, record.CreatedTime} {
+		parsed, err := time.Parse(timeFormatRFC3339, value)
+		if err == nil {
+			return parsed
+		}
+	}
+	return time.Time{}
 }
 
 func cancelQueuedOutboxForAssociation(

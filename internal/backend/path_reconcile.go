@@ -424,6 +424,7 @@ func providerReadStateRequest(
 ) providers.ReadStateRequest {
 	return providers.ReadStateRequest{
 		Runtime:       runtimeIdentity,
+		Association:   providerAssociationConfig(association),
 		ResolvedName:  resolvedName,
 		PayloadSHA256: payload.SHA256,
 		DataMap:       normalizedDataMapping(association.DataMapping) == dataMappingSourceKeys,
