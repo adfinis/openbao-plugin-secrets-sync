@@ -34,12 +34,6 @@ var destinationConfigFieldKeys = []string{
 	awssecretsmanager.ConfigKeyValueDriftDetection,
 	gitlab.ConfigKeyBaseURL,
 	gitlab.ConfigKeyProjectID,
-	gitlab.ConfigKeyEnvironmentScope,
-	gitlab.ConfigKeyProtected,
-	gitlab.ConfigKeyMasked,
-	gitlab.ConfigKeyHidden,
-	gitlab.ConfigKeyVariableRaw,
-	gitlab.ConfigKeyVariableType,
 	gitlab.ConfigKeyAllowInsecureHTTP,
 	gitlab.ConfigKeyAllowPrivateNetwork,
 	kubernetessecrets.ConfigKeyNamespace,
@@ -66,12 +60,6 @@ var destinationConfigFieldKeysByType = map[string][]string{
 	gitlab.ProviderType: {
 		gitlab.ConfigKeyBaseURL,
 		gitlab.ConfigKeyProjectID,
-		gitlab.ConfigKeyEnvironmentScope,
-		gitlab.ConfigKeyProtected,
-		gitlab.ConfigKeyMasked,
-		gitlab.ConfigKeyHidden,
-		gitlab.ConfigKeyVariableRaw,
-		gitlab.ConfigKeyVariableType,
 		gitlab.ConfigKeyAllowInsecureHTTP,
 		gitlab.ConfigKeyAllowPrivateNetwork,
 	},
@@ -265,30 +253,6 @@ func destinationRequestFields() map[string]*framework.FieldSchema {
 	fields[gitlab.ConfigKeyProjectID] = &framework.FieldSchema{
 		Type:        framework.TypeString,
 		Description: "GitLab project ID or path for gitlab project variable destinations.",
-	}
-	fields[gitlab.ConfigKeyEnvironmentScope] = &framework.FieldSchema{
-		Type:        framework.TypeString,
-		Description: "GitLab variable environment scope. Defaults to *.",
-	}
-	fields[gitlab.ConfigKeyProtected] = &framework.FieldSchema{
-		Type:        framework.TypeBool,
-		Description: "GitLab protected variable flag: true or false.",
-	}
-	fields[gitlab.ConfigKeyMasked] = &framework.FieldSchema{
-		Type:        framework.TypeBool,
-		Description: "GitLab masked variable flag: true or false.",
-	}
-	fields[gitlab.ConfigKeyHidden] = &framework.FieldSchema{
-		Type:        framework.TypeBool,
-		Description: "GitLab hidden variable flag: true or false. Hidden variables are sent as masked_and_hidden.",
-	}
-	fields[gitlab.ConfigKeyVariableRaw] = &framework.FieldSchema{
-		Type:        framework.TypeBool,
-		Description: "GitLab raw variable flag controlling variable reference expansion: true or false.",
-	}
-	fields[gitlab.ConfigKeyVariableType] = &framework.FieldSchema{
-		Type:        framework.TypeString,
-		Description: "GitLab variable type: env_var or file.",
 	}
 	fields[gitlab.ConfigKeyAllowInsecureHTTP] = &framework.FieldSchema{
 		Type: framework.TypeBool,
@@ -901,7 +865,7 @@ func destinationConfigFromFieldData(
 	if existing != nil {
 		existingConfig = existing.Config
 	}
-	return destinationConfigMapFromFieldData(
+	return providerConfigMapFromFieldData(
 		destinationType,
 		existingConfig,
 		destinationConfigFieldKeysForType(destinationType),
@@ -919,7 +883,7 @@ func destinationSensitiveConfigFromFieldData(
 	if existing != nil {
 		existingConfig = existing.Config
 	}
-	return destinationConfigMapFromFieldData(
+	return providerConfigMapFromFieldData(
 		destinationType,
 		existingConfig,
 		destinationSensitiveConfigFieldKeysForType(destinationType),
@@ -928,7 +892,7 @@ func destinationSensitiveConfigFromFieldData(
 	)
 }
 
-func destinationConfigMapFromFieldData(
+func providerConfigMapFromFieldData(
 	destinationType string,
 	existing map[string]string,
 	providerKeys []string,
@@ -945,10 +909,10 @@ func destinationConfigMapFromFieldData(
 	}
 	allowedKeys := stringSet(providerKeys)
 	for _, key := range fieldKeys {
-		value, ok := data.GetOk(key)
-		if !ok {
+		if _, ok := data.Raw[key]; !ok {
 			continue
 		}
+		value := data.Get(key)
 		stringValue, err := destinationConfigStringValue(value)
 		if err != nil {
 			return nil, fmt.Errorf("%s: %w", key, err)

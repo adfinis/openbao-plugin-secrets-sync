@@ -197,19 +197,6 @@ func TestValidateDestinationConfig(t *testing.T) {
 			errorClass: providers.ErrorClassValidation,
 		},
 		{
-			name: "options",
-			config: map[string]string{
-				ConfigKeyProjectID:        testProjectID,
-				ConfigKeyToken:            testToken,
-				ConfigKeyEnvironmentScope: testEnvScope,
-				ConfigKeyProtected:        testBoolTrue,
-				ConfigKeyMasked:           testBoolTrue,
-				ConfigKeyHidden:           "false",
-				ConfigKeyVariableRaw:      testBoolTrue,
-				ConfigKeyVariableType:     VariableTypeFile,
-			},
-		},
-		{
 			name: "missing project",
 			config: map[string]string{
 				ConfigKeyToken: testToken,
@@ -250,24 +237,6 @@ func TestValidateDestinationConfig(t *testing.T) {
 			},
 			errorClass: providers.ErrorClassValidation,
 		},
-		{
-			name: "invalid bool",
-			config: map[string]string{
-				ConfigKeyProjectID: testProjectID,
-				ConfigKeyToken:     testToken,
-				ConfigKeyMasked:    "sometimes",
-			},
-			errorClass: providers.ErrorClassValidation,
-		},
-		{
-			name: "invalid variable type",
-			config: map[string]string{
-				ConfigKeyProjectID:    testProjectID,
-				ConfigKeyToken:        testToken,
-				ConfigKeyVariableType: "docker",
-			},
-			errorClass: providers.ErrorClassValidation,
-		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -276,6 +245,61 @@ func TestValidateDestinationConfig(t *testing.T) {
 				Config: tt.config,
 			})
 			assertProviderErrorClass(t, err, tt.errorClass)
+		})
+	}
+}
+
+func TestNormalizeAssociationConfig(t *testing.T) {
+	tests := []struct {
+		name       string
+		config     map[string]string
+		errorClass providers.ErrorClass
+	}{
+		{name: "defaults"},
+		{
+			name: "options",
+			config: map[string]string{
+				ConfigKeyEnvironmentScope: testEnvScope,
+				ConfigKeyProtected:        testBoolTrue,
+				ConfigKeyMasked:           testBoolTrue,
+				ConfigKeyHidden:           "false",
+				ConfigKeyVariableRaw:      testBoolTrue,
+				ConfigKeyVariableType:     VariableTypeFile,
+			},
+		},
+		{
+			name:       "invalid bool",
+			config:     map[string]string{ConfigKeyMasked: "sometimes"},
+			errorClass: providers.ErrorClassValidation,
+		},
+		{
+			name:       "invalid variable type",
+			config:     map[string]string{ConfigKeyVariableType: "docker"},
+			errorClass: providers.ErrorClassValidation,
+		},
+		{
+			name:       "unknown option",
+			config:     map[string]string{"unknown": "value"},
+			errorClass: providers.ErrorClassValidation,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			normalized, err := (Provider{}).NormalizeAssociationConfig(
+				context.Background(),
+				defaultDestinationConfig(),
+				providers.AssociationConfig{Config: tt.config},
+			)
+			assertProviderErrorClass(t, err, tt.errorClass)
+			if err != nil {
+				return
+			}
+			if normalized.Identity == "" {
+				t.Fatal("normalized association identity must include environment scope")
+			}
+			if len(normalized.Config) != 6 {
+				t.Fatalf("normalized config = %#v, want six canonical fields", normalized.Config)
+			}
 		})
 	}
 }
@@ -349,18 +373,18 @@ func TestValidateBaseURLResolution(t *testing.T) {
 	}
 }
 
-func TestHiddenDestinationImpliesMasked(t *testing.T) {
-	options, err := gitlabDestinationOptionsFromConfig(destinationConfigWith(map[string]string{
+func TestHiddenAssociationImpliesMasked(t *testing.T) {
+	options, err := gitlabAssociationOptionsFromConfig(providers.AssociationConfig{Config: map[string]string{
 		ConfigKeyHidden: testBoolTrue,
-	}))
+	}})
 	if err != nil {
-		t.Fatalf("destination options: %v", err)
+		t.Fatalf("association options: %v", err)
 	}
 	if !options.hidden {
 		t.Fatal("hidden option = false, want true")
 	}
 	if !options.masked {
-		t.Fatal("hidden destinations must request masked variables")
+		t.Fatal("hidden associations must request masked variables")
 	}
 }
 
@@ -462,15 +486,11 @@ func TestPlanRejectsKnownIncompatibleMaskedPayloads(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			req := defaultPlanRequest(testPayloadSHANew, 1)
-			destination := destinationConfigWith(tt.overrides)
+			req.Association = associationConfigWith(tt.overrides)
 			req.Format = tt.format
 			req.PayloadBytes = tt.payloadLen
 
-			plan, err := runtimeWithDestination(
-				t,
-				Provider{client: newMemoryProjectVariableClient()},
-				destination,
-			).Plan(context.Background(), req)
+			plan, err := runtimeWithClient(t, newMemoryProjectVariableClient()).Plan(context.Background(), req)
 			if err != nil {
 				t.Fatalf("plan: %v", err)
 			}
@@ -533,10 +553,10 @@ func TestUpsertRejectsIncompatibleMaskedPayloads(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			client := newMemoryProjectVariableClient()
 			req := defaultUpsertRequest(testPayloadSHANew, tt.value, 1)
-			destination := destinationConfigWith(tt.overrides)
+			req.Association = associationConfigWith(tt.overrides)
 			req.Format = tt.format
 
-			_, err := runtimeWithDestination(t, Provider{client: client}, destination).Upsert(context.Background(), req)
+			_, err := runtimeWithClient(t, client).Upsert(context.Background(), req)
 			assertProviderErrorClass(t, err, providers.ErrorClassValidation)
 			if len(client.variables) != 0 {
 				t.Fatalf("variables = %#v, want no GitLab write", client.variables)
@@ -546,22 +566,20 @@ func TestUpsertRejectsIncompatibleMaskedPayloads(t *testing.T) {
 }
 
 func TestUpsertCreatesCompatibleHiddenVariable(t *testing.T) {
-	cfg := destinationConfigWith(map[string]string{
-		ConfigKeyHidden: testBoolTrue,
-	})
 	client := newMemoryProjectVariableClient()
 	req := defaultUpsertRequest(testPayloadSHANew, []byte("token_123"), 1)
+	req.Association = associationConfigWith(map[string]string{ConfigKeyHidden: testBoolTrue})
 
-	result, err := runtimeWithDestination(t, Provider{client: client}, cfg).Upsert(context.Background(), req)
+	result, err := runtimeWithClient(t, client).Upsert(context.Background(), req)
 	if err != nil {
 		t.Fatalf("upsert: %v", err)
 	}
 	if result.RemoteVersion != testPayloadSHANew {
 		t.Fatalf("remote version = %s, want %s", result.RemoteVersion, testPayloadSHANew)
 	}
-	options, err := gitlabDestinationOptionsFromConfig(cfg)
-	if err != nil {
-		t.Fatalf("destination options: %v", err)
+	options := gitlabVariableOptions{
+		destination: defaultDestinationOptions(),
+		association: mustGitLabAssociationOptions(req.Association),
 	}
 	variable, err := client.GetVariable(context.Background(), options, testResolvedName)
 	if err != nil {
@@ -572,6 +590,47 @@ func TestUpsertCreatesCompatibleHiddenVariable(t *testing.T) {
 	}
 	if !variable.Hidden {
 		t.Fatal("created variable hidden = false, want true")
+	}
+}
+
+func TestUpsertAddressesSameVariableKeyInIndependentScopes(t *testing.T) {
+	client := newMemoryProjectVariableClient()
+	runtime := runtimeWithClient(t, client)
+
+	staging := defaultUpsertRequest(testPayloadSHAOld, []byte("staging"), 1)
+	staging.Association = associationConfigWith(map[string]string{
+		ConfigKeyEnvironmentScope: "staging",
+	})
+	staging.AssociationID = testAssociationID + "-staging"
+	if _, err := runtime.Upsert(context.Background(), staging); err != nil {
+		t.Fatalf("upsert staging variable: %v", err)
+	}
+
+	production := defaultUpsertRequest(testPayloadSHANew, []byte("production"), 1)
+	production.Association = associationConfigWith(map[string]string{
+		ConfigKeyEnvironmentScope: "production",
+	})
+	production.AssociationID = testAssociationID + "-production"
+	if _, err := runtime.Upsert(context.Background(), production); err != nil {
+		t.Fatalf("upsert production variable: %v", err)
+	}
+
+	if len(client.variables) != 2 {
+		t.Fatalf("variables = %#v, want one variable per environment scope", client.variables)
+	}
+	stagingVariable, ok := client.variables[variableStorageKey(testResolvedName, "staging")]
+	if !ok {
+		t.Fatalf("variables = %#v, want staging variable", client.variables)
+	}
+	if got := stagingVariable.Value; got != "staging" {
+		t.Fatalf("staging variable value = %q, want staging", got)
+	}
+	productionVariable, ok := client.variables[variableStorageKey(testResolvedName, "production")]
+	if !ok {
+		t.Fatalf("variables = %#v, want production variable", client.variables)
+	}
+	if got := productionVariable.Value; got != "production" {
+		t.Fatalf("production variable value = %q, want production", got)
 	}
 }
 
@@ -593,7 +652,7 @@ func TestUpsertRepairsValueDriftWithMatchingMetadata(t *testing.T) {
 	if err != nil {
 		t.Fatalf("upsert: %v", err)
 	}
-	updated, err := client.GetVariable(context.Background(), defaultOptions(), testResolvedName)
+	updated, err := client.GetVariable(context.Background(), defaultVariableOptions(), testResolvedName)
 	if err != nil {
 		t.Fatalf("get variable: %v", err)
 	}
@@ -666,14 +725,10 @@ func TestPlanUpdatesWhenAttributesDriftWithMatchingPayload(t *testing.T) {
 				PayloadFormat: payload.FormatRaw,
 			})
 			req := defaultPlanRequest(testPayloadSHAOld, 1)
-			destination := destinationConfigWith(tt.overrides)
+			req.Association = associationConfigWith(tt.overrides)
 			req.PayloadBytes = len("token_123")
 
-			plan, err := runtimeWithDestination(
-				t,
-				Provider{client: gitlabClientWithVariable(variable)},
-				destination,
-			).Plan(context.Background(), req)
+			plan, err := runtimeWithClient(t, gitlabClientWithVariable(variable)).Plan(context.Background(), req)
 			if err != nil {
 				t.Fatalf("plan: %v", err)
 			}
@@ -741,7 +796,6 @@ func TestUpsertRepairsAttributeDriftWithMatchingPayload(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			cfg := destinationConfigWith(tt.overrides)
 			client := gitlabClientWithVariable(ownedVariable(variableMetadata{
 				AssociationID: testAssociationID,
 				SourcePath:    testSourcePath,
@@ -751,17 +805,18 @@ func TestUpsertRepairsAttributeDriftWithMatchingPayload(t *testing.T) {
 				PayloadFormat: payload.FormatRaw,
 			}))
 			req := defaultUpsertRequest(testPayloadSHAOld, []byte("token_123"), 1)
+			req.Association = associationConfigWith(tt.overrides)
 
-			result, err := runtimeWithDestination(t, Provider{client: client}, cfg).Upsert(context.Background(), req)
+			result, err := runtimeWithClient(t, client).Upsert(context.Background(), req)
 			if err != nil {
 				t.Fatalf("upsert: %v", err)
 			}
 			if result.RemoteVersion != testPayloadSHAOld {
 				t.Fatalf("remote version = %s, want %s", result.RemoteVersion, testPayloadSHAOld)
 			}
-			options, err := gitlabDestinationOptionsFromConfig(cfg)
-			if err != nil {
-				t.Fatalf("destination options: %v", err)
+			options := gitlabVariableOptions{
+				destination: defaultDestinationOptions(),
+				association: mustGitLabAssociationOptions(req.Association),
 			}
 			variable, err := client.GetVariable(context.Background(), options, testResolvedName)
 			if err != nil {
@@ -773,9 +828,6 @@ func TestUpsertRepairsAttributeDriftWithMatchingPayload(t *testing.T) {
 }
 
 func TestHiddenUpdateIsBlockedForExistingVisibleVariable(t *testing.T) {
-	cfg := destinationConfigWith(map[string]string{
-		ConfigKeyHidden: testBoolTrue,
-	})
 	variable := ownedVariable(variableMetadata{
 		AssociationID: testAssociationID,
 		SourcePath:    testSourcePath,
@@ -787,8 +839,9 @@ func TestHiddenUpdateIsBlockedForExistingVisibleVariable(t *testing.T) {
 	client := gitlabClientWithVariable(variable)
 
 	planRequest := defaultPlanRequest(testPayloadSHAOld, 1)
+	planRequest.Association = associationConfigWith(map[string]string{ConfigKeyHidden: testBoolTrue})
 	planRequest.PayloadBytes = len("token_123")
-	plan, err := runtimeWithDestination(t, Provider{client: client}, cfg).Plan(context.Background(), planRequest)
+	plan, err := runtimeWithClient(t, client).Plan(context.Background(), planRequest)
 	if err != nil {
 		t.Fatalf("plan: %v", err)
 	}
@@ -800,7 +853,8 @@ func TestHiddenUpdateIsBlockedForExistingVisibleVariable(t *testing.T) {
 	}
 
 	upsertRequest := defaultUpsertRequest(testPayloadSHAOld, []byte("token_123"), 1)
-	_, err = runtimeWithDestination(t, Provider{client: client}, cfg).Upsert(context.Background(), upsertRequest)
+	upsertRequest.Association = planRequest.Association
+	_, err = runtimeWithClient(t, client).Upsert(context.Background(), upsertRequest)
 	assertProviderErrorClass(t, err, providers.ErrorClassValidation)
 }
 
@@ -856,8 +910,8 @@ func TestHTTPClientProjectVariableRequests(t *testing.T) {
 	}))
 	defer server.Close()
 
-	options := defaultOptions()
-	options.baseURL = server.URL
+	options := defaultVariableOptions()
+	options.destination.baseURL = server.URL
 	client := httpProjectVariableClient{client: server.Client()}
 	variable, err := client.UpdateVariable(context.Background(), options, testResolvedName, gitlabVariableInput{
 		Key:              testResolvedName,
@@ -942,7 +996,7 @@ func TestPrivateNetworkOptInDoesNotInstallDialGuard(t *testing.T) {
 	}
 	defer func() { _ = listener.Close() }()
 
-	options := defaultOptions()
+	options := defaultDestinationOptions()
 	options.allowPrivateNet = true
 	client := gitLabHTTPClientForOptions(options, nil)
 	transport := client.Transport.(*http.Transport)
@@ -959,7 +1013,7 @@ func TestHTTPClientDoesNotFollowRedirects(t *testing.T) {
 	}))
 	defer server.Close()
 
-	options := defaultOptions()
+	options := defaultDestinationOptions()
 	options.baseURL = server.URL
 	client := httpProjectVariableClient{client: defaultGitLabHTTPClient()}
 	err := client.GetProject(context.Background(), options)
@@ -981,8 +1035,8 @@ func TestHTTPClientLimitsResponseBody(t *testing.T) {
 	}))
 	defer server.Close()
 
-	options := defaultOptions()
-	options.baseURL = server.URL
+	options := defaultVariableOptions()
+	options.destination.baseURL = server.URL
 	client := httpProjectVariableClient{client: defaultGitLabHTTPClient()}
 	_, err := client.GetVariable(context.Background(), options, testResolvedName)
 	if err == nil {
@@ -1094,9 +1148,8 @@ func defaultDestinationConfig() providers.DestinationConfig {
 	return providers.DestinationConfig{
 		Name: testDestinationName,
 		Config: map[string]string{
-			ConfigKeyProjectID:        testProjectID,
-			ConfigKeyToken:            testToken,
-			ConfigKeyEnvironmentScope: testEnvScope,
+			ConfigKeyProjectID: testProjectID,
+			ConfigKeyToken:     testToken,
 		},
 	}
 }
@@ -1113,7 +1166,27 @@ func destinationConfigWith(overrides map[string]string) providers.DestinationCon
 	return cfg
 }
 
-func defaultOptions() gitlabDestinationOptions {
+func associationConfigWith(overrides map[string]string) providers.AssociationConfig {
+	config := map[string]string{ConfigKeyEnvironmentScope: testEnvScope}
+	for key, value := range overrides {
+		config[key] = value
+	}
+	normalized, err := (Provider{}).NormalizeAssociationConfig(
+		context.Background(),
+		defaultDestinationConfig(),
+		providers.AssociationConfig{Config: config},
+	)
+	if err != nil {
+		panic(err)
+	}
+	return normalized
+}
+
+func defaultAssociationConfig() providers.AssociationConfig {
+	return associationConfigWith(nil)
+}
+
+func defaultDestinationOptions() gitlabDestinationOptions {
 	options, err := gitlabDestinationOptionsFromConfig(defaultDestinationConfig())
 	if err != nil {
 		panic(err)
@@ -1121,9 +1194,29 @@ func defaultOptions() gitlabDestinationOptions {
 	return options
 }
 
+func defaultAssociationOptions() gitlabAssociationOptions {
+	return mustGitLabAssociationOptions(defaultAssociationConfig())
+}
+
+func mustGitLabAssociationOptions(cfg providers.AssociationConfig) gitlabAssociationOptions {
+	options, err := gitlabAssociationOptionsFromConfig(cfg)
+	if err != nil {
+		panic(err)
+	}
+	return options
+}
+
+func defaultVariableOptions() gitlabVariableOptions {
+	return gitlabVariableOptions{
+		destination: defaultDestinationOptions(),
+		association: defaultAssociationOptions(),
+	}
+}
+
 func defaultPlanRequest(payloadSHA256 string, version int) providers.PlanRequest {
 	return providers.PlanRequest{
 		Runtime:       defaultRuntimeIdentity(),
+		Association:   defaultAssociationConfig(),
 		ResolvedName:  testResolvedName,
 		Format:        payload.FormatRaw,
 		PayloadSHA256: payloadSHA256,
@@ -1138,6 +1231,7 @@ func defaultPlanRequest(payloadSHA256 string, version int) providers.PlanRequest
 func defaultUpsertRequest(payloadSHA256 string, value []byte, version int) providers.UpsertRequest {
 	return providers.UpsertRequest{
 		Runtime:       defaultRuntimeIdentity(),
+		Association:   defaultAssociationConfig(),
 		ResolvedName:  testResolvedName,
 		Format:        payload.FormatRaw,
 		Payload:       value,
@@ -1152,6 +1246,7 @@ func defaultUpsertRequest(payloadSHA256 string, value []byte, version int) provi
 func defaultDeleteRequest(version int) providers.DeleteRequest {
 	return providers.DeleteRequest{
 		Runtime:       defaultRuntimeIdentity(),
+		Association:   defaultAssociationConfig(),
 		ResolvedName:  testResolvedName,
 		SourcePath:    testSourcePath,
 		SourceVersion: version,
@@ -1163,6 +1258,7 @@ func defaultDeleteRequest(version int) providers.DeleteRequest {
 func defaultReadStateRequest(payloadSHA256 string, version int) providers.ReadStateRequest {
 	return providers.ReadStateRequest{
 		Runtime:       defaultRuntimeIdentity(),
+		Association:   defaultAssociationConfig(),
 		ResolvedName:  testResolvedName,
 		PayloadSHA256: payloadSHA256,
 		SourcePath:    testSourcePath,
@@ -1260,13 +1356,13 @@ func (c *memoryProjectVariableClient) GetProject(context.Context, gitlabDestinat
 
 func (c *memoryProjectVariableClient) GetVariable(
 	_ context.Context,
-	options gitlabDestinationOptions,
+	options gitlabVariableOptions,
 	key string,
 ) (*gitlabVariable, error) {
 	if err := c.errors["get"]; err != nil {
 		return nil, err
 	}
-	variable, ok := c.variables[variableStorageKey(key, options.environmentScope)]
+	variable, ok := c.variables[variableStorageKey(key, options.association.environmentScope)]
 	if !ok {
 		return nil, gitlabHTTPError{statusCode: http.StatusNotFound}
 	}
@@ -1276,13 +1372,13 @@ func (c *memoryProjectVariableClient) GetVariable(
 
 func (c *memoryProjectVariableClient) CreateVariable(
 	_ context.Context,
-	options gitlabDestinationOptions,
+	options gitlabVariableOptions,
 	input gitlabVariableInput,
 ) (*gitlabVariable, error) {
 	if err := c.errors["create"]; err != nil {
 		return nil, err
 	}
-	key := variableStorageKey(input.Key, options.environmentScope)
+	key := variableStorageKey(input.Key, options.association.environmentScope)
 	if _, exists := c.variables[key]; exists {
 		return nil, gitlabHTTPError{statusCode: http.StatusConflict}
 	}
@@ -1295,14 +1391,14 @@ func (c *memoryProjectVariableClient) CreateVariable(
 
 func (c *memoryProjectVariableClient) UpdateVariable(
 	_ context.Context,
-	options gitlabDestinationOptions,
+	options gitlabVariableOptions,
 	key string,
 	input gitlabVariableInput,
 ) (*gitlabVariable, error) {
 	if err := c.errors["update"]; err != nil {
 		return nil, err
 	}
-	storageKey := variableStorageKey(key, options.environmentScope)
+	storageKey := variableStorageKey(key, options.association.environmentScope)
 	if _, exists := c.variables[storageKey]; !exists {
 		return nil, gitlabHTTPError{statusCode: http.StatusNotFound}
 	}
@@ -1316,13 +1412,13 @@ func (c *memoryProjectVariableClient) UpdateVariable(
 
 func (c *memoryProjectVariableClient) DeleteVariable(
 	_ context.Context,
-	options gitlabDestinationOptions,
+	options gitlabVariableOptions,
 	key string,
 ) error {
 	if err := c.errors["delete"]; err != nil {
 		return err
 	}
-	storageKey := variableStorageKey(key, options.environmentScope)
+	storageKey := variableStorageKey(key, options.association.environmentScope)
 	if _, exists := c.variables[storageKey]; !exists {
 		return gitlabHTTPError{statusCode: http.StatusNotFound}
 	}
@@ -1369,7 +1465,10 @@ func assertProviderErrorClass(t *testing.T, err error, expected providers.ErrorC
 }
 
 func TestVariableFormOmitsSecretFromDescription(t *testing.T) {
-	input := variableInputFromUpsert(defaultOptions(), defaultUpsertRequest(testPayloadSHAOld, []byte("secret-canary"), 1))
+	input := variableInputFromUpsert(
+		defaultAssociationOptions(),
+		defaultUpsertRequest(testPayloadSHAOld, []byte("secret-canary"), 1),
+	)
 	form := input.form()
 	if strings.Contains(form.Get("description"), "secret-canary") {
 		t.Fatalf("description contains secret value: %s", form.Get("description"))
@@ -1394,7 +1493,10 @@ func TestVariableFormOmitsSecretFromDescription(t *testing.T) {
 }
 
 func TestVariableMetadataDescriptionIsHumanReadable(t *testing.T) {
-	input := variableInputFromUpsert(defaultOptions(), defaultUpsertRequest(testPayloadSHAOld, []byte("secret"), 1))
+	input := variableInputFromUpsert(
+		defaultAssociationOptions(),
+		defaultUpsertRequest(testPayloadSHAOld, []byte("secret"), 1),
+	)
 	description := input.Description
 	if !strings.HasPrefix(description, metadataDescriptionPrefix) {
 		t.Fatalf("description = %q, want human-readable prefix %q", description, metadataDescriptionPrefix)
@@ -1419,7 +1521,7 @@ func TestVariableMetadataDescriptionEscapesReadableFields(t *testing.T) {
 	request := defaultUpsertRequest(testPayloadSHAOld, []byte("secret"), 1)
 	request.SourcePath = `team/a;b\c`
 
-	input := variableInputFromUpsert(defaultOptions(), request)
+	input := variableInputFromUpsert(defaultAssociationOptions(), request)
 	if !strings.Contains(input.Description, `OpenBao sync: team/a\;b\\c APP_PASSWORD v1`) {
 		t.Fatalf("description = %q, want escaped source path", input.Description)
 	}
@@ -1465,7 +1567,10 @@ func TestVariableMetadataDescriptionKeepsRealisticRuntimeIdentityReadable(t *tes
 }
 
 func TestVariableFormSendsMaskedAndHiddenOnlyOnCreate(t *testing.T) {
-	input := variableInputFromUpsert(defaultOptions(), defaultUpsertRequest(testPayloadSHAOld, []byte("token_123"), 1))
+	input := variableInputFromUpsert(
+		defaultAssociationOptions(),
+		defaultUpsertRequest(testPayloadSHAOld, []byte("token_123"), 1),
+	)
 	input.Masked = true
 	input.Hidden = true
 
@@ -1513,7 +1618,7 @@ func TestVariableMetadataDescriptionFitsGitLabLimit(t *testing.T) {
 	request.ResolvedName = request.ObjectID
 	request.SourcePath = strings.Repeat("path/", 50)
 
-	input := variableInputFromUpsert(defaultOptions(), request)
+	input := variableInputFromUpsert(defaultAssociationOptions(), request)
 	if len(input.Description) > variableDescriptionMaxBytes {
 		t.Fatalf(
 			"description length = %d, want <= %d: %s",
@@ -1546,7 +1651,7 @@ func TestVariableMetadataDescriptionFitsGitLabLimitWithRuntimeIdentity(t *testin
 	request.Runtime.PluginInstanceID = "inst-" + strings.Repeat("b", 32)
 	request.Runtime.RestoreEpoch = "epoch-" + strings.Repeat("c", 32)
 
-	input := variableInputFromUpsert(defaultOptions(), request)
+	input := variableInputFromUpsert(defaultAssociationOptions(), request)
 	if len(input.Description) > variableDescriptionMaxBytes {
 		t.Fatalf(
 			"description length = %d, want <= %d: %s",

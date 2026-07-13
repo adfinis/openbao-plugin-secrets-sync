@@ -159,7 +159,9 @@ ID-addressed routes:
 | `associations/<path>/<association-id>/sync` | Manually enqueue sync work for one association. |
 
 Associations link a source path to one destination and define the remote name,
-granularity, payload format, data mapping, delete mode, and enabled state.
+granularity, payload format, data mapping, provider-specific object settings,
+delete mode, and enabled state. Effective provider settings are returned as
+`provider_config`.
 Association creation and updates validate provider capabilities before they are
 accepted.
 Association create, update, plan, and primary lifecycle requests use
@@ -170,10 +172,16 @@ fields in place. Changes to `granularity` or the remote-name reservation
 (`resolved_name` for `secret-path`; rendered name pattern and current concrete
 rendered names for `secret-key`) require deleting the existing association
 first, then creating the new association explicitly.
-Updating an already-enabled association does not enqueue sync work. The response
-returns `sync_operation_ids=[]` with a `hint` and `next_actions` pointing to
-`associations/<path>/sync` when an operator wants to push or retry the current
-source version.
+Provider identity fields select distinct associations. For GitLab,
+`environment_scope` is part of identity, so the same resolved variable key may
+be reserved independently in multiple scopes. When more than one association
+uses the same destination, include its provider identity fields to select a
+write or plan; destination-addressed lifecycle operations remain ambiguous and
+the ID-addressed routes must be used.
+Changing enabled desired-state fields such as format, data mapping, or mutable
+provider config automatically enqueues the current source version. Updates that
+only change operational policy such as `delete_mode` return
+`sync_operation_ids=[]` with a manual-sync hint.
 Association activation and source writes reject secret-key configurations whose
 rendered names would overlap another association for the same destination.
 Read `info` to discover static association defaults and provider capability

@@ -487,7 +487,7 @@ paths:
       tags: [associations]
       operationId: writeAssociation
       summary: Create or update a source-to-destination association.
-      description: On update, omitted optional fields inherit stored values when the source path and destination identify exactly one existing association. Enabling an existing disabled association queues the current source version.
+      description: On update, omitted optional fields inherit stored values when the source path, destination, and any supplied provider identity fields identify exactly one existing association. A provider identity with no match creates a distinct association. Enabling an existing disabled association or changing enabled desired-state fields queues the current source version.
       x-openbao-operation: update
       parameters:
         - $ref: "#/components/parameters/SourcePath"
@@ -1137,25 +1137,6 @@ components:
           default: https://gitlab.com
         project_id:
           type: string
-        environment_scope:
-          type: string
-          default: "*"
-        protected:
-          type: boolean
-          default: false
-        masked:
-          type: boolean
-          default: false
-        hidden:
-          type: boolean
-          default: false
-        variable_raw:
-          type: boolean
-          default: true
-        variable_type:
-          type: string
-          enum: [env_var, file]
-          default: env_var
         allow_insecure_http:
           type: boolean
           default: false
@@ -1568,7 +1549,7 @@ components:
 
     AssociationWriteRequest:
       type: object
-      description: Create defaults apply to new associations. Updates inherit omitted optional fields from the matching stored association when path and destination are unambiguous. Updating an existing association cannot change granularity or the remote-name reservation; create the new association explicitly and delete the old one. Setting enabled=true on an existing disabled association queues the current source version.
+      description: Create defaults apply to new associations. Updates inherit omitted optional fields from the matching stored association when path, destination, and provider identity are unambiguous. Updating an existing association cannot change granularity or the remote-name reservation. Provider identity fields such as GitLab environment_scope select distinct associations; a value with no match creates one. Enabling an existing disabled association or changing enabled desired-state fields queues the current source version.
       properties:
         destination:
           type: string
@@ -1605,6 +1586,31 @@ components:
         enabled:
           type: boolean
           default: true
+        environment_scope:
+          type: string
+          default: "*"
+          description: GitLab variable environment scope. This participates in association and remote object identity.
+        protected:
+          type: boolean
+          default: false
+          description: Whether GitLab variables produced by this association are protected.
+        masked:
+          type: boolean
+          default: false
+          description: Whether GitLab variables produced by this association are masked.
+        hidden:
+          type: boolean
+          default: false
+          description: Whether GitLab variables produced by this association are masked and hidden.
+        variable_raw:
+          type: boolean
+          default: true
+          description: Whether GitLab variable reference expansion is disabled.
+        variable_type:
+          type: string
+          enum: [env_var, file]
+          default: env_var
+          description: GitLab variable type.
       required: [destination]
       additionalProperties: false
 
@@ -1639,6 +1645,10 @@ components:
               type: string
             data_key_template:
               type: string
+            provider_config:
+              type: object
+              additionalProperties:
+                type: string
             delete_mode:
               type: string
             enabled:
@@ -1703,6 +1713,10 @@ components:
           type: string
         data_key_template:
           type: string
+        provider_config:
+          type: object
+          additionalProperties:
+            type: string
         delete_mode:
           type: string
         enabled:

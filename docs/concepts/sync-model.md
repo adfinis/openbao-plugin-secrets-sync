@@ -19,7 +19,9 @@ Sensitive destination fields are seal-wrapped and redacted on reads.
 
 Associations connect one source path to one destination. They define the remote
 object shape: destination reference, remote name template, granularity, payload
-format, data mapping, delete behavior, and enabled state.
+format, data mapping, provider-specific object settings, delete behavior, and
+enabled state. Connection and credential settings remain destination-owned;
+settings that may differ per remote object are association-owned.
 
 ## Secret shapes
 
@@ -52,6 +54,12 @@ association IDs for common lifecycle work.
 Association IDs still exist. They are stable identifiers in responses and are
 used for exact association read/delete routes and rare ambiguity cases. Treat
 ID-addressed lifecycle routes as an escape hatch, not the normal workflow.
+
+Some providers add an identity component. GitLab `environment_scope`, for
+example, allows one destination and resolved variable key to have separate
+associations per scope. Include provider identity fields when selecting among
+multiple associations for the same destination, and use the association ID for
+lifecycle operations when destination selection is ambiguous.
 
 ## Naming Templates
 

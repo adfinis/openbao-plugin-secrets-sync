@@ -1004,6 +1004,14 @@ func (contextCanceledProvider) ValidateConfig(context.Context, providers.Destina
 	return nil
 }
 
+func (contextCanceledProvider) NormalizeAssociationConfig(
+	context.Context,
+	providers.DestinationConfig,
+	providers.AssociationConfig,
+) (providers.AssociationConfig, error) {
+	return providers.AssociationConfig{Config: map[string]string{}}, nil
+}
+
 func (p contextCanceledProvider) OpenDestination(
 	context.Context,
 	providers.DestinationConfig,

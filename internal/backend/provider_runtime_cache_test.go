@@ -114,6 +114,14 @@ func (*countingProvider) ValidateConfig(context.Context, providers.DestinationCo
 	return nil
 }
 
+func (*countingProvider) NormalizeAssociationConfig(
+	context.Context,
+	providers.DestinationConfig,
+	providers.AssociationConfig,
+) (providers.AssociationConfig, error) {
+	return providers.AssociationConfig{Config: map[string]string{}}, nil
+}
+
 func (p *countingProvider) OpenDestination(
 	context.Context,
 	providers.DestinationConfig,

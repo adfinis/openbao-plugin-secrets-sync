@@ -72,6 +72,14 @@ func (testProvider) ValidateConfig(context.Context, DestinationConfig) error {
 	return nil
 }
 
+func (testProvider) NormalizeAssociationConfig(
+	context.Context,
+	DestinationConfig,
+	AssociationConfig,
+) (AssociationConfig, error) {
+	return AssociationConfig{Config: map[string]string{}}, nil
+}
+
 func (testProvider) OpenDestination(context.Context, DestinationConfig) (DestinationRuntime, error) {
 	return testDestinationRuntime{}, nil
 }

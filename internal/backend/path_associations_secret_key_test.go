@@ -132,9 +132,8 @@ func TestAssociationGitLabSecretKeyRawFormat(t *testing.T) {
 		"APP_PASSWORD": "initial",
 	})
 	writeResp := env.update("destinations/gitlab/prod", map[string]interface{}{
-		gitlab.ConfigKeyProjectID:        "platform/app",
-		gitlab.ConfigKeyEnvironmentScope: "production",
-		gitlab.ConfigKeyToken:            "glpat-secret",
+		gitlab.ConfigKeyProjectID: "platform/app",
+		gitlab.ConfigKeyToken:     "glpat-secret",
 	})
 	if writeResp != nil && writeResp.IsError() {
 		t.Fatalf("unexpected gitlab destination write error: %v", writeResp.Error())
@@ -142,11 +141,12 @@ func TestAssociationGitLabSecretKeyRawFormat(t *testing.T) {
 	env.enableAppDBSourceSync()
 
 	resp := env.update("associations/app/db", map[string]interface{}{
-		"destination":   destinationRef(gitlab.ProviderType, "prod"),
-		"name_template": "{{ key }}",
-		"granularity":   syncGranularitySecretKey,
-		"format":        rawAssociationFormat,
-		"delete_mode":   deleteModeRetain,
+		"destination":                    destinationRef(gitlab.ProviderType, "prod"),
+		"name_template":                  "{{ key }}",
+		"granularity":                    syncGranularitySecretKey,
+		"format":                         rawAssociationFormat,
+		"delete_mode":                    deleteModeRetain,
+		gitlab.ConfigKeyEnvironmentScope: "production",
 	})
 	assertNoErrorResponse(t, resp)
 	operationIDs := operationIDsFromResponse(t, resp)

@@ -109,7 +109,7 @@ func TestAssociationCreateQueueCapacityFailureDoesNotPersistAssociation(t *testi
 		t.Fatalf("association create response = %#v, want queue capacity error", resp)
 	}
 	assertHintContains(t, resp.Data, "Queue capacity is exhausted")
-	assertAssociationCount(t, env.storage, "app/db", 0)
+	assertAppDBAssociationCount(t, env.storage, 0)
 	assertQueueCount(t, env.b, env.storage, "pending", 0)
 }
 
@@ -335,7 +335,7 @@ func TestAssociationUpdateRejectsGranularityIdentityChange(t *testing.T) {
 	if explicitAssociationID == associationID {
 		t.Fatalf("explicit create association ID = %s, want a distinct ID", explicitAssociationID)
 	}
-	assertAssociationCount(t, env.storage, "app/db", 2)
+	assertAppDBAssociationCount(t, env.storage, 2)
 }
 
 func TestAssociationUpdateRejectsReservationIdentityChange(t *testing.T) {
@@ -438,7 +438,7 @@ func assertStoredAssociationIdentity(
 	reservationName string,
 ) {
 	t.Helper()
-	assertAssociationCount(t, storage, "app/db", 1)
+	assertAppDBAssociationCount(t, storage, 1)
 	record, err := getAssociation(context.Background(), storage, "app/db", associationID)
 	if err != nil {
 		t.Fatalf("read association: %v", err)
@@ -454,9 +454,9 @@ func assertStoredAssociationIdentity(
 	}
 }
 
-func assertAssociationCount(t *testing.T, storage logical.Storage, path string, want int) {
+func assertAppDBAssociationCount(t *testing.T, storage logical.Storage, want int) {
 	t.Helper()
-	records, err := listAssociationsForPath(context.Background(), storage, path)
+	records, err := listAssociationsForPath(context.Background(), storage, "app/db")
 	if err != nil {
 		t.Fatalf("list associations: %v", err)
 	}

@@ -185,6 +185,14 @@ func (*providerMutationTestProvider) ValidateConfig(context.Context, providers.D
 	return nil
 }
 
+func (*providerMutationTestProvider) NormalizeAssociationConfig(
+	context.Context,
+	providers.DestinationConfig,
+	providers.AssociationConfig,
+) (providers.AssociationConfig, error) {
+	return providers.AssociationConfig{Config: map[string]string{}}, nil
+}
+
 func (p *providerMutationTestProvider) OpenDestination(
 	ctx context.Context,
 	_ providers.DestinationConfig,

@@ -579,6 +579,7 @@ func (b *secretSyncBackend) providerUpsert(
 	}
 	return runtime.Upsert(mutationCtx, providers.UpsertRequest{
 		Runtime:        runtimeIdentity,
+		Association:    providerAssociationConfig(*ctxData.association),
 		ResolvedName:   resolvedName,
 		Format:         preparedPayload.Format,
 		Payload:        preparedPayload.Bytes,
@@ -609,6 +610,7 @@ func (b *secretSyncBackend) providerDelete(
 	}
 	return runtime.Delete(mutationCtx, providers.DeleteRequest{
 		Runtime:        runtimeIdentity,
+		Association:    providerAssociationConfig(*ctxData.association),
 		ResolvedName:   resolvedName,
 		IdempotencyKey: record.IdempotencyKey,
 		DataMap:        normalizedDataMapping(ctxData.association.DataMapping) == dataMappingSourceKeys,

@@ -129,6 +129,8 @@ func TestStorageRecordJSONTags(t *testing.T) {
 				"Format:format",
 				"DataMapping:data_mapping,omitempty",
 				"DataKeyTemplate:data_key_template,omitempty",
+				"ProviderConfig:provider_config,omitempty",
+				"ProviderIdentity:provider_identity,omitempty",
 				"DeleteMode:delete_mode",
 				"Enabled:enabled",
 				"CreatedTime:created_time",

@@ -21,14 +21,16 @@ bao write secret-sync/associations/app/ci/plan \
   name_template='APP_{{ key }}' \
   granularity=secret-key \
   format=raw \
-  delete_mode=delete
+  delete_mode=delete \
+  environment_scope=production
 
 bao write secret-sync/associations/app/ci \
   destination=gitlab/prod \
   name_template='APP_{{ key }}' \
   granularity=secret-key \
   format=raw \
-  delete_mode=delete
+  delete_mode=delete \
+  environment_scope=production
 ```
 
 Source keys used with `secret-key` granularity must be non-empty, have no
@@ -55,7 +57,8 @@ bao write secret-sync/associations/app/ci-json \
   name_template='APP_JSON_{{ key }}' \
   granularity=secret-key \
   format=json \
-  delete_mode=delete
+  delete_mode=delete \
+  environment_scope=production
 ```
 
 Use `secret-path` only when one GitLab variable needs to contain the full
@@ -71,7 +74,8 @@ bao write secret-sync/associations/app/ci-config \
   resolved_name=APP_CONFIG \
   granularity=secret-path \
   format=json \
-  delete_mode=delete
+  delete_mode=delete \
+  environment_scope=production
 ```
 
 Do not combine masked variables, `variable_raw=false`, and JSON payloads; use

@@ -128,6 +128,14 @@ func (*configFlippingProvider) ValidateConfig(context.Context, providers.Destina
 	return nil
 }
 
+func (*configFlippingProvider) NormalizeAssociationConfig(
+	context.Context,
+	providers.DestinationConfig,
+	providers.AssociationConfig,
+) (providers.AssociationConfig, error) {
+	return providers.AssociationConfig{Config: map[string]string{}}, nil
+}
+
 func (p *configFlippingProvider) OpenDestination(
 	context.Context,
 	providers.DestinationConfig,
