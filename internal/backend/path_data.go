@@ -229,6 +229,9 @@ func (b *secretSyncBackend) commitDataWritePlan(
 	if err := putSourceVersionRecord(ctx, storage, path, plan.nextVersion, payload, plan.now); err != nil {
 		return nil, err
 	}
+	if err := commitSourceMetadata(ctx, storage, path, plan.metadata, plan.nextVersion, plan.now); err != nil {
+		return nil, err
+	}
 	if err := cancelQueuedOutboxIDs(ctx, storage, staleUpsertIDs); err != nil {
 		return nil, err
 	}
@@ -236,9 +239,6 @@ func (b *secretSyncBackend) commitDataWritePlan(
 		return nil, err
 	}
 	if err := completeEnqueueIntent(ctx, storage, path, plan.nextVersion, plan.operations, plan.now); err != nil {
-		return nil, err
-	}
-	if err := commitSourceMetadata(ctx, storage, path, plan.metadata, plan.nextVersion, plan.now); err != nil {
 		return nil, err
 	}
 	if len(plan.operations) > 0 {
@@ -432,6 +432,9 @@ func (b *secretSyncBackend) pathDataDelete(
 	if err := softDeleteVersion(ctx, req.Storage, metadata, path, metadata.CurrentVersion, now); err != nil {
 		return logical.ErrorResponse(err.Error()), nil
 	}
+	if err := putMetadata(ctx, req.Storage, path, *metadata); err != nil {
+		return nil, err
+	}
 	if err := cancelQueuedOutboxIDs(ctx, req.Storage, deletePlan.staleUpsertIDs); err != nil {
 		return nil, err
 	}
@@ -446,9 +449,6 @@ func (b *secretSyncBackend) pathDataDelete(
 		deletePlan.operations,
 		now,
 	); err != nil {
-		return nil, err
-	}
-	if err := putMetadata(ctx, req.Storage, path, *metadata); err != nil {
 		return nil, err
 	}
 	if len(deletePlan.operations) > 0 {
