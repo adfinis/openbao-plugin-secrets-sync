@@ -12,6 +12,7 @@ import (
 	"github.com/adfinis/openbao-plugin-secrets-sync/internal/outbox"
 	payloadpkg "github.com/adfinis/openbao-plugin-secrets-sync/internal/payload"
 	"github.com/adfinis/openbao-plugin-secrets-sync/internal/providers"
+	"github.com/adfinis/openbao-plugin-secrets-sync/internal/providers/awssecretsmanager"
 	"github.com/adfinis/openbao-plugin-secrets-sync/internal/providers/gitlab"
 	"github.com/openbao/openbao/sdk/v2/framework"
 	"github.com/openbao/openbao/sdk/v2/logical"
@@ -25,6 +26,7 @@ var (
 )
 
 var associationProviderConfigFieldKeys = []string{
+	awssecretsmanager.ConfigKeyDeleteRecoveryWindowDays,
 	gitlab.ConfigKeyEnvironmentScope,
 	gitlab.ConfigKeyProtected,
 	gitlab.ConfigKeyMasked,
@@ -34,6 +36,9 @@ var associationProviderConfigFieldKeys = []string{
 }
 
 var associationProviderConfigFieldKeysByType = map[string][]string{
+	awssecretsmanager.ProviderType: {
+		awssecretsmanager.ConfigKeyDeleteRecoveryWindowDays,
+	},
 	gitlab.ProviderType: {
 		gitlab.ConfigKeyEnvironmentScope,
 		gitlab.ConfigKeyProtected,
@@ -251,6 +256,11 @@ func associationRequestFields() map[string]*framework.FieldSchema {
 		"delete_mode": {
 			Type:        framework.TypeString,
 			Description: "Remote delete behavior for this association: retain, delete, or orphan.",
+		},
+		awssecretsmanager.ConfigKeyDeleteRecoveryWindowDays: {
+			Type: framework.TypeInt,
+			Description: "AWS Secrets Manager scheduled-delete recovery window in days for this association. " +
+				"Defaults to 7; AWS accepts 7 through 30.",
 		},
 		"enabled": {
 			Type:        framework.TypeBool,
@@ -600,7 +610,32 @@ func associationDesiredStateChanged(existing associationRecord, updated associat
 	return existing.Format != updated.Format ||
 		existing.DataMapping != updated.DataMapping ||
 		existing.DataKeyTemplate != updated.DataKeyTemplate ||
-		!stringMapsEqual(existing.ProviderConfig, updated.ProviderConfig)
+		associationProviderDesiredStateChanged(existing, updated)
+}
+
+func associationProviderDesiredStateChanged(existing associationRecord, updated associationRecord) bool {
+	ignoredKey := ""
+	if existing.DestinationType == awssecretsmanager.ProviderType &&
+		updated.DestinationType == awssecretsmanager.ProviderType {
+		ignoredKey = awssecretsmanager.ConfigKeyDeleteRecoveryWindowDays
+	}
+	for key, existingValue := range existing.ProviderConfig {
+		if key == ignoredKey {
+			continue
+		}
+		if updated.ProviderConfig[key] != existingValue {
+			return true
+		}
+	}
+	for key := range updated.ProviderConfig {
+		if key == ignoredKey {
+			continue
+		}
+		if _, ok := existing.ProviderConfig[key]; !ok {
+			return true
+		}
+	}
+	return false
 }
 
 func stringMapsEqual(left map[string]string, right map[string]string) bool {

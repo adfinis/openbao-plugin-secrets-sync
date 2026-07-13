@@ -180,7 +180,8 @@ write or plan; destination-addressed lifecycle operations remain ambiguous and
 the ID-addressed routes must be used.
 Changing enabled desired-state fields such as format, data mapping, or mutable
 provider config automatically enqueues the current source version. Updates that
-only change operational policy such as `delete_mode` return
+only change operational policy such as `delete_mode` or AWS
+`delete_recovery_window_days` return
 `sync_operation_ids=[]` with a manual-sync hint.
 Association activation and source writes reject secret-key configurations whose
 rendered names would overlap another association for the same destination.

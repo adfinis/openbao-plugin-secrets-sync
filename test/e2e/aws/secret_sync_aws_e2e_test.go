@@ -260,11 +260,12 @@ func newE2EWebIdentityProvider(t *testing.T, cfg aws.Config) *stscreds.WebIdenti
 
 func associationRequest(remoteName string) map[string]interface{} {
 	return map[string]interface{}{
-		"destination":   "aws-sm/prod",
-		"resolved_name": remoteName,
-		"granularity":   "secret-path",
-		"format":        "json",
-		"delete_mode":   "delete",
+		"destination":                 "aws-sm/prod",
+		"resolved_name":               remoteName,
+		"granularity":                 "secret-path",
+		"format":                      "json",
+		"delete_mode":                 "delete",
+		"delete_recovery_window_days": 7,
 	}
 }
 

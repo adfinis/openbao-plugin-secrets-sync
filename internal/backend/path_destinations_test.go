@@ -333,15 +333,14 @@ func TestAWSDestinationConfigLifecycle(t *testing.T) {
 	env := newBackendTestEnv(t)
 
 	writeResp := env.update("destinations/aws-sm/prod", map[string]interface{}{
-		"description":                                       "aws production",
-		awssecretsmanager.ConfigKeyRegion:                   "eu-central-1",
-		awssecretsmanager.ConfigKeyEndpointURL:              "http://localhost:4566",
-		awssecretsmanager.ConfigKeyEndpointPolicy:           awssecretsmanager.EndpointPolicyLocal,
-		awssecretsmanager.ConfigKeyAuthMode:                 awssecretsmanager.AuthModeAssumeRole,
-		awssecretsmanager.ConfigKeyRoleARN:                  "arn:aws:iam::123456789012:role/openbao-plugin-secrets-sync",
-		awssecretsmanager.ConfigKeyExternalID:               "tenant-1",
-		awssecretsmanager.ConfigKeySessionName:              "openbao-sync",
-		awssecretsmanager.ConfigKeyDeleteRecoveryWindowDays: 14,
+		"description":                             "aws production",
+		awssecretsmanager.ConfigKeyRegion:         "eu-central-1",
+		awssecretsmanager.ConfigKeyEndpointURL:    "http://localhost:4566",
+		awssecretsmanager.ConfigKeyEndpointPolicy: awssecretsmanager.EndpointPolicyLocal,
+		awssecretsmanager.ConfigKeyAuthMode:       awssecretsmanager.AuthModeAssumeRole,
+		awssecretsmanager.ConfigKeyRoleARN:        "arn:aws:iam::123456789012:role/openbao-plugin-secrets-sync",
+		awssecretsmanager.ConfigKeyExternalID:     "tenant-1",
+		awssecretsmanager.ConfigKeySessionName:    "openbao-sync",
 	})
 	if writeResp != nil && writeResp.IsError() {
 		t.Fatalf("unexpected destination write error: %v", writeResp.Error())

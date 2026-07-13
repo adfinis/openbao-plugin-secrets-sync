@@ -9,8 +9,7 @@ keeps destination behavior easier to inspect:
 ```sh
 bao write secret-sync/destinations/aws-sm/prod \
   region=eu-central-1 \
-  auth_mode=default \
-  delete_recovery_window_days=7
+  auth_mode=default
 ```
 
 Use `auth_mode=assume_role` when the plugin must assume a destination role:
@@ -83,7 +82,8 @@ client:
   names must resolve only to loopback or private addresses.
 - Use `endpoint_policy=private` only for approved HTTPS private endpoints.
   Private endpoints must not target local development hosts and must not
-  resolve to loopback, link-local, multicast, or unspecified addresses.
+  resolve to public or special-use addresses. Literal addresses and every DNS
+  answer must be an RFC 1918 IPv4 or unique-local IPv6 address.
 - Do not put credentials or userinfo in endpoint URLs.
 
 The provider resolves custom endpoint names again for every new connection and

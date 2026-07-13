@@ -142,8 +142,7 @@ bao write secret-sync/destinations/aws-sm/prod \
   role_arn="${E2E_AWS_ROLE_ARN}" \
   external_id="${E2E_AWS_EXTERNAL_ID}" \
   session_name=openbao-plugin-secrets-sync-manual \
-  value_drift_detection=true \
-  delete_recovery_window_days=7
+  value_drift_detection=true
 
 bao write -force secret-sync/destinations/aws-sm/prod/validate
 bao read secret-sync/destinations/aws-sm/prod/health
@@ -158,8 +157,7 @@ bao write secret-sync/destinations/aws-sm/prod \
   role_arn="${E2E_AWS_ROLE_ARN}" \
   web_identity_token_file="${E2E_AWS_WEB_IDENTITY_TOKEN_FILE}" \
   session_name=openbao-plugin-secrets-sync-manual \
-  value_drift_detection=true \
-  delete_recovery_window_days=7
+  value_drift_detection=true
 ```
 
 Create a source secret. Fresh mounts default `security_posture=standard`, so
@@ -181,14 +179,16 @@ bao write secret-sync/associations/app/db/plan \
   resolved_name="${E2E_AWS_REMOTE_NAME}" \
   granularity=secret-path \
   format=json \
-  delete_mode=delete
+  delete_mode=delete \
+  delete_recovery_window_days=7
 
 bao write secret-sync/associations/app/db \
   destination=aws-sm/prod \
   resolved_name="${E2E_AWS_REMOTE_NAME}" \
   granularity=secret-path \
   format=json \
-  delete_mode=delete
+  delete_mode=delete \
+  delete_recovery_window_days=7
 ```
 
 Drain queued work and inspect status:

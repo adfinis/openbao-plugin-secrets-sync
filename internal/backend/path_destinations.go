@@ -30,7 +30,6 @@ var destinationConfigFieldKeys = []string{
 	awssecretsmanager.ConfigKeyRoleARN,
 	awssecretsmanager.ConfigKeySessionName,
 	awssecretsmanager.ConfigKeyWebIdentityTokenFile,
-	awssecretsmanager.ConfigKeyDeleteRecoveryWindowDays,
 	awssecretsmanager.ConfigKeyValueDriftDetection,
 	gitlab.ConfigKeyBaseURL,
 	gitlab.ConfigKeyProjectID,
@@ -54,7 +53,6 @@ var destinationConfigFieldKeysByType = map[string][]string{
 		awssecretsmanager.ConfigKeyRoleARN,
 		awssecretsmanager.ConfigKeySessionName,
 		awssecretsmanager.ConfigKeyWebIdentityTokenFile,
-		awssecretsmanager.ConfigKeyDeleteRecoveryWindowDays,
 		awssecretsmanager.ConfigKeyValueDriftDetection,
 	},
 	gitlab.ProviderType: {
@@ -235,11 +233,6 @@ func destinationRequestFields() map[string]*framework.FieldSchema {
 		Type: framework.TypeString,
 		Description: "Absolute token file path for aws-sm web_identity destinations. " +
 			"The file must be readable by the OpenBao plugin process.",
-	}
-	fields[awssecretsmanager.ConfigKeyDeleteRecoveryWindowDays] = &framework.FieldSchema{
-		Type: framework.TypeInt,
-		Description: "AWS Secrets Manager scheduled-delete recovery window in days for aws-sm destinations. " +
-			"Defaults to 7; AWS accepts 7 through 30.",
 	}
 	fields[awssecretsmanager.ConfigKeyValueDriftDetection] = &framework.FieldSchema{
 		Type: framework.TypeBool,

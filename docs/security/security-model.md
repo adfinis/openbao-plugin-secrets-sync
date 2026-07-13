@@ -169,12 +169,11 @@ validated:
 - `endpoint_url` requires an `endpoint_policy`;
 - `endpoint_policy=local` is for development endpoints such as LocalStack and
   may use `http` only for local hosts;
-- `endpoint_policy=private` requires `https` and rejects direct loopback,
-  link-local, multicast, and unspecified addresses;
+- `endpoint_policy=private` requires `https` and permits only RFC 1918 IPv4 or
+  unique-local IPv6 addresses;
 - default AWS endpoints remain preferred for production;
-- AWS private custom endpoints are rechecked at client creation time and DNS
-  answers resolving to loopback, link-local, multicast, or unspecified
-  addresses are rejected;
+- AWS private custom endpoints are rechecked at client creation time and every
+  DNS answer must remain private;
 - GitLab `base_url` rejects localhost, private, link-local, multicast, and
   unspecified hosts by default, and rechecks DNS answers at client creation
   time unless `allow_private_network=true` is set;

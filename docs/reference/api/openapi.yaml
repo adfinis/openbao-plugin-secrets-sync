@@ -1099,12 +1099,6 @@ components:
         web_identity_token_file:
           type: string
           description: Absolute token file path for AWS web-identity auth. The token contents are not stored by the backend.
-        delete_recovery_window_days:
-          type: integer
-          minimum: 7
-          maximum: 30
-          default: 7
-          description: AWS Secrets Manager scheduled-delete recovery window in days.
         value_drift_detection:
           type: boolean
           default: false
@@ -1583,6 +1577,12 @@ components:
           type: string
           enum: [retain, delete, orphan]
           default: retain
+        delete_recovery_window_days:
+          type: integer
+          minimum: 7
+          maximum: 30
+          default: 7
+          description: AWS Secrets Manager scheduled-delete recovery window in days for this association. This is operational delete policy and changing it does not enqueue a sync.
         enabled:
           type: boolean
           default: true
