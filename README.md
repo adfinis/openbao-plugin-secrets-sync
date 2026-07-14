@@ -14,6 +14,10 @@ Secrets Manager secrets, Kubernetes Secrets, or GitLab project variables.
 This repository is in preview and is not production-ready. Use it for local
 evaluation, design feedback, provider development, and controlled testing.
 
+The preview release is qualified against OpenBao `2.5.5`. Other OpenBao
+versions are not yet qualified. This is a release qualification baseline, not
+a promise of compatibility with every `2.5.x` release.
+
 Before a stable release, APIs, response fields, storage records, provider
 behavior, defaults, and operational guidance can change. Do not rely on preview
 builds as a compatibility or migration boundary.

@@ -14,7 +14,14 @@ export BAO_ADDR="http://127.0.0.1:${E2E_AWS_OPENBAO_PORT}"
 export BAO_TOKEN="root"
 
 tofu_output() {
-  tofu -chdir="${E2E_AWS_TOFU_DIR}" output -raw "$1" 2>/dev/null || true
+  local value
+
+  value="$(tofu -chdir="${E2E_AWS_TOFU_DIR}" output -raw "$1" 2>/dev/null)" || return 0
+  case "${value}" in
+    "" | *$'\n'* | Warning:* | Error:* | "No outputs found"*) return 0 ;;
+  esac
+
+  printf '%s' "${value}"
 }
 
 if command -v tofu >/dev/null 2>&1; then

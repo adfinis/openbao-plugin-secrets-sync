@@ -169,7 +169,8 @@ repository_dispatch: release-artifacts
 ```
 
 The release-tag workflow emits that dispatch only after it has created or
-refreshed the signed tag and matching draft GitHub Release.
+verified the signed tag and created or refreshed the matching draft GitHub
+Release. Existing signed tags are immutable and are never refreshed.
 
 Manual artifact recovery is available through `workflow_dispatch` with a tag
 input, but the job waits for the protected `release-manual` environment before
@@ -210,6 +211,42 @@ The workflow:
 - uploads the files to the matching GitHub Release without replacing
   conflicting existing assets;
 - refuses to add missing assets to an already published release.
+
+## Publish the draft release
+
+The artifact workflow intentionally leaves the GitHub Release in draft state.
+After the workflow succeeds, a maintainer completes these checks before
+publishing:
+
+1. Verify the signed tag points to the release PR merge commit.
+2. Confirm the release workflow, source gates, LocalStack release-binary smoke
+   test, OCI e2e, image scan, reproducibility check, and upload steps passed.
+3. Compare the draft assets with `provenance-index.json`; confirm both binaries,
+   both SBOMs, the license report, reproducibility report, checksums, signature
+   bundle, and provenance index are present.
+4. Verify `checksums.txt`, its cosign bundle, the public build-provenance
+   attestations, and the OCI image signature and attestation using
+   [Install and verify release artifacts](../operations/install-and-verify.md).
+5. Review the curated and generated release notes, and confirm preview releases
+   are marked as prereleases.
+
+Publish only after the draft is complete. For the first preview:
+
+```sh
+VERSION=0.1.0-preview.1
+REPO=adfinis/openbao-plugin-secrets-sync
+
+gh release view "${VERSION}" --repo "${REPO}" \
+  --json tagName,isDraft,isPrerelease,name,url
+
+gh release edit "${VERSION}" --repo "${REPO}" \
+  --verify-tag --draft=false --prerelease
+```
+
+Published releases are immutable from the release workflow's perspective. If
+an artifact is missing or inconsistent, leave the release as a draft, diagnose
+the failed workflow, and use the protected manual recovery path rather than
+publishing an incomplete release.
 
 ## License metadata
 

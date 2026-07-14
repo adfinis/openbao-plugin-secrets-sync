@@ -1,8 +1,8 @@
 # Reference
 
-
-Use this section when you need stable API, compatibility, and generated
-inspection artifacts.
+Use this section to inspect the current API surface, compatibility position,
+and generated artifacts. During preview, these references detect and explain
+contract changes but do not promise a stable API or migration boundary.
 
 ## Reference documents
 
