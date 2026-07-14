@@ -25,6 +25,27 @@ format, data keys, plugin instance, and restore epoch. Owned update and delete
 operations require matching ownership metadata. If ownership cannot be proven,
 the provider returns an ownership error instead of mutating the Secret.
 
+The exact Kubernetes metadata contract is:
+
+| Carrier | Key | Value |
+| --- | --- | --- |
+| Label | `openbao.org/secrets-sync-managed` | `true` |
+| Annotation | `openbao.org/secrets-sync-association-id` | Association ID |
+| Annotation | `openbao.org/secrets-sync-source-path` | OpenBao source path |
+| Annotation | `openbao.org/secrets-sync-source-version` | OpenBao source version |
+| Annotation | `openbao.org/secrets-sync-object-id` | Association object ID |
+| Annotation | `openbao.org/secrets-sync-payload-sha256` | Canonical payload hash |
+| Annotation | `openbao.org/secrets-sync-format` | Rendered payload format |
+| Annotation | `openbao.org/secrets-sync-data-keys` | Managed keys for `source-keys` data maps |
+| Annotation | `openbao.org/secrets-sync-plugin-instance` | Plugin mount instance ID |
+| Annotation | `openbao.org/secrets-sync-restore-epoch` | Restore epoch |
+
+These labels and annotations are plaintext Kubernetes object metadata. They do
+not contain the source value, but they expose source naming, version, object,
+and runtime identity information to identities that can read the Secret.
+Avoid sensitive information in source and remote names, and scope Kubernetes
+Secret read permissions accordingly.
+
 Plan, upsert no-op detection, and reconcile compute the payload hash from live
 Kubernetes Secret data. Manual data edits are detected even when the ownership
 annotations still contain the previous payload hash, and the next explicit sync

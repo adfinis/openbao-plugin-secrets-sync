@@ -287,21 +287,22 @@ such as provider payload-hash metadata, proves the desired remote state.
 
 ## Ownership metadata
 
-Providers write destination metadata where possible:
+Providers write the following logical destination metadata where possible:
 
 ```text
-openbao-sync=true
-openbao-sync-plugin-instance=<plugin-instance-id>
-openbao-sync-restore-epoch=<restore-epoch>
-openbao-sync-association=<association-id>
-openbao-sync-path=<source-path>
-openbao-sync-version=<source-version>
-openbao-sync-object=<object-id>
-openbao-sync-payload-sha256=<hash>
+managed=<true>
+plugin_instance=<plugin-instance-id>
+restore_epoch=<restore-epoch>
+association_id=<association-id>
+source_path=<source-path>
+source_version=<source-version>
+object_id=<object-id>
+payload_sha256=<hash>
 ```
 
-Provider-specific docs describe reduced ownership proof when the destination
-cannot store all fields.
+The carrier and exact spelling are provider-specific. Provider docs describe
+the remote contract and reduced ownership proof when the destination cannot
+store all fields.
 
 ## Name templates
 

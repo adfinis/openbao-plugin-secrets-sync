@@ -64,18 +64,19 @@ const (
 	dataKeyPayload        = "payload"
 	healthCheckSecretName = "openbao-secret-sync-health-check"
 	defaultRequestTimeout = 30 * time.Second
+	metadataKeyPrefix     = "openbao.org/secrets-sync-"
 
-	labelManaged = "openbao.adfinis.com/managed"
+	labelManaged = metadataKeyPrefix + "managed"
 
-	annotationAssociationID  = "openbao.adfinis.com/association-id"
-	annotationSourcePath     = "openbao.adfinis.com/source-path"
-	annotationSourceVersion  = "openbao.adfinis.com/source-version"
-	annotationObjectID       = "openbao.adfinis.com/object-id"
-	annotationPayloadSHA256  = "openbao.adfinis.com/payload-sha256"
-	annotationFormat         = "openbao.adfinis.com/format"
-	annotationDataKeys       = "openbao.adfinis.com/data-keys"
-	annotationPluginInstance = "openbao.adfinis.com/plugin-instance"
-	annotationRestoreEpoch   = "openbao.adfinis.com/restore-epoch"
+	annotationAssociationID  = metadataKeyPrefix + "association-id"
+	annotationSourcePath     = metadataKeyPrefix + "source-path"
+	annotationSourceVersion  = metadataKeyPrefix + "source-version"
+	annotationObjectID       = metadataKeyPrefix + "object-id"
+	annotationPayloadSHA256  = metadataKeyPrefix + "payload-sha256"
+	annotationFormat         = metadataKeyPrefix + "format"
+	annotationDataKeys       = metadataKeyPrefix + "data-keys"
+	annotationPluginInstance = metadataKeyPrefix + "plugin-instance"
+	annotationRestoreEpoch   = metadataKeyPrefix + "restore-epoch"
 )
 
 var providerHelpers = providerutil.New(ProviderType)

@@ -199,17 +199,18 @@ Use [Ownership and safety](../concepts/ownership-and-safety.md) for the
 operator-facing model behind ownership metadata, drift, collisions, stale
 objects, and restore identity.
 
-Remote ownership metadata includes the fields supported by the provider:
+Remote ownership metadata includes the logical fields supported by the
+provider:
 
 ```text
-openbao-sync=true
-openbao-sync-plugin-instance=<plugin-instance-id>
-openbao-sync-restore-epoch=<restore-epoch>
-openbao-sync-association=<association-id>
-openbao-sync-path=<source-path>
-openbao-sync-version=<source-version>
-openbao-sync-object=<object-id>
-openbao-sync-payload-sha256=<hash>
+managed=<true>
+plugin_instance=<plugin-instance-id>
+restore_epoch=<restore-epoch>
+association_id=<association-id>
+source_path=<source-path>
+source_version=<source-version>
+object_id=<object-id>
+payload_sha256=<hash>
 ```
 
 AWS Secrets Manager tags, Kubernetes annotations, and GitLab variable
@@ -217,6 +218,14 @@ descriptions include plugin instance and restore epoch metadata. Provider
 ownership checks require these values to match the current mount identity when
 the request carries them; missing or mismatched values are treated as ownership
 loss.
+
+Remote ownership metadata is not encrypted as part of the source payload. It
+can expose source paths, remote names, versions, object identifiers, payload
+hashes, and runtime identity to principals that can inspect destination
+metadata. Do not place sensitive information in source or remote names, and
+scope destination metadata-read permissions to roles that need this operational
+context. Exact metadata carriers and keys are documented on the provider
+operations pages.
 
 If ownership metadata is absent or conflicts, the plugin reports
 `REMOTE_OWNERSHIP_LOST` and does not overwrite. If ownership matches but the

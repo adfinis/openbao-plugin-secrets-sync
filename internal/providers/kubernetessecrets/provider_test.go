@@ -76,6 +76,35 @@ func mustTestCACertPEM() string {
 
 var secretsResource = schema.GroupResource{Resource: "secrets"}
 
+func TestOwnershipMetadataKeys(t *testing.T) {
+	t.Parallel()
+
+	tests := map[string]struct {
+		got  string
+		want string
+	}{
+		"managed label":              {got: labelManaged, want: "openbao.org/secrets-sync-managed"},
+		"association annotation":     {got: annotationAssociationID, want: "openbao.org/secrets-sync-association-id"},
+		"source path annotation":     {got: annotationSourcePath, want: "openbao.org/secrets-sync-source-path"},
+		"source version annotation":  {got: annotationSourceVersion, want: "openbao.org/secrets-sync-source-version"},
+		"object annotation":          {got: annotationObjectID, want: "openbao.org/secrets-sync-object-id"},
+		"payload hash annotation":    {got: annotationPayloadSHA256, want: "openbao.org/secrets-sync-payload-sha256"},
+		"format annotation":          {got: annotationFormat, want: "openbao.org/secrets-sync-format"},
+		"data keys annotation":       {got: annotationDataKeys, want: "openbao.org/secrets-sync-data-keys"},
+		"plugin instance annotation": {got: annotationPluginInstance, want: "openbao.org/secrets-sync-plugin-instance"},
+		"restore epoch annotation":   {got: annotationRestoreEpoch, want: "openbao.org/secrets-sync-restore-epoch"},
+	}
+
+	for name, test := range tests {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			if test.got != test.want {
+				t.Fatalf("metadata key = %q, want %q", test.got, test.want)
+			}
+		})
+	}
+}
+
 func TestProviderConformance(t *testing.T) {
 	client := fake.NewSimpleClientset()
 	providertest.Run(t, providertest.Harness{
