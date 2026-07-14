@@ -30,16 +30,9 @@ var destinationConfigFieldKeys = []string{
 	awssecretsmanager.ConfigKeyRoleARN,
 	awssecretsmanager.ConfigKeySessionName,
 	awssecretsmanager.ConfigKeyWebIdentityTokenFile,
-	awssecretsmanager.ConfigKeyDeleteRecoveryWindowDays,
 	awssecretsmanager.ConfigKeyValueDriftDetection,
 	gitlab.ConfigKeyBaseURL,
 	gitlab.ConfigKeyProjectID,
-	gitlab.ConfigKeyEnvironmentScope,
-	gitlab.ConfigKeyProtected,
-	gitlab.ConfigKeyMasked,
-	gitlab.ConfigKeyHidden,
-	gitlab.ConfigKeyVariableRaw,
-	gitlab.ConfigKeyVariableType,
 	gitlab.ConfigKeyAllowInsecureHTTP,
 	gitlab.ConfigKeyAllowPrivateNetwork,
 	kubernetessecrets.ConfigKeyNamespace,
@@ -60,18 +53,11 @@ var destinationConfigFieldKeysByType = map[string][]string{
 		awssecretsmanager.ConfigKeyRoleARN,
 		awssecretsmanager.ConfigKeySessionName,
 		awssecretsmanager.ConfigKeyWebIdentityTokenFile,
-		awssecretsmanager.ConfigKeyDeleteRecoveryWindowDays,
 		awssecretsmanager.ConfigKeyValueDriftDetection,
 	},
 	gitlab.ProviderType: {
 		gitlab.ConfigKeyBaseURL,
 		gitlab.ConfigKeyProjectID,
-		gitlab.ConfigKeyEnvironmentScope,
-		gitlab.ConfigKeyProtected,
-		gitlab.ConfigKeyMasked,
-		gitlab.ConfigKeyHidden,
-		gitlab.ConfigKeyVariableRaw,
-		gitlab.ConfigKeyVariableType,
 		gitlab.ConfigKeyAllowInsecureHTTP,
 		gitlab.ConfigKeyAllowPrivateNetwork,
 	},
@@ -248,11 +234,6 @@ func destinationRequestFields() map[string]*framework.FieldSchema {
 		Description: "Absolute token file path for aws-sm web_identity destinations. " +
 			"The file must be readable by the OpenBao plugin process.",
 	}
-	fields[awssecretsmanager.ConfigKeyDeleteRecoveryWindowDays] = &framework.FieldSchema{
-		Type: framework.TypeInt,
-		Description: "AWS Secrets Manager scheduled-delete recovery window in days for aws-sm destinations. " +
-			"Defaults to 7; AWS accepts 7 through 30.",
-	}
 	fields[awssecretsmanager.ConfigKeyValueDriftDetection] = &framework.FieldSchema{
 		Type: framework.TypeBool,
 		Description: "Opt in to AWS GetSecretValue checks for explicit plan, upsert, and read-state " +
@@ -265,30 +246,6 @@ func destinationRequestFields() map[string]*framework.FieldSchema {
 	fields[gitlab.ConfigKeyProjectID] = &framework.FieldSchema{
 		Type:        framework.TypeString,
 		Description: "GitLab project ID or path for gitlab project variable destinations.",
-	}
-	fields[gitlab.ConfigKeyEnvironmentScope] = &framework.FieldSchema{
-		Type:        framework.TypeString,
-		Description: "GitLab variable environment scope. Defaults to *.",
-	}
-	fields[gitlab.ConfigKeyProtected] = &framework.FieldSchema{
-		Type:        framework.TypeBool,
-		Description: "GitLab protected variable flag: true or false.",
-	}
-	fields[gitlab.ConfigKeyMasked] = &framework.FieldSchema{
-		Type:        framework.TypeBool,
-		Description: "GitLab masked variable flag: true or false.",
-	}
-	fields[gitlab.ConfigKeyHidden] = &framework.FieldSchema{
-		Type:        framework.TypeBool,
-		Description: "GitLab hidden variable flag: true or false. Hidden variables are sent as masked_and_hidden.",
-	}
-	fields[gitlab.ConfigKeyVariableRaw] = &framework.FieldSchema{
-		Type:        framework.TypeBool,
-		Description: "GitLab raw variable flag controlling variable reference expansion: true or false.",
-	}
-	fields[gitlab.ConfigKeyVariableType] = &framework.FieldSchema{
-		Type:        framework.TypeString,
-		Description: "GitLab variable type: env_var or file.",
 	}
 	fields[gitlab.ConfigKeyAllowInsecureHTTP] = &framework.FieldSchema{
 		Type: framework.TypeBool,
@@ -429,9 +386,12 @@ func destinationWriteRecordFromFieldData(
 	if err != nil {
 		return destinationRecord{}, nil, "", nil, err
 	}
-	existingSensitive, err := getDestinationSensitiveConfig(ctx, storage, destinationType, name)
-	if err != nil {
-		return destinationRecord{}, nil, "", nil, err
+	var existingSensitive *destinationSensitiveRecord
+	if existing != nil {
+		existingSensitive, err = getDestinationSensitiveConfigForRecord(ctx, storage, *existing)
+		if err != nil {
+			return destinationRecord{}, nil, "", nil, err
+		}
 	}
 	config, err := destinationConfigFromFieldData(destinationType, existing, data)
 	if err != nil {
@@ -450,11 +410,21 @@ func destinationWriteRecordFromFieldData(
 	if err != nil {
 		return destinationRecord{}, nil, "", logical.ErrorResponse(err.Error()), nil
 	}
+	description := data.Get("description").(string)
+	disabled := data.Get("disabled").(bool)
+	if existing != nil {
+		if _, ok := data.Raw["description"]; !ok {
+			description = existing.Description
+		}
+		if _, ok := data.Raw["disabled"]; !ok {
+			disabled = existing.Disabled
+		}
+	}
 	record := destinationRecord{
 		Type:                        destinationType,
 		Name:                        name,
-		Description:                 data.Get("description").(string),
-		Disabled:                    data.Get("disabled").(bool),
+		Description:                 description,
+		Disabled:                    disabled,
 		Config:                      config,
 		AllowedSourcePathPrefixes:   allowedSourcePrefixes,
 		AllowedResolvedNamePrefixes: allowedNamePrefixes,
@@ -463,6 +433,7 @@ func destinationWriteRecordFromFieldData(
 	}
 	if existing != nil {
 		record.CreatedTime = existing.CreatedTime
+		record.SensitiveConfigVersion = existing.SensitiveConfigVersion
 	}
 	sensitiveCreatedTime := ""
 	if existingSensitive != nil {
@@ -509,29 +480,50 @@ func storeDestinationWrite(
 	sensitiveCreatedTime string,
 	now string,
 ) error {
-	if err := putDestination(ctx, storage, record); err != nil {
-		return err
-	}
+	previousSensitiveVersion := record.SensitiveConfigVersion
+	nextSensitiveVersion := destinationSensitiveNone
 	if len(sensitiveConfig) == 0 {
-		if err := deleteDestinationSensitiveConfig(ctx, storage, record.Type, record.Name); err != nil {
+		record.SensitiveConfigVersion = nextSensitiveVersion
+	} else {
+		var err error
+		nextSensitiveVersion, err = newRuntimeID("destination-sensitive")
+		if err != nil {
 			return err
 		}
-		return nil
+		sensitiveRecord := destinationSensitiveRecord{
+			Type:        record.Type,
+			Name:        record.Name,
+			Config:      sensitiveConfig,
+			CreatedTime: now,
+			UpdatedTime: now,
+		}
+		if sensitiveCreatedTime != "" {
+			sensitiveRecord.CreatedTime = sensitiveCreatedTime
+		}
+		if err := putDestinationSensitiveConfig(ctx, storage, nextSensitiveVersion, sensitiveRecord); err != nil {
+			return err
+		}
+		record.SensitiveConfigVersion = nextSensitiveVersion
 	}
-	sensitiveRecord := destinationSensitiveRecord{
-		Type:        record.Type,
-		Name:        record.Name,
-		Config:      sensitiveConfig,
-		CreatedTime: now,
-		UpdatedTime: now,
-	}
-	if sensitiveCreatedTime != "" {
-		sensitiveRecord.CreatedTime = sensitiveCreatedTime
-	}
-	if err := putDestinationSensitiveConfig(ctx, storage, sensitiveRecord); err != nil {
+	if err := putDestination(ctx, storage, record); err != nil {
+		if nextSensitiveVersion != destinationSensitiveNone {
+			_ = deleteDestinationSensitiveConfigVersion(
+				ctx,
+				storage,
+				record.Type,
+				record.Name,
+				nextSensitiveVersion,
+			)
+		}
 		return err
 	}
-	return nil
+	return deleteDestinationSensitiveConfigVersion(
+		ctx,
+		storage,
+		record.Type,
+		record.Name,
+		previousSensitiveVersion,
+	)
 }
 
 func (b *secretSyncBackend) pathDestinationValidate(
@@ -714,7 +706,7 @@ func (b *secretSyncBackend) pathDestinationRead(
 	if err != nil {
 		return logical.ErrorResponse(err.Error()), nil
 	}
-	sensitiveRecord, err := getDestinationSensitiveConfig(ctx, req.Storage, record.Type, record.Name)
+	sensitiveRecord, err := getDestinationSensitiveConfigForRecord(ctx, req.Storage, *record)
 	if err != nil {
 		return nil, err
 	}
@@ -828,7 +820,7 @@ func destinationConfig(
 	record destinationRecord,
 ) (providers.DestinationConfig, error) {
 	config := copyStringMap(record.Config)
-	sensitiveRecord, err := getDestinationSensitiveConfig(ctx, storage, record.Type, record.Name)
+	sensitiveRecord, err := getDestinationSensitiveConfigForRecord(ctx, storage, record)
 	if err != nil {
 		return providers.DestinationConfig{}, err
 	}
@@ -866,7 +858,7 @@ func destinationConfigFromFieldData(
 	if existing != nil {
 		existingConfig = existing.Config
 	}
-	return destinationConfigMapFromFieldData(
+	return providerConfigMapFromFieldData(
 		destinationType,
 		existingConfig,
 		destinationConfigFieldKeysForType(destinationType),
@@ -884,7 +876,7 @@ func destinationSensitiveConfigFromFieldData(
 	if existing != nil {
 		existingConfig = existing.Config
 	}
-	return destinationConfigMapFromFieldData(
+	return providerConfigMapFromFieldData(
 		destinationType,
 		existingConfig,
 		destinationSensitiveConfigFieldKeysForType(destinationType),
@@ -893,7 +885,7 @@ func destinationSensitiveConfigFromFieldData(
 	)
 }
 
-func destinationConfigMapFromFieldData(
+func providerConfigMapFromFieldData(
 	destinationType string,
 	existing map[string]string,
 	providerKeys []string,
@@ -910,10 +902,10 @@ func destinationConfigMapFromFieldData(
 	}
 	allowedKeys := stringSet(providerKeys)
 	for _, key := range fieldKeys {
-		value, ok := data.GetOk(key)
-		if !ok {
+		if _, ok := data.Raw[key]; !ok {
 			continue
 		}
+		value := data.Get(key)
 		stringValue, err := destinationConfigStringValue(value)
 		if err != nil {
 			return nil, fmt.Errorf("%s: %w", key, err)

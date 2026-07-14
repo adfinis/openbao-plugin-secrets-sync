@@ -258,7 +258,7 @@ func TestQueueDrainSkipsUnexpiredCurrentOwnerClaim(t *testing.T) {
 	}
 }
 
-func TestQueueDrainResetsOtherOwnerClaim(t *testing.T) {
+func TestQueueDrainPreservesUnexpiredOtherOwnerClaim(t *testing.T) {
 	env := newBackendTestEnv(t)
 
 	env.writeAppDBSecret("initial")
@@ -281,13 +281,31 @@ func TestQueueDrainResetsOtherOwnerClaim(t *testing.T) {
 		"max_operations": 1,
 	})
 	assertNoErrorResponse(t, drainResp)
-	assertResponseValue(t, drainResp, "processed", 1)
+	assertResponseValue(t, drainResp, "processed", 0)
 	queue := drainResp.Data["queue"].(map[string]interface{})
-	if got := queue["claimed"]; got != 0 {
-		t.Fatalf("claimed = %v, want 0", got)
+	if got := queue["claimed"]; got != 1 {
+		t.Fatalf("claimed = %v, want 1", got)
 	}
-	assertOutboxMissing(t, env.storage, operationID)
-	assertStatusObjectState(t, env.b, env.storage, domain.SyncStateSynced)
+	stored := assertOutboxOperation(t, env.storage, operationID, 1, outboxStatePending)
+	if got := stored.ClaimOwner; got != operation.ClaimOwner {
+		t.Fatalf("claim owner = %q, want %q", got, operation.ClaimOwner)
+	}
+	if got := stored.ClaimExpiresTime; got != operation.ClaimExpiresTime {
+		t.Fatalf("claim expiry = %q, want %q", got, operation.ClaimExpiresTime)
+	}
+	status, err := getStatus(
+		context.Background(),
+		env.storage,
+		"app/db",
+		associationIDFromResponse(t, associationResp),
+		syncObjectIDSecretPath,
+	)
+	if err != nil {
+		t.Fatalf("read status: %v", err)
+	}
+	if status != nil {
+		t.Fatalf("status = %#v, want nil while operation remains claimed", status)
+	}
 }
 
 func TestQueueOperationRetryRejectsClaimedOperation(t *testing.T) {

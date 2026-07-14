@@ -45,6 +45,7 @@ const (
 	statusStoragePrefix       = "status/"
 	providerTypeFake          = "fake"
 	defaultAssociationFormat  = "json"
+	destinationSensitiveNone  = "none"
 	rawAssociationFormat      = "raw"
 	defaultDataMapping        = "payload"
 	dataMappingSourceKeys     = "source-keys"
@@ -117,6 +118,7 @@ type destinationRecord struct {
 	Description                 string            `json:"description"`
 	Disabled                    bool              `json:"disabled"`
 	Config                      map[string]string `json:"config"`
+	SensitiveConfigVersion      string            `json:"sensitive_config_version,omitempty"`
 	AllowedSourcePathPrefixes   []string          `json:"allowed_source_path_prefixes,omitempty"`
 	AllowedResolvedNamePrefixes []string          `json:"allowed_resolved_name_prefixes,omitempty"`
 	CreatedTime                 string            `json:"created_time"`
@@ -132,25 +134,31 @@ type destinationSensitiveRecord struct {
 }
 
 type associationRecord struct {
-	ID               string   `json:"id"`
-	Path             string   `json:"path"`
-	DestinationType  string   `json:"destination_type"`
-	DestinationName  string   `json:"destination_name"`
-	DestinationRef   string   `json:"destination_ref"`
-	NameTemplate     string   `json:"name_template"`
-	ResolvedName     string   `json:"resolved_name"`
-	ReservationNames []string `json:"reservation_names,omitempty"`
-	Granularity      string   `json:"granularity"`
-	Format           string   `json:"format"`
-	DataMapping      string   `json:"data_mapping,omitempty"`
-	DataKeyTemplate  string   `json:"data_key_template,omitempty"`
-	DeleteMode       string   `json:"delete_mode"`
-	Enabled          bool     `json:"enabled"`
-	CreatedTime      string   `json:"created_time"`
-	UpdatedTime      string   `json:"updated_time"`
+	ID               string            `json:"id"`
+	Path             string            `json:"path"`
+	DestinationType  string            `json:"destination_type"`
+	DestinationName  string            `json:"destination_name"`
+	DestinationRef   string            `json:"destination_ref"`
+	NameTemplate     string            `json:"name_template"`
+	ResolvedName     string            `json:"resolved_name"`
+	ReservationNames []string          `json:"reservation_names,omitempty"`
+	Granularity      string            `json:"granularity"`
+	Format           string            `json:"format"`
+	DataMapping      string            `json:"data_mapping,omitempty"`
+	DataKeyTemplate  string            `json:"data_key_template,omitempty"`
+	ProviderConfig   map[string]string `json:"provider_config,omitempty"`
+	ProviderIdentity string            `json:"provider_identity,omitempty"`
+	DeleteMode       string            `json:"delete_mode"`
+	Enabled          bool              `json:"enabled"`
+	CreatedTime      string            `json:"created_time"`
+	UpdatedTime      string            `json:"updated_time"`
 }
 
 func (record associationRecord) reservationName() string {
+	return associationReservationKey(record.ProviderIdentity, record.rawReservationName())
+}
+
+func (record associationRecord) rawReservationName() string {
 	if record.Granularity == syncGranularitySecretKey {
 		reservationName, err := secretKeyReservationName(
 			record.NameTemplate,
@@ -169,8 +177,17 @@ func (record associationRecord) reservationName() string {
 func (record associationRecord) reservationNames() []string {
 	names := make([]string, 0, 1+len(record.ReservationNames))
 	names = append(names, record.reservationName())
-	names = append(names, record.ReservationNames...)
+	for _, reservationName := range record.ReservationNames {
+		names = append(names, associationReservationKey(record.ProviderIdentity, reservationName))
+	}
 	return uniqueSortedStrings(names)
+}
+
+func associationReservationKey(providerIdentity string, resolvedName string) string {
+	if providerIdentity == "" {
+		return resolvedName
+	}
+	return providerIdentity + "\x00" + resolvedName
 }
 
 type enqueueIntentRecord struct {
@@ -279,6 +296,14 @@ func destinationStorageKey(destinationType string, name string) string {
 
 func destinationSensitiveStorageKey(destinationType string, name string) string {
 	return destinationSecretsPrefix + destinationRef(destinationType, name)
+}
+
+func destinationSensitiveVersionStoragePrefix(destinationType string, name string) string {
+	return destinationSensitiveStorageKey(destinationType, name) + "/versions/"
+}
+
+func destinationSensitiveVersionStorageKey(destinationType string, name string, version string) string {
+	return destinationSensitiveVersionStoragePrefix(destinationType, name) + version
 }
 
 func associationStorageKey(path string, id string) string {

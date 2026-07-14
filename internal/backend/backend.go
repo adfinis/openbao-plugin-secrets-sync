@@ -92,6 +92,7 @@ type secretSyncBackend struct {
 	*framework.Backend
 
 	cacheMu          sync.Mutex
+	configMu         sync.Mutex
 	enqueueMu        sync.Mutex
 	eventDispatchMu  sync.Mutex
 	dispatchWorkerID string
@@ -138,7 +139,7 @@ func (b *secretSyncBackend) cleanup(ctx context.Context) {
 
 func (b *secretSyncBackend) HandleRequest(ctx context.Context, req *logical.Request) (*logical.Response, error) {
 	if req != nil && req.Storage != nil && req.Operation != logical.HelpOperation {
-		if _, err := ensureRuntimeState(ctx, req.Storage); err != nil {
+		if err := b.ensureRuntimeStateForRequest(ctx, req.Storage); err != nil {
 			if isStorageSchemaCompatibilityError(err) {
 				return logical.ErrorResponse(err.Error()), nil
 			}
@@ -156,11 +157,14 @@ func (b *secretSyncBackend) periodic(ctx context.Context, req *logical.Request) 
 		b.recordRemoteMutationBlocked(ctx, observability.OperationPeriodic, observability.ReasonReplicationState)
 		return nil
 	}
-	if _, err := ensureRuntimeState(ctx, req.Storage); err != nil {
+	if err := b.ensureRuntimeStateForRequest(ctx, req.Storage); err != nil {
 		return err
 	}
 	cfg, err := readGlobalConfig(ctx, req.Storage)
 	if err != nil {
+		return err
+	}
+	if err := b.pruneTerminalOutboxRecords(ctx, req.Storage, nowUTC()); err != nil {
 		return err
 	}
 	if cfg.Disabled {
@@ -192,6 +196,16 @@ func (b *secretSyncBackend) periodic(ctx context.Context, req *logical.Request) 
 		observability.OperationPeriodic,
 	)
 	return errors.Join(periodicErr, err)
+}
+
+func (b *secretSyncBackend) ensureRuntimeStateForRequest(
+	ctx context.Context,
+	storage logical.Storage,
+) error {
+	b.configMu.Lock()
+	defer b.configMu.Unlock()
+	_, err := ensureRuntimeState(ctx, storage)
+	return err
 }
 
 func (b *secretSyncBackend) remoteMutationAllowed() bool {

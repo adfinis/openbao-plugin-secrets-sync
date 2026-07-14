@@ -10,8 +10,11 @@ import (
 )
 
 const (
-	defaultDrainMaxOperations = 100
-	restoreGuardActiveError   = "restore guard is active; acknowledge " +
+	defaultDrainMaxOperations        = 100
+	defaultTerminalOutboxPruneLimit  = 100
+	maxRetainedTerminalOutboxRecords = 1000
+	terminalOutboxRetention          = 7 * 24 * time.Hour
+	restoreGuardActiveError          = "restore guard is active; acknowledge " +
 		"config/restore-guard/acknowledge before remote mutation"
 	remoteMutationUnsafeError = "remote mutation is not allowed on this replication node"
 )
@@ -105,7 +108,7 @@ func pathQueue(b *secretSyncBackend) []*framework.Path {
 				},
 			},
 			HelpSynopsis:    "Cancel a sync queue operation.",
-			HelpDescription: "Discards pending or retry-wait outbox work.",
+			HelpDescription: "Discards pending, retry-wait, or terminal failed outbox work.",
 		},
 	}
 }
@@ -350,7 +353,7 @@ func (b *secretSyncBackend) pathQueueOperationCancel(
 			return nil, err
 		}
 		return nil, nil
-	case outboxStatePending, outboxStateRetryWait:
+	case outboxStatePending, outboxStateRetryWait, outboxStateFailedTerminal:
 		nowString := now.Format(timeFormatRFC3339)
 		responseRecord := *record
 		responseRecord.State = outboxStateCanceled

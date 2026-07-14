@@ -8,11 +8,14 @@ only the namespaces that are approved as sync destinations:
 ```yaml
 apiGroups: [""]
 resources: ["secrets"]
-verbs: ["get", "list", "create", "update", "delete"]
+verbs: ["get", "create", "update", "delete"]
 ```
 
-The provider uses `list` for health checks, `get` for plan and read-state
-checks, `create` and `update` for upserts, and `delete` for owned deletes.
+The provider uses `get` for health, plan, and read-state checks, `create` and
+`update` for upserts, and `delete` for owned deletes. Health checks probe a
+fixed Secret name and treat an authorized not-found response as healthy, so the
+destination identity does not require `list` access that would expose every
+Secret value in the namespace.
 
 ## Ownership and delete behavior
 

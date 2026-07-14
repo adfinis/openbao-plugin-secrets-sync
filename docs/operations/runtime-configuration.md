@@ -12,6 +12,10 @@ Read the current mount configuration:
 bao read secret-sync/config
 ```
 
+Configuration writes are partial updates. Omitted settings retain their stored
+values, and concurrent writes handled by one mount process are serialized so
+one update does not restore another field from a stale snapshot.
+
 ## Restore guard
 
 Fresh mounts start with `restore_guard=false`. If `restore_guard=true` after a

@@ -25,6 +25,7 @@
         "id": "<association-id>",
         "name_template": "{{ path }}",
         "path": "app/db",
+        "provider_config": {},
         "resolved_name": "prod/app/db",
         "updated_time": "<timestamp>"
       },
@@ -65,6 +66,7 @@
           "id": "<association-id>",
           "name_template": "{{ path }}",
           "path": "app/db",
+          "provider_config": {},
           "resolved_name": "prod/app/db",
           "updated_time": "<timestamp>"
         }
@@ -82,6 +84,7 @@
       "enabled": true,
       "format": "json",
       "granularity": "secret-path",
+      "provider_config": {},
       "resolved_name": "prod/app/db",
       "sync_operation_ids": [
         "<operation-id>"

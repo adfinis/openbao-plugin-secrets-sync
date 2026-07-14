@@ -195,6 +195,7 @@ func Run(t *testing.T, harness Harness) {
 	runTypeCheck(t, harness.Provider)
 	runCapabilityCheck(t, harness.Provider, harness.RequiredCapabilities)
 	runValidationCheck(t, harness.Provider, harness.ValidDestination, harness.ValidationError)
+	runAssociationValidationCheck(t, harness.Provider, harness.ValidDestination)
 	if harness.HealthCase != nil {
 		runHealthCheck(t, harness.Provider, *harness.HealthCase)
 	}
@@ -225,6 +226,23 @@ func Run(t *testing.T, harness Harness) {
 	for _, errorCase := range harness.DeleteErrors {
 		runDeleteErrorCheck(t, harness.Provider, harness.ValidDestination, errorCase)
 	}
+}
+
+func runAssociationValidationCheck(
+	t *testing.T,
+	provider providers.Provider,
+	validDestination providers.DestinationConfig,
+) {
+	t.Helper()
+	t.Run("normalize-association", func(t *testing.T) {
+		if _, err := provider.NormalizeAssociationConfig(
+			context.Background(),
+			validDestination,
+			providers.AssociationConfig{},
+		); err != nil {
+			t.Fatalf("normalize valid association: %v", err)
+		}
+	})
 }
 
 func runTypeCheck(t *testing.T, provider providers.Provider) {

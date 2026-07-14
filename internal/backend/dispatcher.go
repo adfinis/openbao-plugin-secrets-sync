@@ -35,11 +35,20 @@ func (b *secretSyncBackend) processDueOutboxLimit(
 	maxOperations int,
 	operation string,
 ) (int, error) {
+	return b.processDueOutboxLimitWithClock(ctx, storage, now, maxOperations, operation, time.Now)
+}
+
+func (b *secretSyncBackend) processDueOutboxLimitWithClock(
+	ctx context.Context,
+	storage logical.Storage,
+	now time.Time,
+	maxOperations int,
+	operation string,
+	clock func() time.Time,
+) (int, error) {
+	batchStarted := clock()
 	claimOwner, err := b.outboxClaimOwner(ctx, storage)
 	if err != nil {
-		return 0, err
-	}
-	if err := b.resetOutboxClaimsForOtherOwners(ctx, storage, claimOwner, now); err != nil {
 		return 0, err
 	}
 	ids, err := listDueOutboxIDs(ctx, storage, now)
@@ -48,14 +57,22 @@ func (b *secretSyncBackend) processDueOutboxLimit(
 	}
 	processed := 0
 	for _, id := range ids {
-		claimed, ok, err := b.claimDispatchableOutboxRecord(ctx, storage, id, claimOwner, now, operation)
+		operationNow := now.Add(clock().Sub(batchStarted))
+		claimed, ok, err := b.claimDispatchableOutboxRecord(
+			ctx,
+			storage,
+			id,
+			claimOwner,
+			operationNow,
+			operation,
+		)
 		if err != nil {
 			return processed, err
 		}
 		if !ok {
 			continue
 		}
-		if err := b.processOutboxRecord(ctx, storage, *claimed, now); err != nil {
+		if err := b.processOutboxRecord(ctx, storage, *claimed, operationNow); err != nil {
 			return processed, err
 		}
 		processed++
@@ -63,7 +80,8 @@ func (b *secretSyncBackend) processDueOutboxLimit(
 			break
 		}
 	}
-	return processed, nil
+	err = b.pruneTerminalOutboxRecords(ctx, storage, now.Add(clock().Sub(batchStarted)))
+	return processed, err
 }
 
 func (b *secretSyncBackend) claimDispatchableOutboxRecord(
@@ -175,39 +193,6 @@ func clearOutboxClaim(record *outboxRecord) {
 	record.ClaimOwner = ""
 	record.ClaimExpiresTime = ""
 	record.ClaimAttempt = 0
-}
-
-func (b *secretSyncBackend) resetOutboxClaimsForOtherOwners(
-	ctx context.Context,
-	storage logical.Storage,
-	claimOwner string,
-	now time.Time,
-) error {
-	b.enqueueMu.Lock()
-	defer b.enqueueMu.Unlock()
-
-	ids, err := listQueuedOutboxIDs(ctx, storage)
-	if err != nil {
-		return err
-	}
-	nowString := now.Format(timeFormatRFC3339)
-	for _, id := range ids {
-		record, err := getOutbox(ctx, storage, id)
-		if err != nil {
-			return err
-		}
-		if record == nil ||
-			record.ClaimOwner == "" ||
-			record.ClaimOwner == claimOwner {
-			continue
-		}
-		clearOutboxClaim(record)
-		record.UpdatedTime = nowString
-		if err := putOutbox(ctx, storage, *record); err != nil {
-			return err
-		}
-	}
-	return nil
 }
 
 func isSupportedOperation(record outboxRecord) bool {
@@ -594,6 +579,7 @@ func (b *secretSyncBackend) providerUpsert(
 	}
 	return runtime.Upsert(mutationCtx, providers.UpsertRequest{
 		Runtime:        runtimeIdentity,
+		Association:    providerAssociationConfig(*ctxData.association),
 		ResolvedName:   resolvedName,
 		Format:         preparedPayload.Format,
 		Payload:        preparedPayload.Bytes,
@@ -624,6 +610,7 @@ func (b *secretSyncBackend) providerDelete(
 	}
 	return runtime.Delete(mutationCtx, providers.DeleteRequest{
 		Runtime:        runtimeIdentity,
+		Association:    providerAssociationConfig(*ctxData.association),
 		ResolvedName:   resolvedName,
 		IdempotencyKey: record.IdempotencyKey,
 		DataMap:        normalizedDataMapping(ctxData.association.DataMapping) == dataMappingSourceKeys,

@@ -46,7 +46,13 @@ func recoverEnqueueIntent(
 		return err
 	}
 	versionAvailable := version != nil && !version.Destroyed && version.DeletionTime == ""
-	if intentSourceMutationCommitted(intent, versionAvailable) {
+	sourceMutationCommitted := intentSourceMutationCommitted(intent, versionAvailable)
+	if version != nil && sourceMutationCommitted {
+		if err := recoverIntentSourceMetadata(ctx, storage, intent, *version); err != nil {
+			return err
+		}
+	}
+	if sourceMutationCommitted {
 		if err := cancelQueuedOutboxIDs(ctx, storage, intent.CancelOperationIDs); err != nil {
 			return err
 		}
@@ -67,11 +73,6 @@ func recoverEnqueueIntent(
 			continue
 		}
 		if err := putOutbox(ctx, storage, operation); err != nil {
-			return err
-		}
-	}
-	if intentSourceMetadataRecoverable(intent, versionAvailable) {
-		if err := recoverIntentSourceMetadata(ctx, storage, intent); err != nil {
 			return err
 		}
 	}
@@ -165,22 +166,11 @@ func intentSourceMutationCommitted(intent enqueueIntentRecord, versionAvailable 
 	return false
 }
 
-func intentSourceMetadataRecoverable(intent enqueueIntentRecord, versionAvailable bool) bool {
-	if !versionAvailable {
-		return false
-	}
-	for _, operation := range intent.Operations {
-		if operation.Type == outbox.OperationTypeUpsert {
-			return true
-		}
-	}
-	return false
-}
-
 func recoverIntentSourceMetadata(
 	ctx context.Context,
 	storage logical.Storage,
 	intent enqueueIntentRecord,
+	version versionRecord,
 ) error {
 	metadata, err := getMetadata(ctx, storage, intent.Path)
 	if err != nil {
@@ -191,10 +181,24 @@ func recoverIntentSourceMetadata(
 		record.Generation = intent.Generation
 		metadata = &record
 	}
-	if metadata.CurrentVersion >= intent.Version {
+	if metadata.CurrentVersion < intent.Version {
+		return commitSourceMetadata(ctx, storage, intent.Path, metadata, intent.Version, version.CreatedTime)
+	}
+	if metadata.CurrentVersion != intent.Version {
 		return nil
 	}
-	return commitSourceMetadata(ctx, storage, intent.Path, metadata, intent.Version, intent.CreatedTime)
+	versionKey := versionMetadataKey(intent.Version)
+	recoveredVersion := versionMetadata{
+		CreatedTime:  version.CreatedTime,
+		DeletionTime: version.DeletionTime,
+		Destroyed:    version.Destroyed,
+	}
+	if metadata.Versions[versionKey] == recoveredVersion {
+		return nil
+	}
+	metadata.Versions[versionKey] = recoveredVersion
+	metadata.UpdatedTime = intent.CreatedTime
+	return putMetadata(ctx, storage, intent.Path, *metadata)
 }
 
 func pruneRecoveredIntent(

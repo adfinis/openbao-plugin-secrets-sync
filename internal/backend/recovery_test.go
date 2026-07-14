@@ -2,6 +2,7 @@ package backend
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"testing"
@@ -317,6 +318,198 @@ func TestRecoveryCompletesCommittedVersionIntent(t *testing.T) {
 	}
 	if got := metadata.CurrentVersion; got != 2 {
 		t.Fatalf("metadata current version = %d, want 2", got)
+	}
+}
+
+func TestRecoveryCompletesMetadataAfterDataWriteCommitFailure(t *testing.T) {
+	env := newBackendTestEnv(t)
+
+	env.writeAppDBSecret("initial")
+	env.createFakeDestination("default")
+	env.createDefaultFakeAssociation()
+	env.runPeriodicAllowed("initial sync")
+	failingStorage := failPutStorage{
+		Storage: env.storage,
+		failKey: metadataStorageKey("app/db"),
+	}
+
+	resp, err := env.b.HandleRequest(context.Background(), &logical.Request{
+		Operation: logical.UpdateOperation,
+		Path:      "data/app/db",
+		Storage:   failingStorage,
+		Data: map[string]interface{}{
+			"data": map[string]interface{}{"password": "rotated"},
+		},
+	})
+	if !errors.Is(err, errInjectedStoragePut) {
+		t.Fatalf("data write error = %v, want injected metadata put failure", err)
+	}
+	if resp != nil {
+		t.Fatalf("data write response = %#v, want nil", resp)
+	}
+	intent := requireSingleEnqueueIntent(t, env.storage)
+	if got := intent.Version; got != 2 {
+		t.Fatalf("intent version = %d, want 2", got)
+	}
+	metadata, err := getMetadata(context.Background(), env.storage, "app/db")
+	if err != nil {
+		t.Fatalf("read metadata before recovery: %v", err)
+	}
+	if got := metadata.CurrentVersion; got != 1 {
+		t.Fatalf("metadata current version before recovery = %d, want 1", got)
+	}
+	if version, err := getVersion(context.Background(), env.storage, "app/db", 2); err != nil {
+		t.Fatalf("read committed version before recovery: %v", err)
+	} else if version == nil {
+		t.Fatal("version 2 must remain committed for recovery")
+	}
+
+	if err := recoverIncompleteEnqueueIntents(context.Background(), env.storage, nowUTC()); err != nil {
+		t.Fatalf("recover metadata commit: %v", err)
+	}
+	metadata, err = getMetadata(context.Background(), env.storage, "app/db")
+	if err != nil {
+		t.Fatalf("read recovered metadata: %v", err)
+	}
+	if got := metadata.CurrentVersion; got != 2 {
+		t.Fatalf("recovered metadata current version = %d, want 2", got)
+	}
+	if got := metadata.Versions[versionMetadataKey(2)].CreatedTime; got == "" {
+		t.Fatal("recovered version metadata created_time must be set")
+	}
+	assertEnqueueIntentMissing(t, env.storage, "app/db", 2)
+}
+
+type currentVersionMutationFailureCase struct {
+	name          string
+	operation     logical.Operation
+	path          string
+	prepareDelete bool
+}
+
+func TestRecoveryCompletesMetadataAfterCurrentVersionMutationFailure(t *testing.T) {
+	tests := []currentVersionMutationFailureCase{
+		{
+			name:      "data delete",
+			operation: logical.DeleteOperation,
+			path:      "data/app/db",
+		},
+		{
+			name:      "version delete",
+			operation: logical.UpdateOperation,
+			path:      "delete/app/db",
+		},
+		{
+			name:          "version undelete",
+			operation:     logical.UpdateOperation,
+			path:          "undelete/app/db",
+			prepareDelete: true,
+		},
+		{
+			name:      "version destroy",
+			operation: logical.UpdateOperation,
+			path:      "destroy/app/db",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			testCurrentVersionMutationFailureRecovery(t, test)
+		})
+	}
+}
+
+func testCurrentVersionMutationFailureRecovery(t *testing.T, test currentVersionMutationFailureCase) {
+	t.Helper()
+	env := newBackendTestEnv(t)
+	env.writeAppDBSecret("initial")
+	env.createFakeDestination("default")
+	env.createFakeDeleteModeAssociation()
+	env.runPeriodicAllowed("initial sync")
+	if test.prepareDelete {
+		resp := env.update("delete/app/db", map[string]interface{}{"versions": []int{1}})
+		if resp != nil && resp.IsError() {
+			t.Fatalf("prepare delete response: %v", resp.Error())
+		}
+	}
+	beforeMetadata, err := getMetadata(context.Background(), env.storage, "app/db")
+	if err != nil {
+		t.Fatalf("read metadata before mutation: %v", err)
+	}
+	beforeVersionMetadata := beforeMetadata.Versions[versionMetadataKey(1)]
+	requestData := map[string]interface{}(nil)
+	if test.operation == logical.UpdateOperation {
+		requestData = map[string]interface{}{"versions": []int{1}}
+	}
+	failingStorage := failPutStorage{Storage: env.storage, failKey: metadataStorageKey("app/db")}
+
+	resp, err := env.b.HandleRequest(context.Background(), &logical.Request{
+		Operation: test.operation,
+		Path:      test.path,
+		Storage:   failingStorage,
+		Data:      requestData,
+	})
+	assertInjectedMetadataPutFailure(t, resp, err)
+	intent := requireSingleEnqueueIntent(t, env.storage)
+	version, err := getVersion(context.Background(), env.storage, "app/db", 1)
+	if err != nil {
+		t.Fatalf("read committed version: %v", err)
+	}
+	if version == nil {
+		t.Fatal("committed version must exist")
+	}
+	committedVersionMetadata := versionMetadata{
+		CreatedTime:  version.CreatedTime,
+		DeletionTime: version.DeletionTime,
+		Destroyed:    version.Destroyed,
+	}
+	if committedVersionMetadata == beforeVersionMetadata {
+		t.Fatalf("version mutation did not change lifecycle state: %#v", committedVersionMetadata)
+	}
+	storedMetadata, err := getMetadata(context.Background(), env.storage, "app/db")
+	if err != nil {
+		t.Fatalf("read stale metadata: %v", err)
+	}
+	if got := storedMetadata.Versions[versionMetadataKey(1)]; got != beforeVersionMetadata {
+		t.Fatalf("metadata before recovery = %#v, want %#v", got, beforeVersionMetadata)
+	}
+
+	if err := recoverIncompleteEnqueueIntents(context.Background(), env.storage, nowUTC()); err != nil {
+		t.Fatalf("recover lifecycle metadata: %v", err)
+	}
+	recoveredMetadata, err := getMetadata(context.Background(), env.storage, "app/db")
+	if err != nil {
+		t.Fatalf("read recovered metadata: %v", err)
+	}
+	if got := recoveredMetadata.Versions[versionMetadataKey(1)]; got != committedVersionMetadata {
+		t.Fatalf("recovered metadata = %#v, want %#v", got, committedVersionMetadata)
+	}
+	assertEnqueueIntentMissing(t, env.storage, intent.Path, intent.Version)
+}
+
+func assertInjectedMetadataPutFailure(t *testing.T, resp *logical.Response, err error) {
+	t.Helper()
+	if errors.Is(err, errInjectedStoragePut) {
+		if resp != nil {
+			t.Fatalf("mutation response = %#v, want nil with storage error", resp)
+		}
+		return
+	}
+	responseHasInjectedError := resp != nil && resp.IsError() &&
+		strings.Contains(resp.Error().Error(), errInjectedStoragePut.Error())
+	if err != nil || !responseHasInjectedError {
+		t.Fatalf("mutation response = %#v, error = %v, want injected metadata put failure", resp, err)
+	}
+}
+
+func assertEnqueueIntentMissing(t *testing.T, storage logical.Storage, path string, version int) {
+	t.Helper()
+	intent, err := getEnqueueIntent(context.Background(), storage, path, version)
+	if err != nil {
+		t.Fatalf("read recovered enqueue intent: %v", err)
+	}
+	if intent != nil {
+		t.Fatalf("recovered enqueue intent = %#v, want pruned", intent)
 	}
 }
 

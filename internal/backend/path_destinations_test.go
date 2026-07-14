@@ -2,6 +2,7 @@ package backend
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"testing"
@@ -10,6 +11,7 @@ import (
 	"github.com/adfinis/openbao-plugin-secrets-sync/internal/providers/awssecretsmanager"
 	"github.com/adfinis/openbao-plugin-secrets-sync/internal/providers/gitlab"
 	"github.com/adfinis/openbao-plugin-secrets-sync/internal/providers/kubernetessecrets"
+	"github.com/openbao/openbao/sdk/v2/logical"
 )
 
 const testKubernetesCACertPEM = `-----BEGIN CERTIFICATE-----
@@ -331,15 +333,14 @@ func TestAWSDestinationConfigLifecycle(t *testing.T) {
 	env := newBackendTestEnv(t)
 
 	writeResp := env.update("destinations/aws-sm/prod", map[string]interface{}{
-		"description":                                       "aws production",
-		awssecretsmanager.ConfigKeyRegion:                   "eu-central-1",
-		awssecretsmanager.ConfigKeyEndpointURL:              "http://localhost:4566",
-		awssecretsmanager.ConfigKeyEndpointPolicy:           awssecretsmanager.EndpointPolicyLocal,
-		awssecretsmanager.ConfigKeyAuthMode:                 awssecretsmanager.AuthModeAssumeRole,
-		awssecretsmanager.ConfigKeyRoleARN:                  "arn:aws:iam::123456789012:role/openbao-plugin-secrets-sync",
-		awssecretsmanager.ConfigKeyExternalID:               "tenant-1",
-		awssecretsmanager.ConfigKeySessionName:              "openbao-sync",
-		awssecretsmanager.ConfigKeyDeleteRecoveryWindowDays: 14,
+		"description":                             "aws production",
+		awssecretsmanager.ConfigKeyRegion:         "eu-central-1",
+		awssecretsmanager.ConfigKeyEndpointURL:    "http://localhost:4566",
+		awssecretsmanager.ConfigKeyEndpointPolicy: awssecretsmanager.EndpointPolicyLocal,
+		awssecretsmanager.ConfigKeyAuthMode:       awssecretsmanager.AuthModeAssumeRole,
+		awssecretsmanager.ConfigKeyRoleARN:        "arn:aws:iam::123456789012:role/openbao-plugin-secrets-sync",
+		awssecretsmanager.ConfigKeyExternalID:     "tenant-1",
+		awssecretsmanager.ConfigKeySessionName:    "openbao-sync",
 	})
 	if writeResp != nil && writeResp.IsError() {
 		t.Fatalf("unexpected destination write error: %v", writeResp.Error())
@@ -351,6 +352,237 @@ func TestAWSDestinationConfigLifecycle(t *testing.T) {
 	validateResp := env.update("destinations/aws-sm/prod/validate")
 	assertNoErrorResponse(t, validateResp)
 	assertResponseValue(t, validateResp, "valid", true)
+}
+
+func TestDestinationPartialUpdatePreservesDescriptionAndDisabledState(t *testing.T) {
+	env := newBackendTestEnv(t)
+
+	writeResp := env.update("destinations/aws-sm/prod", map[string]interface{}{
+		"description":                                  "disabled production destination",
+		"disabled":                                     true,
+		awssecretsmanager.ConfigKeyAuthMode:            awssecretsmanager.AuthModeAssumeRole,
+		awssecretsmanager.ConfigKeyRoleARN:             "arn:aws:iam::123456789012:role/openbao-plugin-secrets-sync",
+		awssecretsmanager.ConfigKeyExternalID:          "tenant-old",
+		awssecretsmanager.ConfigKeySessionName:         "openbao-sync",
+		awssecretsmanager.ConfigKeyEndpointPolicy:      awssecretsmanager.EndpointPolicyLocal,
+		awssecretsmanager.ConfigKeyEndpointURL:         "http://localhost:4566",
+		awssecretsmanager.ConfigKeyRegion:              "eu-central-1",
+		awssecretsmanager.ConfigKeyValueDriftDetection: false,
+	})
+	if writeResp != nil && writeResp.IsError() {
+		t.Fatalf("initial destination write: %v", writeResp.Error())
+	}
+
+	updateResp := env.update("destinations/aws-sm/prod", map[string]interface{}{
+		awssecretsmanager.ConfigKeyExternalID: "tenant-new",
+	})
+	if updateResp != nil && updateResp.IsError() {
+		t.Fatalf("partial destination update: %v", updateResp.Error())
+	}
+	readResp := env.read("destinations/aws-sm/prod")
+	assertNoErrorResponse(t, readResp)
+	if got := readResp.Data["description"]; got != "disabled production destination" {
+		t.Fatalf("description after partial update = %v, want preserved value", got)
+	}
+	if got := readResp.Data["disabled"]; got != true {
+		t.Fatalf("disabled after partial update = %v, want true", got)
+	}
+	sensitive, err := getDestinationSensitiveConfig(
+		context.Background(),
+		env.storage,
+		awssecretsmanager.ProviderType,
+		"prod",
+	)
+	if err != nil {
+		t.Fatalf("read updated sensitive config: %v", err)
+	}
+	if got := sensitive.Config[awssecretsmanager.ConfigKeyExternalID]; got != "tenant-new" {
+		t.Fatalf("external_id after partial update = %q, want tenant-new", got)
+	}
+
+	enableResp := env.update("destinations/aws-sm/prod", map[string]interface{}{"disabled": false})
+	if enableResp != nil && enableResp.IsError() {
+		t.Fatalf("explicit destination enable: %v", enableResp.Error())
+	}
+	readResp = env.read("destinations/aws-sm/prod")
+	assertNoErrorResponse(t, readResp)
+	if got := readResp.Data["disabled"]; got != false {
+		t.Fatalf("disabled after explicit update = %v, want false", got)
+	}
+}
+
+func TestDestinationWritePublishesSensitiveConfigWithPublicRecord(t *testing.T) {
+	env := newBackendTestEnv(t)
+	createAWSTestDestination(t, env, "tenant-old")
+	existing, err := getDestination(context.Background(), env.storage, awssecretsmanager.ProviderType, "prod")
+	if err != nil {
+		t.Fatalf("read existing destination: %v", err)
+	}
+	previousSensitiveVersion := existing.SensitiveConfigVersion
+	failingStorage := failPutStorage{
+		Storage: env.storage,
+		failKey: destinationStorageKey(awssecretsmanager.ProviderType, "prod"),
+	}
+
+	resp, err := env.b.HandleRequest(context.Background(), &logical.Request{
+		Operation: logical.UpdateOperation,
+		Path:      "destinations/aws-sm/prod",
+		Storage:   failingStorage,
+		Data: map[string]interface{}{
+			awssecretsmanager.ConfigKeyExternalID: "tenant-new",
+		},
+	})
+	if !errors.Is(err, errInjectedStoragePut) {
+		t.Fatalf("destination update error = %v, want injected public-record failure", err)
+	}
+	if resp != nil {
+		t.Fatalf("destination update response = %#v, want nil", resp)
+	}
+	stored, err := getDestination(context.Background(), env.storage, awssecretsmanager.ProviderType, "prod")
+	if err != nil {
+		t.Fatalf("read destination after failed update: %v", err)
+	}
+	if got := stored.SensitiveConfigVersion; got != previousSensitiveVersion {
+		t.Fatalf("sensitive config version after failed update = %q, want %q", got, previousSensitiveVersion)
+	}
+	sensitive, err := getDestinationSensitiveConfig(
+		context.Background(),
+		env.storage,
+		awssecretsmanager.ProviderType,
+		"prod",
+	)
+	if err != nil {
+		t.Fatalf("read sensitive config after failed update: %v", err)
+	}
+	if got := sensitive.Config[awssecretsmanager.ConfigKeyExternalID]; got != "tenant-old" {
+		t.Fatalf("active external_id after failed update = %q, want tenant-old", got)
+	}
+	versions, err := env.storage.List(
+		context.Background(),
+		destinationSensitiveVersionStoragePrefix(awssecretsmanager.ProviderType, "prod"),
+	)
+	if err != nil {
+		t.Fatalf("list sensitive config versions: %v", err)
+	}
+	if len(versions) != 1 || versions[0] != previousSensitiveVersion {
+		t.Fatalf("sensitive config versions after failed update = %v, want [%s]", versions, previousSensitiveVersion)
+	}
+}
+
+func TestDestinationCreateIgnoresOrphanedSensitiveConfig(t *testing.T) {
+	env := newBackendTestEnv(t)
+	now := nowUTC().Format(timeFormatRFC3339)
+	if err := putDestinationSensitiveConfig(context.Background(), env.storage, "", destinationSensitiveRecord{
+		Type:        awssecretsmanager.ProviderType,
+		Name:        "prod",
+		Config:      map[string]string{awssecretsmanager.ConfigKeyExternalID: "orphaned-tenant"},
+		CreatedTime: now,
+		UpdatedTime: now,
+	}); err != nil {
+		t.Fatalf("write orphaned sensitive config: %v", err)
+	}
+	if sensitive, err := getDestinationSensitiveConfig(
+		context.Background(),
+		env.storage,
+		awssecretsmanager.ProviderType,
+		"prod",
+	); err != nil {
+		t.Fatalf("read orphaned sensitive config: %v", err)
+	} else if sensitive != nil {
+		t.Fatalf("orphaned sensitive config = %#v, want inaccessible", sensitive)
+	}
+
+	createAWSTestDestination(t, env, "")
+	sensitive, err := getDestinationSensitiveConfig(
+		context.Background(),
+		env.storage,
+		awssecretsmanager.ProviderType,
+		"prod",
+	)
+	if err != nil {
+		t.Fatalf("read recreated destination sensitive config: %v", err)
+	}
+	if sensitive != nil {
+		t.Fatalf("recreated destination inherited sensitive config: %#v", sensitive)
+	}
+}
+
+func TestDestinationDeleteFailureLeavesSensitiveConfigInaccessible(t *testing.T) {
+	env := newBackendTestEnv(t)
+	createAWSTestDestination(t, env, "tenant-old")
+	existing, err := getDestination(context.Background(), env.storage, awssecretsmanager.ProviderType, "prod")
+	if err != nil {
+		t.Fatalf("read existing destination: %v", err)
+	}
+	failingStorage := failDeleteStorage{
+		Storage: env.storage,
+		failKey: destinationSensitiveVersionStorageKey(
+			awssecretsmanager.ProviderType,
+			"prod",
+			existing.SensitiveConfigVersion,
+		),
+	}
+
+	resp, err := env.b.HandleRequest(context.Background(), &logical.Request{
+		Operation: logical.DeleteOperation,
+		Path:      "destinations/aws-sm/prod",
+		Storage:   failingStorage,
+	})
+	if !errors.Is(err, errInjectedStorageDelete) {
+		t.Fatalf("destination delete error = %v, want injected sensitive cleanup failure", err)
+	}
+	if resp != nil {
+		t.Fatalf("destination delete response = %#v, want nil", resp)
+	}
+	stored, err := getDestination(
+		context.Background(),
+		env.storage,
+		awssecretsmanager.ProviderType,
+		"prod",
+	)
+	if err != nil {
+		t.Fatalf("read deleted destination: %v", err)
+	} else if stored != nil {
+		t.Fatalf("destination after cleanup failure = %#v, want deleted", stored)
+	}
+	if sensitive, err := getDestinationSensitiveConfig(
+		context.Background(),
+		env.storage,
+		awssecretsmanager.ProviderType,
+		"prod",
+	); err != nil {
+		t.Fatalf("read sensitive config after cleanup failure: %v", err)
+	} else if sensitive != nil {
+		t.Fatalf("sensitive config after public delete = %#v, want inaccessible", sensitive)
+	}
+
+	createAWSTestDestination(t, env, "")
+	if sensitive, err := getDestinationSensitiveConfig(
+		context.Background(),
+		env.storage,
+		awssecretsmanager.ProviderType,
+		"prod",
+	); err != nil {
+		t.Fatalf("read recreated destination: %v", err)
+	} else if sensitive != nil {
+		t.Fatalf("recreated destination inherited failed-delete config: %#v", sensitive)
+	}
+}
+
+func createAWSTestDestination(t *testing.T, env *backendTestEnv, externalID string) {
+	t.Helper()
+	data := map[string]interface{}{
+		awssecretsmanager.ConfigKeyAuthMode:    awssecretsmanager.AuthModeAssumeRole,
+		awssecretsmanager.ConfigKeyRoleARN:     "arn:aws:iam::123456789012:role/openbao-plugin-secrets-sync",
+		awssecretsmanager.ConfigKeySessionName: "openbao-sync",
+	}
+	if externalID != "" {
+		data[awssecretsmanager.ConfigKeyExternalID] = externalID
+	}
+	resp := env.update("destinations/aws-sm/prod", data)
+	if resp != nil && resp.IsError() {
+		t.Fatalf("write AWS test destination: %v", resp.Error())
+	}
 }
 
 func TestAWSWebIdentityDestinationConfigLifecycle(t *testing.T) {
@@ -542,12 +774,6 @@ func TestGitLabDestinationConfigLifecycle(t *testing.T) {
 		"description":                       "gitlab production",
 		gitlab.ConfigKeyBaseURL:             "https://gitlab.example.com",
 		gitlab.ConfigKeyProjectID:           "platform/app",
-		gitlab.ConfigKeyEnvironmentScope:    "production",
-		gitlab.ConfigKeyProtected:           true,
-		gitlab.ConfigKeyMasked:              false,
-		gitlab.ConfigKeyHidden:              false,
-		gitlab.ConfigKeyVariableRaw:         true,
-		gitlab.ConfigKeyVariableType:        gitlab.VariableTypeEnvVar,
 		gitlab.ConfigKeyAllowInsecureHTTP:   true,
 		gitlab.ConfigKeyAllowPrivateNetwork: true,
 		gitlab.ConfigKeyToken:               "glpat-secret",
@@ -604,6 +830,22 @@ func TestGitLabDestinationConfigLifecycle(t *testing.T) {
 	capabilities := validateResp.Data["capabilities"].(map[string]interface{})
 	if got := capabilities["supports_secret_key"]; got != true {
 		t.Fatalf("gitlab supports_secret_key = %v, want true", got)
+	}
+}
+
+func TestGitLabDestinationRejectsAssociationConfig(t *testing.T) {
+	env := newBackendTestEnv(t)
+
+	resp := env.update("destinations/gitlab/prod", map[string]interface{}{
+		gitlab.ConfigKeyProjectID:        "platform/app",
+		gitlab.ConfigKeyToken:            "glpat-secret",
+		gitlab.ConfigKeyEnvironmentScope: "production",
+	})
+	if resp == nil || !resp.IsError() {
+		t.Fatalf("GitLab destination association config response = %#v, want error", resp)
+	}
+	if !strings.Contains(resp.Error().Error(), gitlab.ConfigKeyEnvironmentScope) {
+		t.Fatalf("GitLab destination error = %q, want field name", resp.Error().Error())
 	}
 }
 

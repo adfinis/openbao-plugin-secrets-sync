@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/netip"
 	"net/url"
 	"strconv"
 	"strings"
@@ -75,10 +76,10 @@ var providerHelpers = providerutil.New(ProviderType)
 
 type projectVariableClient interface {
 	GetProject(context.Context, gitlabDestinationOptions) error
-	GetVariable(context.Context, gitlabDestinationOptions, string) (*gitlabVariable, error)
-	CreateVariable(context.Context, gitlabDestinationOptions, gitlabVariableInput) (*gitlabVariable, error)
-	UpdateVariable(context.Context, gitlabDestinationOptions, string, gitlabVariableInput) (*gitlabVariable, error)
-	DeleteVariable(context.Context, gitlabDestinationOptions, string) error
+	GetVariable(context.Context, gitlabVariableOptions, string) (*gitlabVariable, error)
+	CreateVariable(context.Context, gitlabVariableOptions, gitlabVariableInput) (*gitlabVariable, error)
+	UpdateVariable(context.Context, gitlabVariableOptions, string, gitlabVariableInput) (*gitlabVariable, error)
+	DeleteVariable(context.Context, gitlabVariableOptions, string) error
 }
 
 type clientFactory func(context.Context, providers.DestinationConfig) (projectVariableClient, error)
@@ -124,6 +125,21 @@ func (Provider) ValidateConfig(_ context.Context, cfg providers.DestinationConfi
 	return err
 }
 
+func (Provider) NormalizeAssociationConfig(
+	_ context.Context,
+	_ providers.DestinationConfig,
+	cfg providers.AssociationConfig,
+) (providers.AssociationConfig, error) {
+	options, err := gitlabAssociationOptionsFromConfig(cfg)
+	if err != nil {
+		return providers.AssociationConfig{}, err
+	}
+	return providers.AssociationConfig{
+		Config:   options.config(),
+		Identity: options.environmentScope,
+	}, nil
+}
+
 func (p Provider) OpenDestination(
 	ctx context.Context,
 	cfg providers.DestinationConfig,
@@ -154,9 +170,13 @@ func (r destinationRuntime) Plan(ctx context.Context, req providers.PlanRequest)
 	if err := validateVariableKey(req.ResolvedName); err != nil {
 		return providerHelpers.BlockedPlan(providers.ErrorClassValidation), nil
 	}
-	variable, err := r.client.GetVariable(ctx, r.options, req.ResolvedName)
+	options, err := r.variableOptions(req.Association)
+	if err != nil {
+		return blockedValidationPlan(err.Error()), nil
+	}
+	variable, err := r.client.GetVariable(ctx, options, req.ResolvedName)
 	if isGitLabNotFound(err) {
-		if err := validateMaskedPayloadForPlan(r.options, req); err != nil {
+		if err := validateMaskedPayloadForPlan(options.association, req); err != nil {
 			return blockedValidationPlan(err.Error()), nil
 		}
 		return &providers.PlanResult{Action: providers.PlanActionCreate}, nil
@@ -179,15 +199,15 @@ func (r destinationRuntime) Plan(ctx context.Context, req providers.PlanRequest)
 			Message:    "gitlab variable has newer managed source version",
 		}, nil
 	}
-	if err := validateHiddenUpdate(r.options, variable); err != nil {
+	if err := validateHiddenUpdate(options.association, variable); err != nil {
 		return blockedValidationPlan(err.Error()), nil
 	}
-	if err := validateMaskedPayloadForPlan(r.options, req); err != nil {
+	if err := validateMaskedPayloadForPlan(options.association, req); err != nil {
 		return blockedValidationPlan(err.Error()), nil
 	}
 	if metadata.PayloadSHA256 == req.PayloadSHA256 &&
 		variablePayloadSHA256(variable) == req.PayloadSHA256 &&
-		variableMatchesDestinationOptions(variable, r.options) &&
+		variableMatchesAssociationOptions(variable, options.association) &&
 		variable.Description == variableDescriptionFromPlan(req) {
 		return &providers.PlanResult{Action: providers.PlanActionNoop}, nil
 	}
@@ -201,13 +221,17 @@ func (r destinationRuntime) Upsert(ctx context.Context, req providers.UpsertRequ
 	if len(req.Payload) > variableValueMaxBytes {
 		return nil, providerHelpers.ProviderError(providers.ErrorClassCapacity)
 	}
-	input := variableInputFromUpsert(r.options, req)
-	variable, err := r.client.GetVariable(ctx, r.options, req.ResolvedName)
+	options, err := r.variableOptions(req.Association)
+	if err != nil {
+		return nil, err
+	}
+	input := variableInputFromUpsert(options.association, req)
+	variable, err := r.client.GetVariable(ctx, options, req.ResolvedName)
 	if isGitLabNotFound(err) {
-		if err := validateMaskedPayloadForUpsert(r.options, req); err != nil {
+		if err := validateMaskedPayloadForUpsert(options.association, req); err != nil {
 			return nil, err
 		}
-		created, createErr := r.client.CreateVariable(ctx, r.options, input)
+		created, createErr := r.client.CreateVariable(ctx, options, input)
 		if createErr != nil {
 			return nil, providerHelpers.ProviderError(classifyGitLabError(createErr))
 		}
@@ -223,16 +247,16 @@ func (r destinationRuntime) Upsert(ctx context.Context, req providers.UpsertRequ
 	if remoteSourceVersionNewer(metadata, req.SourceVersion) {
 		return nil, providerHelpers.ProviderError(providers.ErrorClassDrift)
 	}
-	if err := validateHiddenUpdate(r.options, variable); err != nil {
+	if err := validateHiddenUpdate(options.association, variable); err != nil {
 		return nil, err
 	}
-	if err := validateMaskedPayloadForUpsert(r.options, req); err != nil {
+	if err := validateMaskedPayloadForUpsert(options.association, req); err != nil {
 		return nil, err
 	}
 	if metadata.PayloadSHA256 == req.PayloadSHA256 && variableMatchesInput(variable, input) {
 		return &providers.SyncResult{RemoteVersion: remoteVersion(variable)}, nil
 	}
-	updated, err := r.client.UpdateVariable(ctx, r.options, req.ResolvedName, input)
+	updated, err := r.client.UpdateVariable(ctx, options, req.ResolvedName, input)
 	if err != nil {
 		return nil, providerHelpers.ProviderError(classifyGitLabError(err))
 	}
@@ -243,7 +267,11 @@ func (r destinationRuntime) Delete(ctx context.Context, req providers.DeleteRequ
 	if err := validateVariableKey(req.ResolvedName); err != nil {
 		return nil, err
 	}
-	variable, err := r.client.GetVariable(ctx, r.options, req.ResolvedName)
+	options, err := r.variableOptions(req.Association)
+	if err != nil {
+		return nil, err
+	}
+	variable, err := r.client.GetVariable(ctx, options, req.ResolvedName)
 	if isGitLabNotFound(err) {
 		return &providers.SyncResult{RemoteVersion: "missing"}, nil
 	}
@@ -257,7 +285,7 @@ func (r destinationRuntime) Delete(ctx context.Context, req providers.DeleteRequ
 	if remoteSourceVersionNewer(metadata, req.SourceVersion) {
 		return nil, providerHelpers.ProviderError(providers.ErrorClassDrift)
 	}
-	if err := r.client.DeleteVariable(ctx, r.options, req.ResolvedName); err != nil {
+	if err := r.client.DeleteVariable(ctx, options, req.ResolvedName); err != nil {
 		return nil, providerHelpers.ProviderError(classifyGitLabError(err))
 	}
 	return &providers.SyncResult{RemoteVersion: remoteVersion(variable)}, nil
@@ -270,7 +298,11 @@ func (r destinationRuntime) ReadState(
 	if err := validateVariableKey(req.ResolvedName); err != nil {
 		return nil, err
 	}
-	variable, err := r.client.GetVariable(ctx, r.options, req.ResolvedName)
+	options, err := r.variableOptions(req.Association)
+	if err != nil {
+		return nil, err
+	}
+	variable, err := r.client.GetVariable(ctx, options, req.ResolvedName)
 	if isGitLabNotFound(err) {
 		return &providers.RemoteState{Exists: false}, nil
 	}
@@ -287,6 +319,14 @@ func (r destinationRuntime) ReadState(
 		RemoteVersion:  remoteVersion(variable),
 		Verification:   providers.RemoteStateVerificationValue,
 	}, nil
+}
+
+func (r destinationRuntime) variableOptions(cfg providers.AssociationConfig) (gitlabVariableOptions, error) {
+	association, err := gitlabAssociationOptionsFromConfig(cfg)
+	if err != nil {
+		return gitlabVariableOptions{}, err
+	}
+	return gitlabVariableOptions{destination: r.options, association: association}, nil
 }
 
 func (destinationRuntime) Close(context.Context) error {
@@ -327,7 +367,7 @@ func defaultClientFactoryWithResolver(
 	if err := validateBaseURLResolution(ctx, options, resolver); err != nil {
 		return nil, err
 	}
-	return httpProjectVariableClient{client: defaultGitLabHTTPClient()}, nil
+	return httpProjectVariableClient{client: gitLabHTTPClientForOptions(options, resolver)}, nil
 }
 
 func defaultGitLabHTTPClient() *http.Client {
@@ -345,45 +385,64 @@ func defaultGitLabHTTPClient() *http.Client {
 	}
 }
 
+func gitLabHTTPClientForOptions(options gitlabDestinationOptions, resolver endpointguard.Resolver) *http.Client {
+	client := defaultGitLabHTTPClient()
+	if options.allowPrivateNet {
+		return client
+	}
+	transport, ok := client.Transport.(*http.Transport)
+	if !ok {
+		return client
+	}
+	transport.DialContext = endpointguard.GuardedDialContext(
+		resolver,
+		func(addr netip.Addr) bool { return !endpointguard.IsRestrictedAddr(addr) },
+	)
+	return client
+}
+
 type gitlabDestinationOptions struct {
 	baseURL           string
 	projectID         string
-	environmentScope  string
-	protected         bool
-	masked            bool
-	hidden            bool
-	variableRaw       bool
-	variableType      string
 	allowInsecureHTTP bool
 	allowPrivateNet   bool
 	token             string
 }
 
+type gitlabAssociationOptions struct {
+	environmentScope string
+	protected        bool
+	masked           bool
+	hidden           bool
+	variableRaw      bool
+	variableType     string
+}
+
+type gitlabVariableOptions struct {
+	destination gitlabDestinationOptions
+	association gitlabAssociationOptions
+}
+
 func gitlabDestinationOptionsFromConfig(cfg providers.DestinationConfig) (gitlabDestinationOptions, error) {
+	for key := range cfg.Config {
+		switch key {
+		case ConfigKeyBaseURL,
+			ConfigKeyProjectID,
+			ConfigKeyAllowInsecureHTTP,
+			ConfigKeyAllowPrivateNetwork,
+			ConfigKeyToken:
+		default:
+			return gitlabDestinationOptions{}, providerHelpers.ValidationError(
+				fmt.Sprintf("gitlab destination configuration does not support %s", key),
+			)
+		}
+	}
 	options := gitlabDestinationOptions{
-		baseURL:          stringDefault(providerHelpers.ConfigValue(cfg, ConfigKeyBaseURL), defaultBaseURL),
-		projectID:        providerHelpers.ConfigValue(cfg, ConfigKeyProjectID),
-		environmentScope: stringDefault(providerHelpers.ConfigValue(cfg, ConfigKeyEnvironmentScope), defaultEnvironmentScope),
-		variableRaw:      true,
-		variableType:     stringDefault(providerHelpers.ConfigValue(cfg, ConfigKeyVariableType), defaultVariableType),
-		token:            providerHelpers.ConfigValue(cfg, ConfigKeyToken),
+		baseURL:   stringDefault(providerHelpers.ConfigValue(cfg, ConfigKeyBaseURL), defaultBaseURL),
+		projectID: providerHelpers.ConfigValue(cfg, ConfigKeyProjectID),
+		token:     providerHelpers.ConfigValue(cfg, ConfigKeyToken),
 	}
 	var err error
-	if options.protected, err = providerHelpers.BoolConfigValue(cfg, ConfigKeyProtected, false); err != nil {
-		return gitlabDestinationOptions{}, err
-	}
-	if options.masked, err = providerHelpers.BoolConfigValue(cfg, ConfigKeyMasked, false); err != nil {
-		return gitlabDestinationOptions{}, err
-	}
-	if options.hidden, err = providerHelpers.BoolConfigValue(cfg, ConfigKeyHidden, false); err != nil {
-		return gitlabDestinationOptions{}, err
-	}
-	if options.hidden {
-		options.masked = true
-	}
-	if options.variableRaw, err = providerHelpers.BoolConfigValue(cfg, ConfigKeyVariableRaw, true); err != nil {
-		return gitlabDestinationOptions{}, err
-	}
 	if options.allowInsecureHTTP, err = providerHelpers.BoolConfigValue(
 		cfg,
 		ConfigKeyAllowInsecureHTTP,
@@ -407,13 +466,66 @@ func gitlabDestinationOptionsFromConfig(cfg providers.DestinationConfig) (gitlab
 	if options.token == "" {
 		return gitlabDestinationOptions{}, providerHelpers.ValidationError("gitlab token must not be empty")
 	}
+	return options, nil
+}
+
+func gitlabAssociationOptionsFromConfig(
+	cfg providers.AssociationConfig,
+) (gitlabAssociationOptions, error) {
+	for key := range cfg.Config {
+		switch key {
+		case ConfigKeyEnvironmentScope,
+			ConfigKeyProtected,
+			ConfigKeyMasked,
+			ConfigKeyHidden,
+			ConfigKeyVariableRaw,
+			ConfigKeyVariableType:
+		default:
+			return gitlabAssociationOptions{}, providerHelpers.ValidationError(
+				fmt.Sprintf("gitlab association configuration does not support %s", key),
+			)
+		}
+	}
+	options := gitlabAssociationOptions{
+		environmentScope: stringDefault(strings.TrimSpace(cfg.Config[ConfigKeyEnvironmentScope]), defaultEnvironmentScope),
+		variableRaw:      true,
+		variableType:     stringDefault(strings.TrimSpace(cfg.Config[ConfigKeyVariableType]), defaultVariableType),
+	}
+	boolConfig := providers.DestinationConfig{Config: cfg.Config}
+	var err error
+	if options.protected, err = providerHelpers.BoolConfigValue(boolConfig, ConfigKeyProtected, false); err != nil {
+		return gitlabAssociationOptions{}, err
+	}
+	if options.masked, err = providerHelpers.BoolConfigValue(boolConfig, ConfigKeyMasked, false); err != nil {
+		return gitlabAssociationOptions{}, err
+	}
+	if options.hidden, err = providerHelpers.BoolConfigValue(boolConfig, ConfigKeyHidden, false); err != nil {
+		return gitlabAssociationOptions{}, err
+	}
+	if options.hidden {
+		options.masked = true
+	}
+	if options.variableRaw, err = providerHelpers.BoolConfigValue(boolConfig, ConfigKeyVariableRaw, true); err != nil {
+		return gitlabAssociationOptions{}, err
+	}
 	if options.environmentScope == "" {
-		return gitlabDestinationOptions{}, providerHelpers.ValidationError("gitlab environment_scope must not be empty")
+		return gitlabAssociationOptions{}, providerHelpers.ValidationError("gitlab environment_scope must not be empty")
 	}
 	if options.variableType != VariableTypeEnvVar && options.variableType != VariableTypeFile {
-		return gitlabDestinationOptions{}, providerHelpers.ValidationError("gitlab variable_type must be env_var or file")
+		return gitlabAssociationOptions{}, providerHelpers.ValidationError("gitlab variable_type must be env_var or file")
 	}
 	return options, nil
+}
+
+func (options gitlabAssociationOptions) config() map[string]string {
+	return map[string]string{
+		ConfigKeyEnvironmentScope: options.environmentScope,
+		ConfigKeyProtected:        strconv.FormatBool(options.protected),
+		ConfigKeyMasked:           strconv.FormatBool(options.masked),
+		ConfigKeyHidden:           strconv.FormatBool(options.hidden),
+		ConfigKeyVariableRaw:      strconv.FormatBool(options.variableRaw),
+		ConfigKeyVariableType:     options.variableType,
+	}
 }
 
 func stringDefault(value string, fallback string) string {
@@ -515,7 +627,7 @@ func validateVariableKey(key string) error {
 	return nil
 }
 
-func validateMaskedPayloadForPlan(options gitlabDestinationOptions, req providers.PlanRequest) error {
+func validateMaskedPayloadForPlan(options gitlabAssociationOptions, req providers.PlanRequest) error {
 	if !options.masked {
 		return nil
 	}
@@ -528,7 +640,7 @@ func validateMaskedPayloadForPlan(options gitlabDestinationOptions, req provider
 	return nil
 }
 
-func validateMaskedPayloadForUpsert(options gitlabDestinationOptions, req providers.UpsertRequest) error {
+func validateMaskedPayloadForUpsert(options gitlabAssociationOptions, req providers.UpsertRequest) error {
 	if !options.masked {
 		return nil
 	}
@@ -571,14 +683,14 @@ func invalidExpandedMaskedVariableChar(char rune) bool {
 	}
 }
 
-func validateHiddenUpdate(options gitlabDestinationOptions, variable *gitlabVariable) error {
+func validateHiddenUpdate(options gitlabAssociationOptions, variable *gitlabVariable) error {
 	if options.hidden && !variable.Hidden {
 		return providerHelpers.ValidationError("gitlab hidden variables can only be hidden when they are created")
 	}
 	return nil
 }
 
-func variableMatchesDestinationOptions(variable *gitlabVariable, options gitlabDestinationOptions) bool {
+func variableMatchesAssociationOptions(variable *gitlabVariable, options gitlabAssociationOptions) bool {
 	return variable.Protected == options.protected &&
 		variable.Masked == options.masked &&
 		variable.VariableRaw == options.variableRaw &&
@@ -609,7 +721,7 @@ type variableMetadata struct {
 	PayloadFormat        string
 }
 
-func variableInputFromUpsert(options gitlabDestinationOptions, req providers.UpsertRequest) gitlabVariableInput {
+func variableInputFromUpsert(options gitlabAssociationOptions, req providers.UpsertRequest) gitlabVariableInput {
 	metadata := variableMetadata{
 		AssociationID:    req.AssociationID,
 		SourcePath:       req.SourcePath,
@@ -1105,11 +1217,18 @@ func (c httpProjectVariableClient) GetProject(ctx context.Context, options gitla
 
 func (c httpProjectVariableClient) GetVariable(
 	ctx context.Context,
-	options gitlabDestinationOptions,
+	options gitlabVariableOptions,
 	key string,
 ) (*gitlabVariable, error) {
 	query := environmentScopeQuery(options)
-	req, err := c.newRequest(ctx, options, http.MethodGet, variablePath(options.projectID, key), query, nil)
+	req, err := c.newRequest(
+		ctx,
+		options.destination,
+		http.MethodGet,
+		variablePath(options.destination.projectID, key),
+		query,
+		nil,
+	)
 	if err != nil {
 		return nil, err
 	}
@@ -1122,10 +1241,17 @@ func (c httpProjectVariableClient) GetVariable(
 
 func (c httpProjectVariableClient) CreateVariable(
 	ctx context.Context,
-	options gitlabDestinationOptions,
+	options gitlabVariableOptions,
 	input gitlabVariableInput,
 ) (*gitlabVariable, error) {
-	req, err := c.newRequest(ctx, options, http.MethodPost, variablesPath(options.projectID), nil, input.createForm())
+	req, err := c.newRequest(
+		ctx,
+		options.destination,
+		http.MethodPost,
+		variablesPath(options.destination.projectID),
+		nil,
+		input.createForm(),
+	)
 	if err != nil {
 		return nil, err
 	}
@@ -1138,15 +1264,15 @@ func (c httpProjectVariableClient) CreateVariable(
 
 func (c httpProjectVariableClient) UpdateVariable(
 	ctx context.Context,
-	options gitlabDestinationOptions,
+	options gitlabVariableOptions,
 	key string,
 	input gitlabVariableInput,
 ) (*gitlabVariable, error) {
 	req, err := c.newRequest(
 		ctx,
-		options,
+		options.destination,
 		http.MethodPut,
-		variablePath(options.projectID, key),
+		variablePath(options.destination.projectID, key),
 		environmentScopeQuery(options),
 		input.updateForm(),
 	)
@@ -1162,14 +1288,14 @@ func (c httpProjectVariableClient) UpdateVariable(
 
 func (c httpProjectVariableClient) DeleteVariable(
 	ctx context.Context,
-	options gitlabDestinationOptions,
+	options gitlabVariableOptions,
 	key string,
 ) error {
 	req, err := c.newRequest(
 		ctx,
-		options,
+		options.destination,
 		http.MethodDelete,
-		variablePath(options.projectID, key),
+		variablePath(options.destination.projectID, key),
 		environmentScopeQuery(options),
 		nil,
 	)
@@ -1276,9 +1402,9 @@ func variablePath(projectID string, key string) string {
 	return variablesPath(projectID) + "/" + url.PathEscape(key)
 }
 
-func environmentScopeQuery(options gitlabDestinationOptions) url.Values {
+func environmentScopeQuery(options gitlabVariableOptions) url.Values {
 	query := url.Values{}
-	query.Set("filter[environment_scope]", options.environmentScope)
+	query.Set("filter[environment_scope]", options.association.environmentScope)
 	return query
 }
 

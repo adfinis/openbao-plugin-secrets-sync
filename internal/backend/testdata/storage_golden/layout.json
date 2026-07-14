@@ -76,6 +76,7 @@
       "description": "test destination",
       "disabled": false,
       "name": "default",
+      "sensitive_config_version": "none",
       "type": "fake",
       "updated_time": "<timestamp>"
     }

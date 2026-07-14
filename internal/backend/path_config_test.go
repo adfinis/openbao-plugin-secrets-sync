@@ -3,7 +3,9 @@ package backend
 import (
 	"context"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/openbao/openbao/sdk/v2/logical"
 )
@@ -146,6 +148,76 @@ func TestConfigWriteMergesDefaultsAndValidatesQueueCapacity(t *testing.T) {
 	if negativeResp == nil || !negativeResp.IsError() {
 		t.Fatalf("negative queue_capacity response = %#v, want error", negativeResp)
 	}
+}
+
+func TestConcurrentConfigWritesPreservePartialUpdates(t *testing.T) {
+	env := newBackendTestEnv(t)
+	env.read(configPath)
+	storage := delayedConfigReadStorage{
+		Storage: env.storage,
+		delay:   25 * time.Millisecond,
+	}
+	requests := []*logical.Request{
+		{
+			Operation: logical.UpdateOperation,
+			Path:      configPath,
+			Storage:   storage,
+			Data:      map[string]interface{}{"disabled": true},
+		},
+		{
+			Operation: logical.UpdateOperation,
+			Path:      configPath,
+			Storage:   storage,
+			Data:      map[string]interface{}{"queue_capacity": 17},
+		},
+	}
+	start := make(chan struct{})
+	results := make(chan error, len(requests))
+	var ready sync.WaitGroup
+	ready.Add(len(requests))
+	for _, req := range requests {
+		go func() {
+			ready.Done()
+			<-start
+			resp, err := env.b.Backend.HandleRequest(context.Background(), req)
+			if err == nil && resp != nil && resp.IsError() {
+				err = resp.Error()
+			}
+			results <- err
+		}()
+	}
+	ready.Wait()
+	close(start)
+	for range requests {
+		if err := <-results; err != nil {
+			t.Fatalf("concurrent config write: %v", err)
+		}
+	}
+
+	cfg, err := readGlobalConfig(context.Background(), env.storage)
+	if err != nil {
+		t.Fatalf("read config after concurrent writes: %v", err)
+	}
+	if !cfg.Disabled {
+		t.Fatal("concurrent config write lost disabled=true")
+	}
+	if got := cfg.QueueCapacity; got != 17 {
+		t.Fatalf("queue_capacity after concurrent writes = %d, want 17", got)
+	}
+}
+
+type delayedConfigReadStorage struct {
+	logical.Storage
+
+	delay time.Duration
+}
+
+func (storage delayedConfigReadStorage) Get(ctx context.Context, key string) (*logical.StorageEntry, error) {
+	entry, err := storage.Storage.Get(ctx, key)
+	if err == nil && key == configPath {
+		time.Sleep(storage.delay)
+	}
+	return entry, err
 }
 
 func TestConfigWriteRejectsUnknownFields(t *testing.T) {

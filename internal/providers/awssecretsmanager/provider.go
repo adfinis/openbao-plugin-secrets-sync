@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/netip"
 	"net/url"
@@ -46,7 +47,7 @@ const (
 	ConfigKeySessionName = "session_name"
 	// ConfigKeyWebIdentityTokenFile configures the projected OIDC token file for web-identity auth.
 	ConfigKeyWebIdentityTokenFile = "web_identity_token_file"
-	// ConfigKeyDeleteRecoveryWindowDays configures AWS Secrets Manager scheduled-delete recovery days.
+	// ConfigKeyDeleteRecoveryWindowDays configures AWS Secrets Manager scheduled-delete recovery days per association.
 	ConfigKeyDeleteRecoveryWindowDays = "delete_recovery_window_days"
 	// ConfigKeyValueDriftDetection opts in to GetSecretValue-based drift checks.
 	ConfigKeyValueDriftDetection = "value_drift_detection"
@@ -171,6 +172,18 @@ func (Provider) ValidateConfig(_ context.Context, cfg providers.DestinationConfi
 	return nil
 }
 
+func (Provider) NormalizeAssociationConfig(
+	_ context.Context,
+	_ providers.DestinationConfig,
+	cfg providers.AssociationConfig,
+) (providers.AssociationConfig, error) {
+	options, err := awsAssociationOptionsFromConfig(cfg)
+	if err != nil {
+		return providers.AssociationConfig{}, err
+	}
+	return providers.AssociationConfig{Config: options.config()}, nil
+}
+
 func (p Provider) OpenDestination(
 	ctx context.Context,
 	cfg providers.DestinationConfig,
@@ -234,7 +247,14 @@ func (r destinationRuntime) Plan(ctx context.Context, req providers.PlanRequest)
 			Message: "aws-sm secret is scheduled for deletion and will be restored before upsert",
 		}, nil
 	}
-	payloadMatches, err := r.payloadMatchesRequest(ctx, describe.Tags, req.ResolvedName, req.PayloadSHA256)
+	secretID := req.ResolvedName
+	if r.options.valueDriftDetection {
+		secretID, err = describedSecretID(describe)
+		if err != nil {
+			return providerHelpers.BlockedPlan(providers.ErrorClassInternal), nil
+		}
+	}
+	payloadMatches, err := r.payloadMatchesRequest(ctx, describe.Tags, secretID, req.PayloadSHA256)
 	if err != nil {
 		return providerHelpers.BlockedPlan(classifyAWSError(err)), nil
 	}
@@ -276,14 +296,14 @@ func (r destinationRuntime) Upsert(ctx context.Context, req providers.UpsertRequ
 	if remoteSourceVersionNewer(describe.Tags, req.SourceVersion) {
 		return nil, providerHelpers.ProviderError(providers.ErrorClassDrift)
 	}
-	if describe.DeletedDate != nil {
-		if _, err := r.client.RestoreSecret(ctx, &secretsmanager.RestoreSecretInput{
-			SecretId: aws.String(req.ResolvedName),
-		}); err != nil {
-			return nil, providerHelpers.ProviderError(classifyAWSError(err))
-		}
+	secretID, err := describedSecretID(describe)
+	if err != nil {
+		return nil, err
 	}
-	valueMatches, err := r.payloadMatchesRequest(ctx, describe.Tags, req.ResolvedName, req.PayloadSHA256)
+	if err := r.restoreSecretIfScheduled(ctx, describe, secretID); err != nil {
+		return nil, err
+	}
+	valueMatches, err := r.payloadMatchesRequest(ctx, describe.Tags, secretID, req.PayloadSHA256)
 	if err != nil {
 		return nil, providerHelpers.ProviderError(classifyAWSError(err))
 	}
@@ -291,7 +311,7 @@ func (r destinationRuntime) Upsert(ctx context.Context, req providers.UpsertRequ
 		if tagValue(describe.Tags, tagPayloadSHA256) != req.PayloadSHA256 ||
 			!remoteSourceVersionMatches(describe.Tags, req.SourceVersion) {
 			if _, err := r.client.TagResource(ctx, &secretsmanager.TagResourceInput{
-				SecretId: aws.String(req.ResolvedName),
+				SecretId: aws.String(secretID),
 				Tags:     ownershipTagsFromUpsert(req),
 			}); err != nil {
 				return nil, providerHelpers.ProviderError(classifyAWSError(err))
@@ -301,7 +321,7 @@ func (r destinationRuntime) Upsert(ctx context.Context, req providers.UpsertRequ
 	}
 	payload := string(req.Payload)
 	result, err := r.client.PutSecretValue(ctx, &secretsmanager.PutSecretValueInput{
-		SecretId:           aws.String(req.ResolvedName),
+		SecretId:           aws.String(secretID),
 		SecretString:       aws.String(payload),
 		ClientRequestToken: aws.String(mutationIdempotencyToken("put", req)),
 	})
@@ -309,7 +329,7 @@ func (r destinationRuntime) Upsert(ctx context.Context, req providers.UpsertRequ
 		return nil, providerHelpers.ProviderError(classifyAWSError(err))
 	}
 	if _, err := r.client.TagResource(ctx, &secretsmanager.TagResourceInput{
-		SecretId: aws.String(req.ResolvedName),
+		SecretId: aws.String(secretID),
 		Tags:     ownershipTagsFromUpsert(req),
 	}); err != nil {
 		return nil, providerHelpers.ProviderError(classifyAWSError(err))
@@ -318,6 +338,10 @@ func (r destinationRuntime) Upsert(ctx context.Context, req providers.UpsertRequ
 }
 
 func (r destinationRuntime) Delete(ctx context.Context, req providers.DeleteRequest) (*providers.SyncResult, error) {
+	association, err := awsAssociationOptionsFromConfig(req.Association)
+	if err != nil {
+		return nil, err
+	}
 	describe, err := r.client.DescribeSecret(ctx, &secretsmanager.DescribeSecretInput{
 		SecretId: aws.String(req.ResolvedName),
 	})
@@ -336,9 +360,13 @@ func (r destinationRuntime) Delete(ctx context.Context, req providers.DeleteRequ
 	if remoteSourceVersionNewer(describe.Tags, req.SourceVersion) {
 		return nil, providerHelpers.ProviderError(providers.ErrorClassDrift)
 	}
+	secretID, err := describedSecretID(describe)
+	if err != nil {
+		return nil, err
+	}
 	result, err := r.client.DeleteSecret(ctx, &secretsmanager.DeleteSecretInput{
-		SecretId:             aws.String(req.ResolvedName),
-		RecoveryWindowInDays: aws.Int64(int64(r.options.deleteRecoveryWindowDays)),
+		SecretId:             aws.String(secretID),
+		RecoveryWindowInDays: aws.Int64(int64(association.deleteRecoveryWindowDays)),
 	})
 	if err != nil {
 		return nil, providerHelpers.ProviderError(classifyAWSError(err))
@@ -366,8 +394,12 @@ func (r destinationRuntime) ReadState(
 	payloadSHA256 := tagValue(describe.Tags, tagPayloadSHA256)
 	verification := providers.RemoteStateVerificationMetadata
 	if owned && r.options.valueDriftDetection {
+		secretID, secretIDErr := describedSecretID(describe)
+		if secretIDErr != nil {
+			return nil, secretIDErr
+		}
 		var readErr error
-		payloadSHA256, readErr = remotePayloadSHA256(ctx, r.client, req.ResolvedName)
+		payloadSHA256, readErr = remotePayloadSHA256(ctx, r.client, secretID)
 		if readErr != nil {
 			return nil, providerHelpers.ProviderError(classifyAWSError(readErr))
 		}
@@ -389,16 +421,32 @@ func (destinationRuntime) Close(context.Context) error {
 	return nil
 }
 
+func (r destinationRuntime) restoreSecretIfScheduled(
+	ctx context.Context,
+	describe *secretsmanager.DescribeSecretOutput,
+	secretID string,
+) error {
+	if describe.DeletedDate == nil {
+		return nil
+	}
+	if _, err := r.client.RestoreSecret(ctx, &secretsmanager.RestoreSecretInput{
+		SecretId: aws.String(secretID),
+	}); err != nil {
+		return providerHelpers.ProviderError(classifyAWSError(err))
+	}
+	return nil
+}
+
 func (r destinationRuntime) payloadMatchesRequest(
 	ctx context.Context,
 	tags []smtypes.Tag,
-	resolvedName string,
+	secretID string,
 	payloadSHA256 string,
 ) (bool, error) {
 	if !r.options.valueDriftDetection {
 		return tagValue(tags, tagPayloadSHA256) == payloadSHA256, nil
 	}
-	livePayloadSHA256, err := remotePayloadSHA256(ctx, r.client, resolvedName)
+	livePayloadSHA256, err := remotePayloadSHA256(ctx, r.client, secretID)
 	if err != nil {
 		return false, err
 	}
@@ -420,11 +468,19 @@ func defaultClientFactory(
 	ctx context.Context,
 	providerConfig providers.DestinationConfig,
 ) (secretsManagerClient, error) {
+	return defaultClientFactoryWithResolver(ctx, providerConfig, nil)
+}
+
+func defaultClientFactoryWithResolver(
+	ctx context.Context,
+	providerConfig providers.DestinationConfig,
+	resolver endpointguard.Resolver,
+) (secretsManagerClient, error) {
 	options, err := awsDestinationOptionsFromConfig(providerConfig)
 	if err != nil {
 		return nil, err
 	}
-	if err := validateEndpointResolution(ctx, options, nil); err != nil {
+	if err := validateEndpointResolution(ctx, options, resolver); err != nil {
 		return nil, err
 	}
 	loadOptions := []func(*awsconfig.LoadOptions) error{}
@@ -435,6 +491,8 @@ func defaultClientFactory(
 	if err != nil {
 		return nil, err
 	}
+	// STS calls use the bounded default client. The custom endpoint address
+	// policy applies only to the Secrets Manager client created below.
 	cfg.HTTPClient = defaultAWSHTTPClient()
 	switch options.authMode {
 	case AuthModeAssumeRole:
@@ -466,6 +524,7 @@ func defaultClientFactory(
 		)
 		cfg.Credentials = aws.NewCredentialsCache(webIdentityProvider)
 	}
+	cfg.HTTPClient = awsHTTPClientForOptions(options, resolver)
 	clientOptions := []func(*secretsmanager.Options){}
 	if options.endpointURL != "" {
 		clientOptions = append(clientOptions, func(secretsManagerOptions *secretsmanager.Options) {
@@ -487,35 +546,72 @@ func defaultAWSHTTPClient() *http.Client {
 	}
 }
 
+func awsHTTPClientForOptions(options awsDestinationOptions, resolver endpointguard.Resolver) *http.Client {
+	client := defaultAWSHTTPClient()
+	if options.endpointURL == "" {
+		return client
+	}
+	transport, ok := client.Transport.(*http.Transport)
+	if !ok {
+		return client
+	}
+	var allowed endpointguard.AddrAllowed
+	switch options.endpointPolicy {
+	case EndpointPolicyLocal:
+		allowed = func(addr netip.Addr) bool {
+			addr = addr.Unmap()
+			return addr.IsLoopback() || addr.IsPrivate()
+		}
+	case EndpointPolicyPrivate:
+		allowed = isPrivateEndpointAddr
+	default:
+		return client
+	}
+	transport.DialContext = endpointguard.GuardedDialContext(resolver, allowed)
+	return client
+}
+
 type awsDestinationOptions struct {
-	region                   string
-	endpointURL              string
-	endpointPolicy           string
-	authMode                 string
-	roleARN                  string
-	externalID               string
-	sessionName              string
-	webIdentityTokenFile     string
-	deleteRecoveryWindowDays int
-	valueDriftDetection      bool
+	region               string
+	endpointURL          string
+	endpointPolicy       string
+	authMode             string
+	roleARN              string
+	externalID           string
+	sessionName          string
+	webIdentityTokenFile string
+	valueDriftDetection  bool
 }
 
 func awsDestinationOptionsFromConfig(cfg providers.DestinationConfig) (awsDestinationOptions, error) {
+	for key := range cfg.Config {
+		switch key {
+		case ConfigKeyRegion,
+			ConfigKeyEndpointURL,
+			ConfigKeyEndpointPolicy,
+			ConfigKeyAuthMode,
+			ConfigKeyRoleARN,
+			ConfigKeyExternalID,
+			ConfigKeySessionName,
+			ConfigKeyWebIdentityTokenFile,
+			ConfigKeyValueDriftDetection:
+		default:
+			return awsDestinationOptions{}, providerHelpers.ValidationError(
+				fmt.Sprintf("aws-sm destination configuration does not support %s", key),
+			)
+		}
+	}
 	options := awsDestinationOptions{
-		region:                   providerHelpers.ConfigValue(cfg, ConfigKeyRegion),
-		endpointURL:              providerHelpers.ConfigValue(cfg, ConfigKeyEndpointURL),
-		endpointPolicy:           providerHelpers.ConfigValue(cfg, ConfigKeyEndpointPolicy),
-		authMode:                 normalizedAuthMode(cfg),
-		roleARN:                  providerHelpers.ConfigValue(cfg, ConfigKeyRoleARN),
-		externalID:               providerHelpers.ConfigValue(cfg, ConfigKeyExternalID),
-		sessionName:              providerHelpers.ConfigValue(cfg, ConfigKeySessionName),
-		webIdentityTokenFile:     providerHelpers.ConfigValue(cfg, ConfigKeyWebIdentityTokenFile),
-		deleteRecoveryWindowDays: defaultDeleteRecoveryWindowDays,
+		region:               providerHelpers.ConfigValue(cfg, ConfigKeyRegion),
+		endpointURL:          providerHelpers.ConfigValue(cfg, ConfigKeyEndpointURL),
+		endpointPolicy:       providerHelpers.ConfigValue(cfg, ConfigKeyEndpointPolicy),
+		authMode:             normalizedAuthMode(cfg),
+		roleARN:              providerHelpers.ConfigValue(cfg, ConfigKeyRoleARN),
+		externalID:           providerHelpers.ConfigValue(cfg, ConfigKeyExternalID),
+		sessionName:          providerHelpers.ConfigValue(cfg, ConfigKeySessionName),
+		webIdentityTokenFile: providerHelpers.ConfigValue(cfg, ConfigKeyWebIdentityTokenFile),
 	}
 	var err error
-	if options.deleteRecoveryWindowDays, err = deleteRecoveryWindowDaysFromConfig(cfg); err != nil {
-		return awsDestinationOptions{}, err
-	}
 	if options.valueDriftDetection, err = providerHelpers.BoolConfigValue(
 		cfg,
 		ConfigKeyValueDriftDetection,
@@ -603,19 +699,40 @@ func validateWebIdentityAuthOptions(options awsDestinationOptions) error {
 	return nil
 }
 
-func deleteRecoveryWindowDaysFromConfig(cfg providers.DestinationConfig) (int, error) {
-	value := providerHelpers.ConfigValue(cfg, ConfigKeyDeleteRecoveryWindowDays)
+type awsAssociationOptions struct {
+	deleteRecoveryWindowDays int
+}
+
+func awsAssociationOptionsFromConfig(cfg providers.AssociationConfig) (awsAssociationOptions, error) {
+	for key := range cfg.Config {
+		if key != ConfigKeyDeleteRecoveryWindowDays {
+			return awsAssociationOptions{}, providerHelpers.ValidationError(
+				fmt.Sprintf("aws-sm association configuration does not support %s", key),
+			)
+		}
+	}
+	value := strings.TrimSpace(cfg.Config[ConfigKeyDeleteRecoveryWindowDays])
 	if value == "" {
-		return defaultDeleteRecoveryWindowDays, nil
+		return awsAssociationOptions{deleteRecoveryWindowDays: defaultDeleteRecoveryWindowDays}, nil
 	}
 	days, err := strconv.Atoi(value)
 	if err != nil {
-		return 0, providerHelpers.ValidationError("aws-sm delete_recovery_window_days must be an integer")
+		return awsAssociationOptions{}, providerHelpers.ValidationError(
+			"aws-sm delete_recovery_window_days must be an integer",
+		)
 	}
 	if days < minDeleteRecoveryWindowDays || days > maxDeleteRecoveryWindowDays {
-		return 0, providerHelpers.ValidationError("aws-sm delete_recovery_window_days must be between 7 and 30")
+		return awsAssociationOptions{}, providerHelpers.ValidationError(
+			"aws-sm delete_recovery_window_days must be between 7 and 30",
+		)
 	}
-	return days, nil
+	return awsAssociationOptions{deleteRecoveryWindowDays: days}, nil
+}
+
+func (options awsAssociationOptions) config() map[string]string {
+	return map[string]string{
+		ConfigKeyDeleteRecoveryWindowDays: strconv.Itoa(options.deleteRecoveryWindowDays),
+	}
 }
 
 func normalizedAuthMode(cfg providers.DestinationConfig) string {
@@ -666,9 +783,9 @@ func validateEndpointResolution(
 		return providerHelpers.ValidationError("aws-sm endpoint_url must include a host")
 	}
 	if addr, ok := endpointguard.ParseAddr(host); ok {
-		if isUnsafeEndpointAddr(addr) {
+		if !isPrivateEndpointAddr(addr) {
 			return providerHelpers.ValidationError(
-				"aws-sm private endpoint_url DNS must not resolve to loopback, link-local, multicast, or unspecified addresses",
+				"aws-sm private endpoint_url must resolve only to private addresses",
 			)
 		}
 		return nil
@@ -687,9 +804,9 @@ func validateEndpointResolution(
 		}
 	}
 	for _, addr := range addrs {
-		if isUnsafeEndpointAddr(addr) {
+		if !isPrivateEndpointAddr(addr) {
 			return providerHelpers.ValidationError(
-				"aws-sm private endpoint_url DNS must not resolve to loopback, link-local, multicast, or unspecified addresses",
+				"aws-sm private endpoint_url must resolve only to private addresses",
 			)
 		}
 	}
@@ -713,9 +830,9 @@ func validatePrivateEndpointURL(scheme string, host string) error {
 	if isLocalEndpointHost(host) {
 		return providerHelpers.ValidationError("aws-sm private endpoint_url must not target local development hosts")
 	}
-	if addr, ok := endpointguard.ParseAddr(host); ok && isUnsafeEndpointAddr(addr) {
+	if addr, ok := endpointguard.ParseAddr(host); ok && !isPrivateEndpointAddr(addr) {
 		return providerHelpers.ValidationError(
-			"aws-sm private endpoint_url must not target loopback, link-local, multicast, or unspecified addresses",
+			"aws-sm private endpoint_url must target a private address",
 		)
 	}
 	return nil
@@ -728,12 +845,8 @@ func isLocalEndpointHost(host string) bool {
 	return endpointguard.IsLocalHost(host)
 }
 
-func isUnsafeEndpointAddr(addr netip.Addr) bool {
-	addr = addr.Unmap()
-	return addr.IsLoopback() ||
-		addr.IsLinkLocalUnicast() ||
-		addr.IsMulticast() ||
-		addr.IsUnspecified()
+func isPrivateEndpointAddr(addr netip.Addr) bool {
+	return addr.Unmap().IsPrivate()
 }
 
 func isLikelyRoleARN(roleARN string) bool {
@@ -768,15 +881,26 @@ func createSecret(
 func remotePayloadSHA256(
 	ctx context.Context,
 	client secretsManagerClient,
-	resolvedName string,
+	secretID string,
 ) (string, error) {
 	value, err := client.GetSecretValue(ctx, &secretsmanager.GetSecretValueInput{
-		SecretId: aws.String(resolvedName),
+		SecretId: aws.String(secretID),
 	})
 	if err != nil {
 		return "", err
 	}
 	return secretValuePayloadSHA256(value), nil
+}
+
+func describedSecretID(describe *secretsmanager.DescribeSecretOutput) (string, error) {
+	if describe == nil {
+		return "", providerHelpers.ProviderError(providers.ErrorClassInternal)
+	}
+	secretID := strings.TrimSpace(aws.ToString(describe.ARN))
+	if secretID == "" {
+		return "", providerHelpers.ProviderError(providers.ErrorClassInternal)
+	}
+	return secretID, nil
 }
 
 func secretValuePayloadSHA256(value *secretsmanager.GetSecretValueOutput) string {

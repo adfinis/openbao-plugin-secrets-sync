@@ -3,9 +3,11 @@ package awssecretsmanager
 import (
 	"context"
 	"errors"
+	"net"
 	"net/http"
 	"net/netip"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -21,6 +23,7 @@ import (
 const (
 	testDestinationName = "prod"
 	testResolvedName    = "prod/app/db"
+	testDescribedARN    = "arn:aws:secretsmanager:eu-central-1:123456789012:secret:prod/app/db-AbCdEf"
 	testAssociationID   = "assoc-1"
 	testSourcePath      = "app/db"
 	testObjectID        = "secret-path"
@@ -260,11 +263,12 @@ func TestValidateDestinationConfig(t *testing.T) {
 			errorClass: providers.ErrorClassValidation,
 		},
 		{
-			name: "custom delete recovery window",
+			name: "private endpoint rejects public address",
 			config: map[string]string{
-				ConfigKeyRegion:                   testRegion,
-				ConfigKeyDeleteRecoveryWindowDays: "30",
+				ConfigKeyEndpointURL:    "https://203.0.113.10",
+				ConfigKeyEndpointPolicy: EndpointPolicyPrivate,
 			},
+			errorClass: providers.ErrorClassValidation,
 		},
 		{
 			name: "value drift detection enabled",
@@ -280,23 +284,16 @@ func TestValidateDestinationConfig(t *testing.T) {
 			errorClass: providers.ErrorClassValidation,
 		},
 		{
-			name: "invalid delete recovery window",
+			name: "rejects association-only delete recovery window",
 			config: map[string]string{
-				ConfigKeyDeleteRecoveryWindowDays: "six",
+				ConfigKeyDeleteRecoveryWindowDays: "14",
 			},
 			errorClass: providers.ErrorClassValidation,
 		},
 		{
-			name: "delete recovery window below AWS minimum",
+			name: "rejects unknown destination configuration",
 			config: map[string]string{
-				ConfigKeyDeleteRecoveryWindowDays: "6",
-			},
-			errorClass: providers.ErrorClassValidation,
-		},
-		{
-			name: "delete recovery window above AWS maximum",
-			config: map[string]string{
-				ConfigKeyDeleteRecoveryWindowDays: "31",
+				"unknown": "value",
 			},
 			errorClass: providers.ErrorClassValidation,
 		},
@@ -318,6 +315,64 @@ func TestValidateDestinationConfig(t *testing.T) {
 	}
 }
 
+func TestNormalizeAssociationConfig(t *testing.T) {
+	tests := []struct {
+		name       string
+		config     map[string]string
+		wantDays   string
+		errorClass providers.ErrorClass
+	}{
+		{name: "defaults recovery window", wantDays: "7"},
+		{
+			name:     "normalizes custom recovery window",
+			config:   map[string]string{ConfigKeyDeleteRecoveryWindowDays: " 14 "},
+			wantDays: "14",
+		},
+		{
+			name:       "rejects non-integer recovery window",
+			config:     map[string]string{ConfigKeyDeleteRecoveryWindowDays: "six"},
+			errorClass: providers.ErrorClassValidation,
+		},
+		{
+			name:       "rejects recovery window below AWS minimum",
+			config:     map[string]string{ConfigKeyDeleteRecoveryWindowDays: "6"},
+			errorClass: providers.ErrorClassValidation,
+		},
+		{
+			name:       "rejects recovery window above AWS maximum",
+			config:     map[string]string{ConfigKeyDeleteRecoveryWindowDays: "31"},
+			errorClass: providers.ErrorClassValidation,
+		},
+		{
+			name:       "rejects unknown association configuration",
+			config:     map[string]string{"unknown": "value"},
+			errorClass: providers.ErrorClassValidation,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			normalized, err := (Provider{}).NormalizeAssociationConfig(
+				context.Background(),
+				defaultDestinationConfig(),
+				providers.AssociationConfig{Config: tt.config},
+			)
+			if tt.errorClass != "" {
+				assertProviderErrorClass(t, err, tt.errorClass)
+				return
+			}
+			if err != nil {
+				t.Fatalf("normalize association config: %v", err)
+			}
+			if got := normalized.Config[ConfigKeyDeleteRecoveryWindowDays]; got != tt.wantDays {
+				t.Fatalf("delete recovery window = %q, want %q", got, tt.wantDays)
+			}
+			if normalized.Identity != "" {
+				t.Fatalf("identity = %q, want empty", normalized.Identity)
+			}
+		})
+	}
+}
+
 func TestValidatePrivateEndpointResolution(t *testing.T) {
 	tests := []struct {
 		name       string
@@ -326,7 +381,7 @@ func TestValidatePrivateEndpointResolution(t *testing.T) {
 		errorClass providers.ErrorClass
 	}{
 		{
-			name: "private hostname resolves to routable address",
+			name: "private hostname resolves to private address",
 			options: awsDestinationOptions{
 				endpointURL:    "https://vpce-1234567890abcdef.secretsmanager.eu-central-1.vpce.amazonaws.com",
 				endpointPolicy: EndpointPolicyPrivate,
@@ -334,6 +389,17 @@ func TestValidatePrivateEndpointResolution(t *testing.T) {
 			resolve: func(context.Context, string, string) ([]netip.Addr, error) {
 				return []netip.Addr{netip.MustParseAddr("10.0.0.5")}, nil
 			},
+		},
+		{
+			name: "private hostname rejects public resolution",
+			options: awsDestinationOptions{
+				endpointURL:    "https://vpce-1234567890abcdef.secretsmanager.eu-central-1.vpce.amazonaws.com",
+				endpointPolicy: EndpointPolicyPrivate,
+			},
+			resolve: func(context.Context, string, string) ([]netip.Addr, error) {
+				return []netip.Addr{netip.MustParseAddr("203.0.113.10")}, nil
+			},
+			errorClass: providers.ErrorClassValidation,
 		},
 		{
 			name: "private hostname rejects loopback resolution",
@@ -404,6 +470,63 @@ func TestDefaultAWSHTTPClientIsBoundedAndProxyFree(t *testing.T) {
 	}
 	if transport.Proxy != nil {
 		t.Fatal("default AWS HTTP client must not use ambient proxy configuration")
+	}
+}
+
+func TestPrivateEndpointRejectsDNSRebindingAtDial(t *testing.T) {
+	resolverCalls := 0
+	resolver := func(context.Context, string, string) ([]netip.Addr, error) {
+		resolverCalls++
+		if resolverCalls == 1 {
+			return []netip.Addr{netip.MustParseAddr("10.0.0.5")}, nil
+		}
+		return []netip.Addr{netip.MustParseAddr("203.0.113.10")}, nil
+	}
+	options := awsDestinationOptions{
+		endpointURL:    "https://vpce-1234567890abcdef.secretsmanager.eu-central-1.vpce.amazonaws.com",
+		endpointPolicy: EndpointPolicyPrivate,
+	}
+	if err := validateEndpointResolution(context.Background(), options, resolver); err != nil {
+		t.Fatalf("validate endpoint resolution: %v", err)
+	}
+	client := awsHTTPClientForOptions(options, resolver)
+	transport := client.Transport.(*http.Transport)
+	_, err := transport.DialContext(context.Background(), "tcp", "vpce.example.com:443")
+	if err == nil || !strings.Contains(err.Error(), "endpoint address is not allowed") {
+		t.Fatalf("dial error = %v, want disallowed rebound address", err)
+	}
+	if resolverCalls != 2 {
+		t.Fatalf("resolver calls = %d, want validation and dial lookups", resolverCalls)
+	}
+}
+
+func TestLocalEndpointDialGuardAllowsLoopbackAndRejectsPublicAddresses(t *testing.T) {
+	listener, err := net.Listen("tcp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	defer func() { _ = listener.Close() }()
+	_, port, err := net.SplitHostPort(listener.Addr().String())
+	if err != nil {
+		t.Fatalf("split listener address: %v", err)
+	}
+
+	resolvedAddr := netip.MustParseAddr("127.0.0.1")
+	resolver := func(context.Context, string, string) ([]netip.Addr, error) {
+		return []netip.Addr{resolvedAddr}, nil
+	}
+	options := awsDestinationOptions{endpointURL: testEndpointURL, endpointPolicy: EndpointPolicyLocal}
+	transport := awsHTTPClientForOptions(options, resolver).Transport.(*http.Transport)
+	conn, err := transport.DialContext(context.Background(), "tcp4", net.JoinHostPort("localstack", port))
+	if err != nil {
+		t.Fatalf("dial local endpoint: %v", err)
+	}
+	_ = conn.Close()
+
+	resolvedAddr = netip.MustParseAddr("203.0.113.10")
+	_, err = transport.DialContext(context.Background(), "tcp", "localstack:4566")
+	if err == nil || !strings.Contains(err.Error(), "endpoint address is not allowed") {
+		t.Fatalf("dial error = %v, want public address rejection", err)
 	}
 }
 
@@ -573,6 +696,9 @@ func TestPlanValueDriftDetection(t *testing.T) {
 			if client.getSecretValueInput == nil {
 				t.Fatal("GetSecretValue must be called when value drift detection is enabled")
 			}
+			if got := aws.ToString(client.getSecretValueInput.SecretId); got != testDescribedARN {
+				t.Fatalf("GetSecretValue secret id = %s, want described ARN", got)
+			}
 		})
 	}
 }
@@ -682,6 +808,9 @@ func TestReadStateReportsLiveValueWhenDetectionEnabled(t *testing.T) {
 	if client.getSecretValueInput == nil {
 		t.Fatal("GetSecretValue must be called for owned secrets when value drift detection is enabled")
 	}
+	if got := aws.ToString(client.getSecretValueInput.SecretId); got != testDescribedARN {
+		t.Fatalf("GetSecretValue secret id = %s, want described ARN", got)
+	}
 }
 
 func TestReadStateValueDriftDetectionSkipsUnownedSecret(t *testing.T) {
@@ -752,8 +881,8 @@ func TestUpsertUpdatesOwnedSecretAndTagsHash(t *testing.T) {
 	if client.putSecretValueInput == nil {
 		t.Fatal("PutSecretValue input must be captured")
 	}
-	if got := aws.ToString(client.putSecretValueInput.SecretId); got != testResolvedName {
-		t.Fatalf("secret id = %s, want %s", got, testResolvedName)
+	if got := aws.ToString(client.putSecretValueInput.SecretId); got != testDescribedARN {
+		t.Fatalf("secret id = %s, want described ARN", got)
 	}
 	wantToken := mutationIdempotencyToken("put", defaultUpsertRequest())
 	if got := aws.ToString(client.putSecretValueInput.ClientRequestToken); got != wantToken {
@@ -761,6 +890,9 @@ func TestUpsertUpdatesOwnedSecretAndTagsHash(t *testing.T) {
 	}
 	if client.tagResourceInput == nil {
 		t.Fatal("TagResource input must be captured")
+	}
+	if got := aws.ToString(client.tagResourceInput.SecretId); got != testDescribedARN {
+		t.Fatalf("tag secret id = %s, want described ARN", got)
 	}
 	assertTag(t, client.tagResourceInput.Tags, tagPayloadSHA256, testPayloadSHANew)
 	assertTag(t, client.tagResourceInput.Tags, tagPluginInstance, testPluginInstance)
@@ -785,6 +917,9 @@ func TestUpsertRepairsValueDriftWhenDetectionEnabled(t *testing.T) {
 	}
 	if client.getSecretValueInput == nil {
 		t.Fatal("GetSecretValue must be called when value drift detection is enabled")
+	}
+	if got := aws.ToString(client.getSecretValueInput.SecretId); got != testDescribedARN {
+		t.Fatalf("GetSecretValue secret id = %s, want described ARN", got)
 	}
 	if client.putSecretValueInput == nil {
 		t.Fatal("PutSecretValue must repair live value drift")
@@ -884,8 +1019,8 @@ func TestUpsertRestoresOwnedScheduledDeleteBeforeUpdate(t *testing.T) {
 	if client.restoreSecretInput == nil {
 		t.Fatal("RestoreSecret input must be captured")
 	}
-	if got := aws.ToString(client.restoreSecretInput.SecretId); got != testResolvedName {
-		t.Fatalf("restore secret id = %s, want %s", got, testResolvedName)
+	if got := aws.ToString(client.restoreSecretInput.SecretId); got != testDescribedARN {
+		t.Fatalf("restore secret id = %s, want described ARN", got)
 	}
 	if client.putSecretValueInput == nil {
 		t.Fatal("PutSecretValue must be called after restoring scheduled-delete secret")
@@ -978,6 +1113,18 @@ func TestUpsertRejectsNewerRemoteSourceVersion(t *testing.T) {
 	}
 }
 
+func TestUpsertDoesNotMutateWhenDescribeOmitsARN(t *testing.T) {
+	describe := ownedDescribeOutput(testPayloadSHAOld)
+	describe.ARN = nil
+	client := &mockSecretsManagerClient{describeOutput: describe}
+
+	_, err := runtimeWithClient(t, client).Upsert(context.Background(), defaultUpsertRequest())
+	assertProviderErrorClass(t, err, providers.ErrorClassInternal)
+	if client.putSecretValueInput != nil || client.tagResourceInput != nil {
+		t.Fatal("provider must not fall back to a name-based mutation when DescribeSecret omits the ARN")
+	}
+}
+
 func TestUpsertClassifiesAWSMutationFailures(t *testing.T) {
 	tests := []struct {
 		name          string
@@ -1047,9 +1194,8 @@ func TestDeleteUsesOwnedRecoveryWindow(t *testing.T) {
 		deleteSecretOutput: &secretsmanager.DeleteSecretOutput{ARN: aws.String("arn:aws:secretsmanager:test")},
 	}
 	request := defaultDeleteRequest()
-	cfg := defaultDestinationConfig()
-	cfg.Config[ConfigKeyDeleteRecoveryWindowDays] = "14"
-	result, err := runtimeWithDestination(t, Provider{client: client}, cfg).Delete(context.Background(), request)
+	request.Association.Config[ConfigKeyDeleteRecoveryWindowDays] = "14"
+	result, err := runtimeWithClient(t, client).Delete(context.Background(), request)
 	if err != nil {
 		t.Fatalf("delete: %v", err)
 	}
@@ -1059,8 +1205,8 @@ func TestDeleteUsesOwnedRecoveryWindow(t *testing.T) {
 	if client.deleteSecretInput == nil {
 		t.Fatal("DeleteSecret input must be captured")
 	}
-	if got := aws.ToString(client.deleteSecretInput.SecretId); got != testResolvedName {
-		t.Fatalf("delete secret id = %s, want %s", got, testResolvedName)
+	if got := aws.ToString(client.deleteSecretInput.SecretId); got != testDescribedARN {
+		t.Fatalf("delete secret id = %s, want described ARN", got)
 	}
 	if got := aws.ToInt64(client.deleteSecretInput.RecoveryWindowInDays); got != 14 {
 		t.Fatalf("recovery window = %d, want 14", got)
@@ -1374,7 +1520,10 @@ func oversizedAWSUpsertRequest() providers.UpsertRequest {
 
 func defaultDeleteRequest() providers.DeleteRequest {
 	return providers.DeleteRequest{
-		Runtime:       defaultRuntimeIdentity(),
+		Runtime: defaultRuntimeIdentity(),
+		Association: providers.AssociationConfig{Config: map[string]string{
+			ConfigKeyDeleteRecoveryWindowDays: strconv.Itoa(defaultDeleteRecoveryWindowDays),
+		}},
 		ResolvedName:  testResolvedName,
 		SourcePath:    testSourcePath,
 		SourceVersion: 1,
@@ -1461,6 +1610,7 @@ func ownedDescribeOutputAtVersion(
 	sourceVersion int,
 ) *secretsmanager.DescribeSecretOutput {
 	return &secretsmanager.DescribeSecretOutput{
+		ARN:  aws.String(testDescribedARN),
 		Name: aws.String(testResolvedName),
 		Tags: []smtypes.Tag{
 			tag(tagManaged, "true"),

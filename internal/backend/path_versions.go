@@ -126,14 +126,35 @@ func (b *secretSyncBackend) runVersionMutation(
 	signalDispatch := false
 	for _, version := range versions {
 		var mutationErr error
+		metadataCommitted := false
 		if version == metadata.CurrentVersion {
 			switch kind {
 			case versionMutationDelete, versionMutationDestroy:
-				mutationErr = b.mutateCurrentVersionDelete(ctx, req.Storage, metadata, path, version, now, mutate)
-				signalDispatch = true
+				var shouldSignal bool
+				shouldSignal, mutationErr = b.mutateCurrentVersionDelete(
+					ctx,
+					req.Storage,
+					metadata,
+					path,
+					version,
+					now,
+					mutate,
+				)
+				metadataCommitted = mutationErr == nil
+				signalDispatch = signalDispatch || shouldSignal
 			case versionMutationUndelete:
-				mutationErr = b.mutateCurrentVersionUndelete(ctx, req.Storage, metadata, path, version, now, mutate)
-				signalDispatch = true
+				var shouldSignal bool
+				shouldSignal, mutationErr = b.mutateCurrentVersionUndelete(
+					ctx,
+					req.Storage,
+					metadata,
+					path,
+					version,
+					now,
+					mutate,
+				)
+				metadataCommitted = mutationErr == nil
+				signalDispatch = signalDispatch || shouldSignal
 			default:
 				mutationErr = mutate(ctx, req.Storage, metadata, path, version, now)
 			}
@@ -143,8 +164,10 @@ func (b *secretSyncBackend) runVersionMutation(
 		if mutationErr != nil {
 			return errorResponseForOperationError(mutationErr, requestMountPath(req)), nil
 		}
-		if err := putMetadata(ctx, req.Storage, path, *metadata); err != nil {
-			return nil, err
+		if !metadataCommitted {
+			if err := putMetadata(ctx, req.Storage, path, *metadata); err != nil {
+				return nil, err
+			}
 		}
 	}
 	if signalDispatch {
@@ -161,13 +184,13 @@ func (b *secretSyncBackend) mutateCurrentVersionDelete(
 	version int,
 	now string,
 	mutate versionMutationFunc,
-) error {
+) (bool, error) {
 	b.enqueueMu.Lock()
 	defer b.enqueueMu.Unlock()
 
 	deletePlan, err := buildSourceDeletePlan(ctx, storage, path, metadata.Generation, version, now)
 	if err != nil {
-		return err
+		return false, err
 	}
 	if err := ensureQueueCapacityAfterReplacement(
 		ctx,
@@ -175,10 +198,10 @@ func (b *secretSyncBackend) mutateCurrentVersionDelete(
 		deletePlan.additionalOperations,
 		len(deletePlan.staleUpsertIDs),
 	); err != nil {
-		return err
+		return false, err
 	}
 	if err := ensureQueuedOutboxIDsUnclaimed(ctx, storage, deletePlan.staleUpsertIDs); err != nil {
-		return err
+		return false, err
 	}
 	if err := putPendingEnqueueIntent(
 		ctx,
@@ -190,18 +213,24 @@ func (b *secretSyncBackend) mutateCurrentVersionDelete(
 		deletePlan.staleUpsertIDs,
 		now,
 	); err != nil {
-		return err
+		return false, err
 	}
 	if err := mutate(ctx, storage, metadata, path, version, now); err != nil {
-		return err
+		return false, err
+	}
+	if err := putMetadata(ctx, storage, path, *metadata); err != nil {
+		return false, err
 	}
 	if err := cancelQueuedOutboxIDs(ctx, storage, deletePlan.staleUpsertIDs); err != nil {
-		return err
+		return false, err
 	}
 	if err := putOutboxRecords(ctx, storage, deletePlan.operations); err != nil {
-		return err
+		return false, err
 	}
-	return completeEnqueueIntent(ctx, storage, path, version, deletePlan.operations, now)
+	if err := completeEnqueueIntent(ctx, storage, path, version, deletePlan.operations, now); err != nil {
+		return false, err
+	}
+	return len(deletePlan.operations) > 0, nil
 }
 
 func (b *secretSyncBackend) mutateCurrentVersionUndelete(
@@ -212,17 +241,20 @@ func (b *secretSyncBackend) mutateCurrentVersionUndelete(
 	version int,
 	now string,
 	mutate versionMutationFunc,
-) error {
+) (bool, error) {
 	versionRecord, err := getVersion(ctx, storage, path, version)
 	if err != nil {
-		return err
+		return false, err
 	}
 	if versionRecord == nil || versionRecord.Destroyed || versionRecord.DeletionTime == "" {
-		return mutate(ctx, storage, metadata, path, version, now)
+		if err := mutate(ctx, storage, metadata, path, version, now); err != nil {
+			return false, err
+		}
+		return false, putMetadata(ctx, storage, path, *metadata)
 	}
 	associations, err := enabledAssociationsForPath(ctx, storage, path)
 	if err != nil {
-		return err
+		return false, err
 	}
 	operations, _, err := newAssociationOutboxRecords(
 		associations,
@@ -236,24 +268,46 @@ func (b *secretSyncBackend) mutateCurrentVersionUndelete(
 		},
 	)
 	if err != nil {
-		return err
+		return false, err
 	}
+	return b.commitCurrentVersionUndelete(
+		ctx,
+		storage,
+		metadata,
+		path,
+		version,
+		now,
+		mutate,
+		operations,
+	)
+}
+
+func (b *secretSyncBackend) commitCurrentVersionUndelete(
+	ctx context.Context,
+	storage logical.Storage,
+	metadata *metadataRecord,
+	path string,
+	version int,
+	now string,
+	mutate versionMutationFunc,
+	operations []outboxRecord,
+) (bool, error) {
 	b.enqueueMu.Lock()
 	defer b.enqueueMu.Unlock()
 
 	staleDeleteIDs, err := queuedDeleteIDsForUpsertOperations(ctx, storage, operations)
 	if err != nil {
-		return err
+		return false, err
 	}
 	additionalOperations, err := additionalQueuedOperationCount(ctx, storage, operations)
 	if err != nil {
-		return err
+		return false, err
 	}
 	if err := ensureQueueCapacityAfterReplacement(ctx, storage, additionalOperations, len(staleDeleteIDs)); err != nil {
-		return err
+		return false, err
 	}
 	if err := ensureQueuedOutboxIDsUnclaimed(ctx, storage, staleDeleteIDs); err != nil {
-		return err
+		return false, err
 	}
 	if err := putPendingEnqueueIntent(
 		ctx,
@@ -265,18 +319,24 @@ func (b *secretSyncBackend) mutateCurrentVersionUndelete(
 		staleDeleteIDs,
 		now,
 	); err != nil {
-		return err
+		return false, err
 	}
 	if err := mutate(ctx, storage, metadata, path, version, now); err != nil {
-		return err
+		return false, err
+	}
+	if err := putMetadata(ctx, storage, path, *metadata); err != nil {
+		return false, err
 	}
 	if err := cancelQueuedOutboxIDs(ctx, storage, staleDeleteIDs); err != nil {
-		return err
+		return false, err
 	}
 	if err := putOutboxRecords(ctx, storage, operations); err != nil {
-		return err
+		return false, err
 	}
-	return completeEnqueueIntent(ctx, storage, path, version, operations, now)
+	if err := completeEnqueueIntent(ctx, storage, path, version, operations, now); err != nil {
+		return false, err
+	}
+	return len(operations) > 0, nil
 }
 
 func versionMutationRequest(data *framework.FieldData) (string, []int, error) {
