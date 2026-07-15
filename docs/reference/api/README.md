@@ -1,17 +1,21 @@
-# API inspection artifacts
+# Generated API inspection
 
+OpenBao generates an OpenAPI 3.0.2 document for mounted framework backends from
+their path, request field, and response declarations. Secret Sync keeps those
+declarations with the backend implementation and verifies the generated
+document in tests; a generated copy is not committed to this repository.
 
-This directory contains API review artifacts for the OpenBao Secret Sync
-plugin.
+Inspect one mounted path with:
 
-- [openapi.yaml](openapi.yaml) describes the current mounted HTTP API relative
-  to `/v1/secret-sync`.
+```sh
+bao path-help -format=json secret-sync/
+```
 
-The OpenAPI spec is intentionally a design and inspection aid while the plugin
-is pre-release. It is not the source of truth for backend behavior. Backend
-path schemas, provider validation, and the API golden responses are the freeze
-evidence until this artifact is generated or mechanically validated.
+Inspect the combined OpenAPI document for a running OpenBao server with:
 
-Use it to review path shape, field names, defaults, response structure, and
-error classes before the API is treated as stable. Use
-[API surface](../api-surface.md) for the user-facing API group summary.
+```sh
+bao read -format=json sys/internal/specs/openapi
+```
+
+Use [API surface](../api-surface.md) for the user-facing API group summary and
+the API golden responses for broad response-shape drift detection.

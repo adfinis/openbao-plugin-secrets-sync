@@ -11,5 +11,4 @@ contract changes but do not promise a stable API or migration boundary.
 - [Reconcile and drift](../concepts/reconcile-and-drift.md)
 - [API surface](api-surface.md)
 - [API compatibility](api-compatibility.md)
-- [API inspection artifacts](api/README.md)
-- [OpenAPI specification](api/openapi.yaml)
+- [Generated API inspection](api/README.md)

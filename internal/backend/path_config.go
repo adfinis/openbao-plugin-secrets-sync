@@ -61,12 +61,14 @@ func pathConfig(b *secretSyncBackend) *framework.Path {
 		},
 		Operations: map[logical.Operation]framework.OperationHandler{
 			logical.ReadOperation: &framework.PathOperation{
-				Callback: b.pathConfigRead,
-				Summary:  "Read global secret sync configuration.",
+				Callback:  b.pathConfigRead,
+				Summary:   "Read global secret sync configuration.",
+				Responses: apiConfigResponse(),
 			},
 			logical.UpdateOperation: &framework.PathOperation{
-				Callback: b.pathConfigWrite,
-				Summary:  "Update global secret sync configuration.",
+				Callback:  b.pathConfigWrite,
+				Summary:   "Update global secret sync configuration.",
+				Responses: apiNoContentResponse("Configuration updated."),
 			},
 		},
 		HelpSynopsis: "Configure global secret sync behavior.",
@@ -80,8 +82,9 @@ func pathConfigRestoreGuardAcknowledge(b *secretSyncBackend) *framework.Path {
 		Pattern: "config/restore-guard/acknowledge",
 		Operations: map[logical.Operation]framework.OperationHandler{
 			logical.UpdateOperation: &framework.PathOperation{
-				Callback: b.pathConfigRestoreGuardAcknowledgeWrite,
-				Summary:  "Acknowledge restore guard and resume remote mutation.",
+				Callback:  b.pathConfigRestoreGuardAcknowledgeWrite,
+				Summary:   "Acknowledge restore guard and resume remote mutation.",
+				Responses: apiConfigResponse(),
 			},
 		},
 		HelpSynopsis:    "Acknowledge restore guard.",

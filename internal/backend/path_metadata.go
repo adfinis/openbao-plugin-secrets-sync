@@ -17,8 +17,9 @@ func pathMetadata(b *secretSyncBackend) []*framework.Path {
 			Fields:  paginationFields(),
 			Operations: map[logical.Operation]framework.OperationHandler{
 				logical.ListOperation: &framework.PathOperation{
-					Callback: pathMetadataListRoot,
-					Summary:  "List root metadata keys.",
+					Callback:  pathMetadataListRoot,
+					Summary:   "List root metadata keys.",
+					Responses: apiListResponse(),
 				},
 			},
 			HelpSynopsis:    "List local metadata.",
@@ -50,24 +51,29 @@ func pathMetadata(b *secretSyncBackend) []*framework.Path {
 			}),
 			Operations: map[logical.Operation]framework.OperationHandler{
 				logical.CreateOperation: &framework.PathOperation{
-					Callback: b.pathMetadataWrite,
-					Summary:  "Create local source metadata policy.",
+					Callback:  b.pathMetadataWrite,
+					Summary:   "Create local source metadata policy.",
+					Responses: apiMetadataResponse(),
 				},
 				logical.UpdateOperation: &framework.PathOperation{
-					Callback: b.pathMetadataWrite,
-					Summary:  "Update local source metadata policy.",
+					Callback:  b.pathMetadataWrite,
+					Summary:   "Update local source metadata policy.",
+					Responses: apiMetadataResponse(),
 				},
 				logical.ListOperation: &framework.PathOperation{
-					Callback: pathMetadataList,
-					Summary:  "List metadata keys under a prefix.",
+					Callback:  pathMetadataList,
+					Summary:   "List metadata keys under a prefix.",
+					Responses: apiListResponse(),
 				},
 				logical.ReadOperation: &framework.PathOperation{
-					Callback: pathMetadataRead,
-					Summary:  "Read local source metadata.",
+					Callback:  pathMetadataRead,
+					Summary:   "Read local source metadata.",
+					Responses: apiMetadataResponse(),
 				},
 				logical.DeleteOperation: &framework.PathOperation{
-					Callback: b.pathMetadataDelete,
-					Summary:  "Delete local source metadata and versions.",
+					Callback:  b.pathMetadataDelete,
+					Summary:   "Delete local source metadata and versions.",
+					Responses: apiNoContentResponse("Source metadata and versions deleted."),
 				},
 			},
 			HelpSynopsis:    "Manage local metadata.",

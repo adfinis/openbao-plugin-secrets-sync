@@ -109,7 +109,8 @@ API and storage changes need:
 - candidate API golden snapshots for broad response-shape drift detection;
 - pagination tests for public `LIST` endpoints when listing behavior changes;
 - storage compatibility tests when schema handling changes;
-- OpenAPI inspection artifact updates when path shape or field names change;
+- native OpenAPI declaration and generated-document test updates when path
+  shape, request fields, or response fields change;
 - updates to API surface and compatibility docs when user-visible behavior
   changes.
 

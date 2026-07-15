@@ -26,8 +26,9 @@ func pathVersionMutations(b *secretSyncBackend) []*framework.Path {
 			Fields:  fields,
 			Operations: map[logical.Operation]framework.OperationHandler{
 				logical.UpdateOperation: &framework.PathOperation{
-					Callback: b.pathDeleteVersionsWrite,
-					Summary:  "Soft-delete local source secret versions.",
+					Callback:  b.pathDeleteVersionsWrite,
+					Summary:   "Soft-delete local source secret versions.",
+					Responses: apiNoContentResponse("Source versions soft-deleted."),
 				},
 			},
 			HelpSynopsis:    "Delete local versions.",
@@ -38,8 +39,9 @@ func pathVersionMutations(b *secretSyncBackend) []*framework.Path {
 			Fields:  fields,
 			Operations: map[logical.Operation]framework.OperationHandler{
 				logical.UpdateOperation: &framework.PathOperation{
-					Callback: b.pathUndeleteWrite,
-					Summary:  "Undelete local source secret versions.",
+					Callback:  b.pathUndeleteWrite,
+					Summary:   "Undelete local source secret versions.",
+					Responses: apiNoContentResponse("Source versions undeleted."),
 				},
 			},
 			HelpSynopsis:    "Undelete local versions.",
@@ -50,8 +52,9 @@ func pathVersionMutations(b *secretSyncBackend) []*framework.Path {
 			Fields:  fields,
 			Operations: map[logical.Operation]framework.OperationHandler{
 				logical.UpdateOperation: &framework.PathOperation{
-					Callback: b.pathDestroyWrite,
-					Summary:  "Destroy local source secret versions.",
+					Callback:  b.pathDestroyWrite,
+					Summary:   "Destroy local source secret versions.",
+					Responses: apiNoContentResponse("Source versions destroyed."),
 				},
 			},
 			HelpSynopsis:    "Destroy local versions.",

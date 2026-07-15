@@ -62,7 +62,7 @@ func backendWithProviders(providerSet ...providers.Provider) *secretSyncBackend 
 				localSecretDataPrefix,
 			},
 		},
-		Paths: framework.PathAppend(
+		Paths: apiPaths(framework.PathAppend(
 			[]*framework.Path{pathInfo(&b), pathConfig(&b), pathConfigRestoreGuardAcknowledge(&b)},
 			pathDestinations(&b),
 			pathAssociations(&b),
@@ -72,7 +72,7 @@ func backendWithProviders(providerSet ...providers.Provider) *secretSyncBackend 
 			[]*framework.Path{pathData(&b), pathStatus(&b)},
 			pathReconcile(&b),
 			pathQueue(&b),
-		),
+		)),
 		Invalidate: func(ctx context.Context, key string) {
 			b.invalidate(ctx, key)
 		},

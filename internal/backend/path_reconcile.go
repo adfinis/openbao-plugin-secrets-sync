@@ -26,8 +26,9 @@ func pathReconcile(b *secretSyncBackend) []*framework.Path {
 			Fields:  fields,
 			Operations: map[logical.Operation]framework.OperationHandler{
 				logical.ReadOperation: &framework.PathOperation{
-					Callback: b.pathReconcilePlan,
-					Summary:  "Plan remote state reconciliation.",
+					Callback:  b.pathReconcilePlan,
+					Summary:   "Plan remote state reconciliation.",
+					Responses: apiReconcileResponse(),
 				},
 			},
 			HelpSynopsis: "Plan reconcile.",
@@ -39,8 +40,9 @@ func pathReconcile(b *secretSyncBackend) []*framework.Path {
 			Fields:  fields,
 			Operations: map[logical.Operation]framework.OperationHandler{
 				logical.UpdateOperation: &framework.PathOperation{
-					Callback: b.pathReconcileApply,
-					Summary:  "Reconcile remote state into local status.",
+					Callback:  b.pathReconcileApply,
+					Summary:   "Reconcile remote state into local status.",
+					Responses: apiReconcileResponse(),
 				},
 			},
 			HelpSynopsis: "Reconcile remote state.",

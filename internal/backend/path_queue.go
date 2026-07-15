@@ -35,8 +35,9 @@ func pathQueue(b *secretSyncBackend) []*framework.Path {
 			Pattern: "queue/?",
 			Operations: map[logical.Operation]framework.OperationHandler{
 				logical.ReadOperation: &framework.PathOperation{
-					Callback: b.pathQueueRead,
-					Summary:  "Read outbox queue summary.",
+					Callback:  b.pathQueueRead,
+					Summary:   "Read outbox queue summary.",
+					Responses: apiQueueSummaryResponse(),
 				},
 			},
 			HelpSynopsis:    "Inspect sync queue state.",
@@ -52,8 +53,9 @@ func pathQueue(b *secretSyncBackend) []*framework.Path {
 			},
 			Operations: map[logical.Operation]framework.OperationHandler{
 				logical.UpdateOperation: &framework.PathOperation{
-					Callback: b.pathQueueDrain,
-					Summary:  "Process due sync queue operations.",
+					Callback:  b.pathQueueDrain,
+					Summary:   "Process due sync queue operations.",
+					Responses: apiQueueDrainResponse(),
 				},
 			},
 			HelpSynopsis:    "Drain due sync queue work.",
@@ -69,8 +71,9 @@ func pathQueue(b *secretSyncBackend) []*framework.Path {
 			},
 			Operations: map[logical.Operation]framework.OperationHandler{
 				logical.ReadOperation: &framework.PathOperation{
-					Callback: pathQueueOperationRead,
-					Summary:  "Read one outbox operation.",
+					Callback:  pathQueueOperationRead,
+					Summary:   "Read one outbox operation.",
+					Responses: apiQueueOperationResponse(),
 				},
 			},
 			HelpSynopsis:    "Inspect a sync queue operation.",
@@ -86,8 +89,9 @@ func pathQueue(b *secretSyncBackend) []*framework.Path {
 			},
 			Operations: map[logical.Operation]framework.OperationHandler{
 				logical.UpdateOperation: &framework.PathOperation{
-					Callback: b.pathQueueOperationRetry,
-					Summary:  "Retry one outbox operation.",
+					Callback:  b.pathQueueOperationRetry,
+					Summary:   "Retry one outbox operation.",
+					Responses: apiQueueOperationResponse(),
 				},
 			},
 			HelpSynopsis:    "Retry a sync queue operation.",
@@ -103,8 +107,9 @@ func pathQueue(b *secretSyncBackend) []*framework.Path {
 			},
 			Operations: map[logical.Operation]framework.OperationHandler{
 				logical.UpdateOperation: &framework.PathOperation{
-					Callback: b.pathQueueOperationCancel,
-					Summary:  "Cancel one queued outbox operation.",
+					Callback:  b.pathQueueOperationCancel,
+					Summary:   "Cancel one queued outbox operation.",
+					Responses: apiQueueOperationResponse(),
 				},
 			},
 			HelpSynopsis:    "Cancel a sync queue operation.",
