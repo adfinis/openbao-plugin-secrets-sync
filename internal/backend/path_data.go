@@ -41,20 +41,24 @@ func pathData(b *secretSyncBackend) *framework.Path {
 		},
 		Operations: map[logical.Operation]framework.OperationHandler{
 			logical.CreateOperation: &framework.PathOperation{
-				Callback: b.pathDataWrite,
-				Summary:  "Write a new local source secret version.",
+				Callback:  b.pathDataWrite,
+				Summary:   "Write a new local source secret version.",
+				Responses: apiSourceDataMutationResponse(),
 			},
 			logical.UpdateOperation: &framework.PathOperation{
-				Callback: b.pathDataWrite,
-				Summary:  "Write a new local source secret version.",
+				Callback:  b.pathDataWrite,
+				Summary:   "Write a new local source secret version.",
+				Responses: apiSourceDataMutationResponse(),
 			},
 			logical.ReadOperation: &framework.PathOperation{
-				Callback: pathDataRead,
-				Summary:  "Read a local source secret version.",
+				Callback:  pathDataRead,
+				Summary:   "Read a local source secret version.",
+				Responses: apiSourceDataReadResponse(),
 			},
 			logical.DeleteOperation: &framework.PathOperation{
-				Callback: b.pathDataDelete,
-				Summary:  "Soft-delete the latest local source secret version.",
+				Callback:  b.pathDataDelete,
+				Summary:   "Soft-delete the latest local source secret version.",
+				Responses: apiSourceDataMutationResponse(),
 			},
 		},
 		TakesArbitraryInput: true,

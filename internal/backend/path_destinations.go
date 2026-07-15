@@ -99,8 +99,9 @@ func pathDestinations(b *secretSyncBackend) []*framework.Path {
 			}),
 			Operations: map[logical.Operation]framework.OperationHandler{
 				logical.ListOperation: &framework.PathOperation{
-					Callback: b.pathDestinationList,
-					Summary:  "List configured destinations for a provider type.",
+					Callback:  b.pathDestinationList,
+					Summary:   "List configured destinations for a provider type.",
+					Responses: apiListResponse(),
 				},
 			},
 			HelpSynopsis:    "List destinations.",
@@ -112,8 +113,9 @@ func pathDestinations(b *secretSyncBackend) []*framework.Path {
 			Fields: destinationIdentityFields(),
 			Operations: map[logical.Operation]framework.OperationHandler{
 				logical.ReadOperation: &framework.PathOperation{
-					Callback: b.pathDestinationCheck,
-					Summary:  "Check destination readiness.",
+					Callback:  b.pathDestinationCheck,
+					Summary:   "Check destination readiness.",
+					Responses: apiDestinationCheckResponse(),
 				},
 			},
 			HelpSynopsis: "Check destination readiness.",
@@ -126,12 +128,14 @@ func pathDestinations(b *secretSyncBackend) []*framework.Path {
 			Fields: destinationIdentityFields(),
 			Operations: map[logical.Operation]framework.OperationHandler{
 				logical.ReadOperation: &framework.PathOperation{
-					Callback: b.pathDestinationValidate,
-					Summary:  "Validate a configured destination.",
+					Callback:  b.pathDestinationValidate,
+					Summary:   "Validate a configured destination.",
+					Responses: apiDestinationValidationResponse(),
 				},
 				logical.UpdateOperation: &framework.PathOperation{
-					Callback: b.pathDestinationValidate,
-					Summary:  "Validate a configured destination.",
+					Callback:  b.pathDestinationValidate,
+					Summary:   "Validate a configured destination.",
+					Responses: apiDestinationValidationResponse(),
 				},
 			},
 			HelpSynopsis:    "Validate a destination.",
@@ -143,8 +147,9 @@ func pathDestinations(b *secretSyncBackend) []*framework.Path {
 			Fields: destinationIdentityFields(),
 			Operations: map[logical.Operation]framework.OperationHandler{
 				logical.ReadOperation: &framework.PathOperation{
-					Callback: b.pathDestinationHealth,
-					Summary:  "Check destination health.",
+					Callback:  b.pathDestinationHealth,
+					Summary:   "Check destination health.",
+					Responses: apiDestinationHealthResponse(),
 				},
 			},
 			HelpSynopsis:    "Check destination health.",
@@ -155,20 +160,24 @@ func pathDestinations(b *secretSyncBackend) []*framework.Path {
 			Fields:  destinationRequestFields(),
 			Operations: map[logical.Operation]framework.OperationHandler{
 				logical.CreateOperation: &framework.PathOperation{
-					Callback: b.pathDestinationWrite,
-					Summary:  "Create a destination.",
+					Callback:  b.pathDestinationWrite,
+					Summary:   "Create a destination.",
+					Responses: apiNoContentResponse("Destination created."),
 				},
 				logical.UpdateOperation: &framework.PathOperation{
-					Callback: b.pathDestinationWrite,
-					Summary:  "Create or update a destination.",
+					Callback:  b.pathDestinationWrite,
+					Summary:   "Create or update a destination.",
+					Responses: apiNoContentResponse("Destination created or updated."),
 				},
 				logical.ReadOperation: &framework.PathOperation{
-					Callback: b.pathDestinationRead,
-					Summary:  "Read a destination.",
+					Callback:  b.pathDestinationRead,
+					Summary:   "Read a destination.",
+					Responses: apiDestinationResponse(),
 				},
 				logical.DeleteOperation: &framework.PathOperation{
-					Callback: b.pathDestinationDelete,
-					Summary:  "Delete a destination.",
+					Callback:  b.pathDestinationDelete,
+					Summary:   "Delete a destination.",
+					Responses: apiNoContentResponse("Destination deleted."),
 				},
 			},
 			HelpSynopsis:    "Manage destinations.",

@@ -13,8 +13,9 @@ func pathInfo(b *secretSyncBackend) *framework.Path {
 		Pattern: "info",
 		Operations: map[logical.Operation]framework.OperationHandler{
 			logical.ReadOperation: &framework.PathOperation{
-				Callback: b.pathInfoRead,
-				Summary:  "Read static secret sync API information.",
+				Callback:  b.pathInfoRead,
+				Summary:   "Read static secret sync API information.",
+				Responses: apiInfoResponse(),
 			},
 		},
 		HelpSynopsis: "Read static secret sync API information.",

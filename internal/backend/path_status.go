@@ -19,8 +19,9 @@ func pathStatus(_ *secretSyncBackend) *framework.Path {
 		},
 		Operations: map[logical.Operation]framework.OperationHandler{
 			logical.ReadOperation: &framework.PathOperation{
-				Callback: pathStatusRead,
-				Summary:  "Read per-path sync status.",
+				Callback:  pathStatusRead,
+				Summary:   "Read per-path sync status.",
+				Responses: apiStatusResponse(),
 			},
 		},
 		HelpSynopsis:    "Inspect source path sync status.",

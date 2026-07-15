@@ -21,8 +21,9 @@ func pathSources(b *secretSyncBackend) []*framework.Path {
 			},
 			Operations: map[logical.Operation]framework.OperationHandler{
 				logical.ReadOperation: &framework.PathOperation{
-					Callback: b.pathSourceCheck,
-					Summary:  "Check source readiness.",
+					Callback:  b.pathSourceCheck,
+					Summary:   "Check source readiness.",
+					Responses: apiSourceCheckResponse(),
 				},
 			},
 			HelpSynopsis: "Check source sync readiness.",
@@ -39,8 +40,9 @@ func pathSources(b *secretSyncBackend) []*framework.Path {
 			},
 			Operations: map[logical.Operation]framework.OperationHandler{
 				logical.UpdateOperation: &framework.PathOperation{
-					Callback: b.pathSourceEnable,
-					Summary:  "Enable source sync for a path.",
+					Callback:  b.pathSourceEnable,
+					Summary:   "Enable source sync for a path.",
+					Responses: apiSourceSyncResponse(),
 				},
 			},
 			HelpSynopsis: "Enable source sync eligibility.",
@@ -57,8 +59,9 @@ func pathSources(b *secretSyncBackend) []*framework.Path {
 			},
 			Operations: map[logical.Operation]framework.OperationHandler{
 				logical.UpdateOperation: &framework.PathOperation{
-					Callback: b.pathSourceDisable,
-					Summary:  "Disable source sync for a path.",
+					Callback:  b.pathSourceDisable,
+					Summary:   "Disable source sync for a path.",
+					Responses: apiSourceSyncResponse(),
 				},
 			},
 			HelpSynopsis:    "Disable source sync eligibility.",

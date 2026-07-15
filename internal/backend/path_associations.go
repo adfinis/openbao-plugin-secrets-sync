@@ -55,8 +55,9 @@ func pathAssociations(b *secretSyncBackend) []*framework.Path {
 			Fields:  paginationFields(),
 			Operations: map[logical.Operation]framework.OperationHandler{
 				logical.ListOperation: &framework.PathOperation{
-					Callback: pathAssociationList,
-					Summary:  "List association source path prefixes.",
+					Callback:  pathAssociationList,
+					Summary:   "List association source path prefixes.",
+					Responses: apiListResponse(),
 				},
 			},
 			HelpSynopsis:    "List associations.",
@@ -67,8 +68,9 @@ func pathAssociations(b *secretSyncBackend) []*framework.Path {
 			Fields:  associationRequestFields(),
 			Operations: map[logical.Operation]framework.OperationHandler{
 				logical.UpdateOperation: &framework.PathOperation{
-					Callback: b.pathAssociationPlan,
-					Summary:  "Plan an association sync operation.",
+					Callback:  b.pathAssociationPlan,
+					Summary:   "Plan an association sync operation.",
+					Responses: apiAssociationPlanResponse(),
 				},
 			},
 			HelpSynopsis:    "Plan association sync.",
@@ -79,8 +81,9 @@ func pathAssociations(b *secretSyncBackend) []*framework.Path {
 			Fields:  associationLifecycleFields(),
 			Operations: map[logical.Operation]framework.OperationHandler{
 				logical.UpdateOperation: &framework.PathOperation{
-					Callback: b.pathAssociationDisable,
-					Summary:  "Disable an association.",
+					Callback:  b.pathAssociationDisable,
+					Summary:   "Disable an association.",
+					Responses: apiAssociationLifecycleResponse(),
 				},
 			},
 			HelpSynopsis:    "Disable an association.",
@@ -91,8 +94,9 @@ func pathAssociations(b *secretSyncBackend) []*framework.Path {
 			Fields:  associationLifecycleFields(),
 			Operations: map[logical.Operation]framework.OperationHandler{
 				logical.UpdateOperation: &framework.PathOperation{
-					Callback: b.pathAssociationEnable,
-					Summary:  "Enable an association.",
+					Callback:  b.pathAssociationEnable,
+					Summary:   "Enable an association.",
+					Responses: apiAssociationLifecycleResponse(),
 				},
 			},
 			HelpSynopsis:    "Enable an association.",
@@ -103,8 +107,9 @@ func pathAssociations(b *secretSyncBackend) []*framework.Path {
 			Fields:  associationLifecycleFields(),
 			Operations: map[logical.Operation]framework.OperationHandler{
 				logical.UpdateOperation: &framework.PathOperation{
-					Callback: b.pathAssociationSync,
-					Summary:  "Manually enqueue association sync.",
+					Callback:  b.pathAssociationSync,
+					Summary:   "Manually enqueue association sync.",
+					Responses: apiAssociationLifecycleResponse(),
 				},
 			},
 			HelpSynopsis:    "Sync an association.",
@@ -115,8 +120,9 @@ func pathAssociations(b *secretSyncBackend) []*framework.Path {
 			Fields:  associationLifecycleFields(),
 			Operations: map[logical.Operation]framework.OperationHandler{
 				logical.UpdateOperation: &framework.PathOperation{
-					Callback: b.pathAssociationDisable,
-					Summary:  "Disable an association by destination.",
+					Callback:  b.pathAssociationDisable,
+					Summary:   "Disable an association by destination.",
+					Responses: apiAssociationLifecycleResponse(),
 				},
 			},
 			HelpSynopsis:    "Disable an association.",
@@ -127,8 +133,9 @@ func pathAssociations(b *secretSyncBackend) []*framework.Path {
 			Fields:  associationLifecycleFields(),
 			Operations: map[logical.Operation]framework.OperationHandler{
 				logical.UpdateOperation: &framework.PathOperation{
-					Callback: b.pathAssociationEnable,
-					Summary:  "Enable an association by destination.",
+					Callback:  b.pathAssociationEnable,
+					Summary:   "Enable an association by destination.",
+					Responses: apiAssociationLifecycleResponse(),
 				},
 			},
 			HelpSynopsis: "Enable an association.",
@@ -140,8 +147,9 @@ func pathAssociations(b *secretSyncBackend) []*framework.Path {
 			Fields:  associationLifecycleFields(),
 			Operations: map[logical.Operation]framework.OperationHandler{
 				logical.UpdateOperation: &framework.PathOperation{
-					Callback: b.pathAssociationSync,
-					Summary:  "Manually enqueue association sync by destination.",
+					Callback:  b.pathAssociationSync,
+					Summary:   "Manually enqueue association sync by destination.",
+					Responses: apiAssociationLifecycleResponse(),
 				},
 			},
 			HelpSynopsis:    "Sync an association.",
@@ -161,12 +169,14 @@ func pathAssociations(b *secretSyncBackend) []*framework.Path {
 			},
 			Operations: map[logical.Operation]framework.OperationHandler{
 				logical.ReadOperation: &framework.PathOperation{
-					Callback: pathAssociationReadByID,
-					Summary:  "Read one association.",
+					Callback:  pathAssociationReadByID,
+					Summary:   "Read one association.",
+					Responses: apiAssociationResponse(),
 				},
 				logical.DeleteOperation: &framework.PathOperation{
-					Callback: b.pathAssociationDelete,
-					Summary:  "Delete an association.",
+					Callback:  b.pathAssociationDelete,
+					Summary:   "Delete an association.",
+					Responses: apiNoContentResponse("Association deleted."),
 				},
 			},
 			HelpSynopsis:    "Manage one association.",
@@ -177,16 +187,19 @@ func pathAssociations(b *secretSyncBackend) []*framework.Path {
 			Fields:  associationRequestFields(),
 			Operations: map[logical.Operation]framework.OperationHandler{
 				logical.CreateOperation: &framework.PathOperation{
-					Callback: b.pathAssociationWrite,
-					Summary:  "Create an association.",
+					Callback:  b.pathAssociationWrite,
+					Summary:   "Create an association.",
+					Responses: apiAssociationLifecycleResponse(),
 				},
 				logical.UpdateOperation: &framework.PathOperation{
-					Callback: b.pathAssociationWrite,
-					Summary:  "Create or update an association.",
+					Callback:  b.pathAssociationWrite,
+					Summary:   "Create or update an association.",
+					Responses: apiAssociationLifecycleResponse(),
 				},
 				logical.ReadOperation: &framework.PathOperation{
-					Callback: pathAssociationRead,
-					Summary:  "Read associations for a source path.",
+					Callback:  pathAssociationRead,
+					Summary:   "Read associations for a source path.",
+					Responses: apiAssociationsResponse(),
 				},
 			},
 			HelpSynopsis:    "Manage associations.",
