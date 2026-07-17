@@ -79,6 +79,9 @@ func backendWithProviders(providerSet ...providers.Provider) *secretSyncBackend 
 		Clean: func(ctx context.Context) {
 			b.cleanup(ctx)
 		},
+		InitializeFunc: func(ctx context.Context, req *logical.InitializationRequest) error {
+			return b.initialize(ctx, req)
+		},
 		PeriodicFunc: func(ctx context.Context, req *logical.Request) error {
 			return b.periodic(ctx, req)
 		},
@@ -110,13 +113,22 @@ type secretSyncBackend struct {
 	runtimeDestinationEpochs map[string]uint64
 }
 
-func (b *secretSyncBackend) Setup(ctx context.Context, conf *logical.BackendConfig) error {
-	if err := b.Backend.Setup(ctx, conf); err != nil {
+func (b *secretSyncBackend) initialize(ctx context.Context, req *logical.InitializationRequest) error {
+	if req == nil || req.Storage == nil {
+		return nil
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+
+	// Initialize can be called again for an existing backend instance. Stop the
+	// previous worker before validating and attaching the new initialized
+	// storage handle so it cannot continue dispatching through stale storage.
+	b.stopEventDispatcher(ctx)
+	if err := b.ensureRuntimeStateForRequest(ctx, req.Storage); err != nil {
 		return err
 	}
-	if conf != nil && conf.StorageView != nil {
-		b.startEventDispatcher(conf.StorageView)
-	}
+	b.startEventDispatcher(req.Storage)
 	return nil
 }
 
