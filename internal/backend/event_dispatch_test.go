@@ -191,6 +191,11 @@ func newEventDispatchTestEnv(t *testing.T, config *logical.BackendConfig) *backe
 	if err := env.b.Setup(context.Background(), config); err != nil {
 		t.Fatalf("setup backend: %v", err)
 	}
+	if err := env.b.Initialize(context.Background(), &logical.InitializationRequest{
+		Storage: env.storage,
+	}); err != nil {
+		t.Fatalf("initialize backend: %v", err)
+	}
 	t.Cleanup(func() {
 		env.b.Cleanup(context.Background())
 	})
