@@ -138,9 +138,10 @@ func (b *secretSyncBackend) pathAssociationSecretPathPlan(
 		preparedPayload,
 	)
 	providerStart := time.Now()
-	runtime, providerErr := b.destinationRuntime(ctx, provider, destination, resolvedDestinationConfig)
+	runtime, releaseRuntime, providerErr := b.destinationRuntime(ctx, provider, destination, resolvedDestinationConfig)
 	var plan *providers.PlanResult
 	if providerErr == nil {
+		defer releaseRuntime(ctx)
 		plan, providerErr = runtime.Plan(ctx, planRequest)
 	}
 	b.recordProviderRequest(ctx, provider.Type(), observability.OperationPlan, providerErr, time.Since(providerStart))
@@ -319,9 +320,10 @@ func (b *secretSyncBackend) planSecretKeyObject(
 		return object, nil
 	}
 	providerStart := time.Now()
-	runtime, providerErr := b.destinationRuntime(ctx, provider, destinationRecord, destination)
+	runtime, releaseRuntime, providerErr := b.destinationRuntime(ctx, provider, destinationRecord, destination)
 	var plan *providers.PlanResult
 	if providerErr == nil {
+		defer releaseRuntime(ctx)
 		plan, providerErr = runtime.Plan(ctx, providers.PlanRequest{
 			Runtime:       runtimeIdentity,
 			Association:   providerAssociationConfig(record),

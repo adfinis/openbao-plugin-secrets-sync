@@ -573,10 +573,16 @@ func (b *secretSyncBackend) providerUpsert(
 	mutationCtx, cancel := providerMutationContext(ctx)
 	defer cancel()
 
-	runtime, err := b.destinationRuntime(mutationCtx, ctxData.provider, *ctxData.destination, destinationConfig)
+	runtime, releaseRuntime, err := b.destinationRuntime(
+		mutationCtx,
+		ctxData.provider,
+		*ctxData.destination,
+		destinationConfig,
+	)
 	if err != nil {
 		return nil, err
 	}
+	defer releaseRuntime(mutationCtx)
 	return runtime.Upsert(mutationCtx, providers.UpsertRequest{
 		Runtime:        runtimeIdentity,
 		Association:    providerAssociationConfig(*ctxData.association),
@@ -604,10 +610,16 @@ func (b *secretSyncBackend) providerDelete(
 	mutationCtx, cancel := providerMutationContext(ctx)
 	defer cancel()
 
-	runtime, err := b.destinationRuntime(mutationCtx, ctxData.provider, *ctxData.destination, destinationConfig)
+	runtime, releaseRuntime, err := b.destinationRuntime(
+		mutationCtx,
+		ctxData.provider,
+		*ctxData.destination,
+		destinationConfig,
+	)
 	if err != nil {
 		return nil, err
 	}
+	defer releaseRuntime(mutationCtx)
 	return runtime.Delete(mutationCtx, providers.DeleteRequest{
 		Runtime:        runtimeIdentity,
 		Association:    providerAssociationConfig(*ctxData.association),

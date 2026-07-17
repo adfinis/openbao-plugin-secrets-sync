@@ -25,7 +25,21 @@ func (b *secretSyncBackend) destinationRuntime(
 	provider providers.Provider,
 	record destinationRecord,
 	cfg providers.DestinationConfig,
-) (providers.DestinationRuntime, error) {
+) (providers.DestinationRuntime, func(context.Context), error) {
+	if b.cachingDisabled() {
+		b.clearDestinationRuntimes(ctx)
+		runtime, err := openDestinationRuntime(ctx, provider, cfg)
+		return runtimeWithRelease(runtime, err)
+	}
+	return b.cachedDestinationRuntime(ctx, provider, record, cfg)
+}
+
+func (b *secretSyncBackend) cachedDestinationRuntime(
+	ctx context.Context,
+	provider providers.Provider,
+	record destinationRecord,
+	cfg providers.DestinationConfig,
+) (providers.DestinationRuntime, func(context.Context), error) {
 	ref := destinationRef(record.Type, record.Name)
 	fingerprint := destinationConfigFingerprint(cfg)
 	for {
@@ -34,7 +48,7 @@ func (b *secretSyncBackend) destinationRuntime(
 		if entry, ok := b.runtimeCache[ref]; ok && entry.fingerprint == fingerprint {
 			runtime := entry.runtime
 			b.cacheMu.Unlock()
-			return runtime, nil
+			return runtime, keepDestinationRuntime, nil
 		}
 		if build, ok := b.runtimeBuilds[ref]; ok {
 			ready := build.ready
@@ -42,11 +56,11 @@ func (b *secretSyncBackend) destinationRuntime(
 			select {
 			case <-ready:
 				if build.err != nil {
-					return nil, build.err
+					return nil, nil, build.err
 				}
 				continue
 			case <-ctx.Done():
-				return nil, ctx.Err()
+				return nil, nil, ctx.Err()
 			}
 		}
 		build := &destinationRuntimeBuild{ready: make(chan struct{})}
@@ -58,37 +72,99 @@ func (b *secretSyncBackend) destinationRuntime(
 		// Opening a provider destination can perform I/O, so it happens outside
 		// cacheMu. Epochs capture cache-wide clears and per-destination
 		// invalidations that occur while the runtime is being built.
-		runtime, err := provider.OpenDestination(ctx, cfg)
-		if err == nil && runtime == nil {
-			err = &providers.Error{
-				Class:   providers.ErrorClassInternal,
-				Message: "provider returned nil destination runtime",
-			}
-		}
-
-		var staleRuntime providers.DestinationRuntime
-		b.cacheMu.Lock()
-		if err == nil &&
-			cacheEpoch == b.runtimeCacheEpoch &&
-			destinationEpoch == b.runtimeDestinationEpochs[ref] {
-			// Publish only if no invalidation raced with the build. Otherwise the
-			// runtime is returned to this caller but not cached for future calls.
-			if old, ok := b.runtimeCache[ref]; ok {
-				staleRuntime = old.runtime
-			}
-			b.runtimeCache[ref] = destinationRuntimeCacheEntry{
-				fingerprint: fingerprint,
-				runtime:     runtime,
-			}
-		}
-		build.err = err
-		delete(b.runtimeBuilds, ref)
-		close(build.ready)
-		b.cacheMu.Unlock()
-		closeDestinationRuntime(ctx, staleRuntime)
-		return runtime, err
+		runtime, err := openDestinationRuntime(ctx, provider, cfg)
+		return b.finishDestinationRuntimeBuild(
+			ctx,
+			ref,
+			fingerprint,
+			build,
+			runtime,
+			err,
+			cacheEpoch,
+			destinationEpoch,
+		)
 	}
 }
+
+func openDestinationRuntime(
+	ctx context.Context,
+	provider providers.Provider,
+	cfg providers.DestinationConfig,
+) (providers.DestinationRuntime, error) {
+	runtime, err := provider.OpenDestination(ctx, cfg)
+	if err != nil {
+		return nil, err
+	}
+	if runtime == nil {
+		return nil, &providers.Error{
+			Class:   providers.ErrorClassInternal,
+			Message: "provider returned nil destination runtime",
+		}
+	}
+	return runtime, nil
+}
+
+func (b *secretSyncBackend) finishDestinationRuntimeBuild(
+	ctx context.Context,
+	ref string,
+	fingerprint string,
+	build *destinationRuntimeBuild,
+	runtime providers.DestinationRuntime,
+	buildErr error,
+	cacheEpoch uint64,
+	destinationEpoch uint64,
+) (providers.DestinationRuntime, func(context.Context), error) {
+	var staleRuntime providers.DestinationRuntime
+	cached := false
+	b.cacheMu.Lock()
+	if buildErr == nil &&
+		cacheEpoch == b.runtimeCacheEpoch &&
+		destinationEpoch == b.runtimeDestinationEpochs[ref] {
+		// Publish only if no invalidation raced with the build. Otherwise the
+		// runtime is returned to this caller but not cached for future calls.
+		if old, ok := b.runtimeCache[ref]; ok {
+			staleRuntime = old.runtime
+		}
+		b.runtimeCache[ref] = destinationRuntimeCacheEntry{
+			fingerprint: fingerprint,
+			runtime:     runtime,
+		}
+		cached = true
+	}
+	build.err = buildErr
+	if currentBuild, ok := b.runtimeBuilds[ref]; ok && currentBuild == build {
+		delete(b.runtimeBuilds, ref)
+	}
+	close(build.ready)
+	b.cacheMu.Unlock()
+	closeDestinationRuntime(ctx, staleRuntime)
+
+	if buildErr != nil {
+		return nil, nil, buildErr
+	}
+	if cached {
+		return runtime, keepDestinationRuntime, nil
+	}
+	return runtimeWithRelease(runtime, nil)
+}
+
+func runtimeWithRelease(
+	runtime providers.DestinationRuntime,
+	err error,
+) (providers.DestinationRuntime, func(context.Context), error) {
+	if err != nil {
+		return nil, nil, err
+	}
+	return runtime, func(releaseCtx context.Context) {
+		closeDestinationRuntime(releaseCtx, runtime)
+	}, nil
+}
+
+func (b *secretSyncBackend) cachingDisabled() bool {
+	return b.Backend != nil && b.System() != nil && b.System().CachingDisabled()
+}
+
+func keepDestinationRuntime(context.Context) {}
 
 func (b *secretSyncBackend) invalidateDestinationRuntime(ctx context.Context, ref string) {
 	var runtime providers.DestinationRuntime
