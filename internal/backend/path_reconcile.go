@@ -360,9 +360,10 @@ func (b *secretSyncBackend) reconcileAssociationObject(
 	}
 	result.payload = payload
 	providerStart := time.Now()
-	runtime, err := b.destinationRuntime(ctx, provider, destination, destinationConfig)
+	runtime, releaseRuntime, err := b.destinationRuntime(ctx, provider, destination, destinationConfig)
 	var remoteState *providers.RemoteState
 	if err == nil {
+		defer releaseRuntime(ctx)
 		remoteState, err = runtime.ReadState(ctx, providerReadStateRequest(
 			association,
 			runtimeIdentity,

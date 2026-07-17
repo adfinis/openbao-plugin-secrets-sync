@@ -620,9 +620,10 @@ func (b *secretSyncBackend) pathDestinationCheck(
 	if valid && !record.Disabled {
 		healthChecked = true
 		providerStart = time.Now()
-		runtime, providerErr := b.destinationRuntime(ctx, provider, *record, resolvedConfig)
+		runtime, releaseRuntime, providerErr := b.destinationRuntime(ctx, provider, *record, resolvedConfig)
 		var result *providers.HealthResult
 		if providerErr == nil {
+			defer releaseRuntime(ctx)
 			result, providerErr = runtime.Health(ctx)
 		}
 		b.recordProviderHealthRequest(ctx, provider.Type(), result, providerErr, time.Since(providerStart))
@@ -673,9 +674,10 @@ func (b *secretSyncBackend) pathDestinationHealth(
 		return nil, err
 	}
 	providerStart := time.Now()
-	runtime, providerErr := b.destinationRuntime(ctx, provider, *record, resolvedConfig)
+	runtime, releaseRuntime, providerErr := b.destinationRuntime(ctx, provider, *record, resolvedConfig)
 	var result *providers.HealthResult
 	if providerErr == nil {
+		defer releaseRuntime(ctx)
 		result, providerErr = runtime.Health(ctx)
 	}
 	b.recordProviderHealthRequest(ctx, provider.Type(), result, providerErr, time.Since(providerStart))
