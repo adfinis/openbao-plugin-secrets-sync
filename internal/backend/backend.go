@@ -25,6 +25,8 @@ const (
 	localSecretDataPrefix    = "data/"
 )
 
+var errBackendUUIDRequired = errors.New("OpenBao backend UUID is required for a mounted backend")
+
 // Factory constructs and initializes a backend instance for OpenBao.
 func Factory(ctx context.Context, conf *logical.BackendConfig) (logical.Backend, error) {
 	b := Backend(conf)
@@ -35,8 +37,15 @@ func Factory(ctx context.Context, conf *logical.BackendConfig) (logical.Backend,
 }
 
 // Backend creates an uninitialized logical backend.
-func Backend(_ *logical.BackendConfig) *secretSyncBackend {
-	return backendWithProviders(productionProviders()...)
+func Backend(conf *logical.BackendConfig) *secretSyncBackend {
+	return backendWithProviders(backendUUIDFromConfig(conf), productionProviders()...)
+}
+
+func backendUUIDFromConfig(conf *logical.BackendConfig) string {
+	if conf == nil {
+		return ""
+	}
+	return strings.TrimSpace(conf.BackendUUID)
 }
 
 func productionProviders() []providers.Provider {
@@ -47,8 +56,9 @@ func productionProviders() []providers.Provider {
 	}
 }
 
-func backendWithProviders(providerSet ...providers.Provider) *secretSyncBackend {
+func backendWithProviders(mountUUID string, providerSet ...providers.Provider) *secretSyncBackend {
 	b := secretSyncBackend{
+		mountUUID:        mountUUID,
 		providerRegistry: providers.MustNewRegistry(providerSet...),
 		observer:         observability.New(),
 		dispatchWorkerID: bestEffortRuntimeID("worker"),
@@ -98,6 +108,7 @@ type secretSyncBackend struct {
 	configMu         sync.Mutex
 	enqueueMu        sync.Mutex
 	eventDispatchMu  sync.Mutex
+	mountUUID        string
 	dispatchWorkerID string
 	writeLocks       []*locksutil.LockEntry
 	providerRegistry *providers.Registry
@@ -113,9 +124,19 @@ type secretSyncBackend struct {
 	runtimeDestinationEpochs map[string]uint64
 }
 
+func (b *secretSyncBackend) requiredMountUUID() (string, error) {
+	if b == nil || strings.TrimSpace(b.mountUUID) == "" {
+		return "", errBackendUUIDRequired
+	}
+	return b.mountUUID, nil
+}
+
 func (b *secretSyncBackend) initialize(ctx context.Context, req *logical.InitializationRequest) error {
 	if req == nil || req.Storage == nil {
 		return nil
+	}
+	if _, err := b.requiredMountUUID(); err != nil {
+		return err
 	}
 	if ctx == nil {
 		ctx = context.Background()
@@ -214,6 +235,9 @@ func (b *secretSyncBackend) ensureRuntimeStateForRequest(
 	ctx context.Context,
 	storage logical.Storage,
 ) error {
+	if _, err := b.requiredMountUUID(); err != nil {
+		return err
+	}
 	b.configMu.Lock()
 	defer b.configMu.Unlock()
 	_, err := ensureRuntimeState(ctx, storage)

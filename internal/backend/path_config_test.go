@@ -11,7 +11,7 @@ import (
 )
 
 func TestConfigDefaults(t *testing.T) {
-	b := Backend(&logical.BackendConfig{})
+	b := newBackendForTest(&logical.BackendConfig{})
 	storage := &logical.InmemStorage{}
 	req := &logical.Request{
 		Operation: logical.ReadOperation,
@@ -38,9 +38,7 @@ func TestConfigDefaults(t *testing.T) {
 	assertResponseValue(t, resp, "event_dispatch_max_operations", defaultEventDispatchMaxOperations)
 	assertResponseValue(t, resp, "storage_schema_version", currentStorageSchema)
 	assertResponseValue(t, resp, "storage_schema_min_compatible_version", minSupportedStorageSchema)
-	if got, ok := resp.Data["plugin_instance_id"].(string); !ok || !strings.HasPrefix(got, "inst-") {
-		t.Fatalf("plugin_instance_id = %v, want inst-*", resp.Data["plugin_instance_id"])
-	}
+	assertResponseValue(t, resp, "mount_uuid", testMountUUID)
 	if got, ok := resp.Data["restore_epoch"].(string); !ok || !strings.HasPrefix(got, "epoch-") {
 		t.Fatalf("restore_epoch = %v, want epoch-*", resp.Data["restore_epoch"])
 	}

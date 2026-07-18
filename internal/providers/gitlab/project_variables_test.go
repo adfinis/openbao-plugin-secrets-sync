@@ -28,7 +28,7 @@ const (
 	testObjectID        = "APP_PASSWORD"
 	testPayloadSHAOld   = "sha256:cba06b5736faf67e54b07b561eae94395e774c517a7d910a54369e1263ccfbd4"
 	testPayloadSHANew   = "sha256:11507a0e2f5e69d5dfa40a62a1bd7b6ee57e6bcd85c67c9b8431b36fff21c437"
-	testPluginInstance  = "inst-test"
+	testMountUUID       = "00000000-0000-4000-8000-000000000001"
 	testRestoreEpoch    = "epoch-test"
 	testBoolTrue        = "true"
 	testDriftedValue    = "drifted"
@@ -1297,14 +1297,14 @@ func runtimeWithDestination(
 
 func defaultRuntimeIdentity() providers.RuntimeIdentity {
 	return providers.RuntimeIdentity{
-		PluginInstanceID: testPluginInstance,
-		RestoreEpoch:     testRestoreEpoch,
+		MountUUID:    testMountUUID,
+		RestoreEpoch: testRestoreEpoch,
 	}
 }
 
 func ownedVariable(metadata variableMetadata) *gitlabVariable {
-	if metadata.PluginInstanceID == "" {
-		metadata.PluginInstanceID = testPluginInstance
+	if metadata.MountUUID == "" {
+		metadata.MountUUID = testMountUUID
 	}
 	if metadata.RestoreEpoch == "" {
 		metadata.RestoreEpoch = testRestoreEpoch
@@ -1484,8 +1484,8 @@ func TestVariableFormOmitsSecretFromDescription(t *testing.T) {
 	if !owned {
 		t.Fatalf("description metadata is not owned: %s", form.Get("description"))
 	}
-	if metadata.PluginInstanceID != testPluginInstance {
-		t.Fatalf("plugin instance = %s, want %s", metadata.PluginInstanceID, testPluginInstance)
+	if !runtimeMetadataValueMatches(metadata.MountUUID, metadata.MountUUIDHash, testMountUUID) {
+		t.Fatalf("mount UUID metadata does not match %s: %#v", testMountUUID, metadata)
 	}
 	if metadata.RestoreEpoch != testRestoreEpoch {
 		t.Fatalf("restore epoch = %s, want %s", metadata.RestoreEpoch, testRestoreEpoch)
@@ -1505,7 +1505,7 @@ func TestVariableMetadataDescriptionIsHumanReadable(t *testing.T) {
 		"OpenBao sync: app/db APP_PASSWORD v1",
 		"assoc=assoc-1",
 		"fmt=raw",
-		"inst=inst-test",
+		"mount_hash=",
 		"epoch=epoch-test",
 	} {
 		if !strings.Contains(description, want) {
@@ -1536,14 +1536,14 @@ func TestVariableMetadataDescriptionEscapesReadableFields(t *testing.T) {
 
 func TestVariableMetadataDescriptionKeepsRealisticRuntimeIdentityReadable(t *testing.T) {
 	description := metadataDescription(variableMetadata{
-		AssociationID:    "assoc-60212b8daa8d1586",
-		SourcePath:       "app/db",
-		ObjectID:         "password",
-		PluginInstanceID: "inst-d6ced37fb32ccbe0e786977505fa6e60",
-		RestoreEpoch:     "epoch-eb4c66139a976a06aac5412f9ba5d467",
-		SourceVersion:    1,
-		PayloadSHA256:    "sha256:ac1b5c0961a7269b6a053ee64276ed0e20a7f48aefb9f67519539d23aaf10149",
-		PayloadFormat:    payload.FormatRaw,
+		AssociationID: "assoc-60212b8daa8d1586",
+		SourcePath:    "app/db",
+		ObjectID:      "password",
+		MountUUID:     "d6ced37f-b32c-4be0-a786-977505fa6e60",
+		RestoreEpoch:  "epoch-eb4c66139a976a06aac5412f9ba5d467",
+		SourceVersion: 1,
+		PayloadSHA256: "sha256:ac1b5c0961a7269b6a053ee64276ed0e20a7f48aefb9f67519539d23aaf10149",
+		PayloadFormat: payload.FormatRaw,
 	})
 	if len(description) > variableDescriptionMaxBytes {
 		t.Fatalf("description length = %d, want <= %d: %s", len(description), variableDescriptionMaxBytes, description)
@@ -1557,7 +1557,7 @@ func TestVariableMetadataDescriptionKeepsRealisticRuntimeIdentityReadable(t *tes
 	for _, want := range []string{
 		"OpenBao sync: app/db password v1",
 		"assoc=assoc-60212b8daa8d1586",
-		"inst_hash=",
+		"mount_hash=",
 		"epoch_hash=",
 	} {
 		if !strings.Contains(description, want) {
@@ -1594,21 +1594,46 @@ func TestVariableFormSendsMaskedAndHiddenOnlyOnCreate(t *testing.T) {
 func TestOwnedByRequestRejectsRuntimeIdentityMismatch(t *testing.T) {
 	request := defaultUpsertRequest(testPayloadSHANew, []byte("secret"), 2)
 	metadata, owned := ownershipMetadata(ownedVariable(variableMetadata{
-		AssociationID:    request.AssociationID,
-		SourcePath:       request.SourcePath,
-		ObjectID:         request.ObjectID,
-		PluginInstanceID: request.Runtime.PluginInstanceID,
-		RestoreEpoch:     request.Runtime.RestoreEpoch,
-		SourceVersion:    request.SourceVersion,
-		PayloadSHA256:    request.PayloadSHA256,
-		PayloadFormat:    request.Format,
+		AssociationID: request.AssociationID,
+		SourcePath:    request.SourcePath,
+		ObjectID:      request.ObjectID,
+		MountUUID:     request.Runtime.MountUUID,
+		RestoreEpoch:  request.Runtime.RestoreEpoch,
+		SourceVersion: request.SourceVersion,
+		PayloadSHA256: request.PayloadSHA256,
+		PayloadFormat: request.Format,
 	}))
 	if !ownedByRequest(metadata, owned, request.OwnershipIdentity()) {
 		t.Fatal("ownedByRequest returned false for matching runtime identity")
 	}
-	metadata.PluginInstanceID = "inst-other"
+	missingMountUUID := request.OwnershipIdentity()
+	missingMountUUID.MountUUID = ""
+	if ownedByRequest(metadata, owned, missingMountUUID) {
+		t.Fatal("ownedByRequest returned true without a mount UUID")
+	}
+	missingRestoreEpoch := request.OwnershipIdentity()
+	missingRestoreEpoch.RestoreEpoch = ""
+	if ownedByRequest(metadata, owned, missingRestoreEpoch) {
+		t.Fatal("ownedByRequest returned true without a restore epoch")
+	}
+	metadata.MountUUID = "00000000-0000-4000-8000-000000000002"
+	metadata.MountUUIDHash = ""
 	if ownedByRequest(metadata, owned, request.OwnershipIdentity()) {
-		t.Fatal("ownedByRequest returned true for mismatched plugin instance")
+		t.Fatal("ownedByRequest returned true for mismatched mount UUID")
+	}
+}
+
+func TestOwnedByRequestRejectsLegacyPluginInstanceDescription(t *testing.T) {
+	request := defaultUpsertRequest(testPayloadSHANew, []byte("secret"), 2)
+	description := "OpenBao sync: app/db APP_PASSWORD v2; assoc=" + request.AssociationID +
+		"; sha=" + request.PayloadSHA256 + "; fmt=" + request.Format +
+		"; inst=inst-development; epoch=" + request.Runtime.RestoreEpoch
+	metadata, owned := ownershipMetadata(&gitlabVariable{Description: description})
+	if !owned {
+		t.Fatal("legacy description should remain recognizable as managed metadata")
+	}
+	if ownedByRequest(metadata, owned, request.OwnershipIdentity()) {
+		t.Fatal("ownedByRequest adopted legacy plugin-instance metadata")
 	}
 }
 
@@ -1635,8 +1660,8 @@ func TestVariableMetadataDescriptionFitsGitLabLimit(t *testing.T) {
 	if metadata.PayloadSHA256 != testPayloadSHANew {
 		t.Fatalf("payload sha = %s, want %s", metadata.PayloadSHA256, testPayloadSHANew)
 	}
-	if metadata.PluginInstanceID != testPluginInstance {
-		t.Fatalf("plugin instance = %s, want %s", metadata.PluginInstanceID, testPluginInstance)
+	if !runtimeMetadataValueMatches(metadata.MountUUID, metadata.MountUUIDHash, testMountUUID) {
+		t.Fatalf("mount UUID metadata does not match %s: %#v", testMountUUID, metadata)
 	}
 	if metadata.RestoreEpoch != testRestoreEpoch {
 		t.Fatalf("restore epoch = %s, want %s", metadata.RestoreEpoch, testRestoreEpoch)
@@ -1648,7 +1673,7 @@ func TestVariableMetadataDescriptionFitsGitLabLimitWithRuntimeIdentity(t *testin
 	request.AssociationID = "assoc-" + strings.Repeat("a", 16)
 	request.ObjectID = "OPENBAO_SECRET_SYNC_E2E_" + strings.Repeat("1", 19)
 	request.ResolvedName = request.ObjectID
-	request.Runtime.PluginInstanceID = "inst-" + strings.Repeat("b", 32)
+	request.Runtime.MountUUID = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"
 	request.Runtime.RestoreEpoch = "epoch-" + strings.Repeat("c", 32)
 
 	input := variableInputFromUpsert(defaultAssociationOptions(), request)
@@ -1665,7 +1690,7 @@ func TestVariableMetadataDescriptionFitsGitLabLimitWithRuntimeIdentity(t *testin
 	if metadata.ObjectID != request.ObjectID && metadata.ObjectIDHash == "" {
 		t.Fatalf("metadata object id is neither direct nor compacted: %#v", metadata)
 	}
-	if metadata.PluginInstanceIDHash == "" && metadata.RestoreEpochHash == "" {
+	if metadata.MountUUIDHash == "" && metadata.RestoreEpochHash == "" {
 		t.Fatalf("metadata runtime identity was not compacted: %#v", metadata)
 	}
 	if !ownedByRequest(metadata, owned, request.OwnershipIdentity()) {

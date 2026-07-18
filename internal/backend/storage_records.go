@@ -12,7 +12,6 @@ import (
 
 const (
 	storageSchemaKey           = "schema/version"
-	pluginInstanceKey          = "identity/plugin-instance"
 	restoreEpochKey            = "identity/restore-epoch"
 	metadataStoragePrefix      = "metadata/"
 	versionStoragePrefix       = "data/"
@@ -72,11 +71,6 @@ type storageSchemaRecord struct {
 	MinCompatibleVersion int    `json:"min_compatible_version"`
 	CreatedTime          string `json:"created_time"`
 	UpdatedTime          string `json:"updated_time"`
-}
-
-type pluginInstanceRecord struct {
-	ID          string `json:"id"`
-	CreatedTime string `json:"created_time"`
 }
 
 type restoreEpochRecord struct {

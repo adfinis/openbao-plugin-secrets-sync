@@ -41,7 +41,7 @@ func TestOutboxIndexesDoNotAuthorizeMissingOperations(t *testing.T) {
 		t.Fatalf("queued versions = %v, want empty", versions)
 	}
 
-	processed, err := Backend(&logical.BackendConfig{}).processDueOutboxLimit(
+	processed, err := newBackendForTest(&logical.BackendConfig{}).processDueOutboxLimit(
 		context.Background(),
 		storage,
 		now,
@@ -109,7 +109,7 @@ func TestOutboxIndexCandidatesMustMatchCanonicalRecord(t *testing.T) {
 		t.Fatalf("queue summary = %#v, want one retry-wait operation", summary)
 	}
 
-	processed, err := Backend(&logical.BackendConfig{}).processDueOutboxLimit(
+	processed, err := newBackendForTest(&logical.BackendConfig{}).processDueOutboxLimit(
 		context.Background(),
 		storage,
 		now,

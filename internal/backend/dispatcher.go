@@ -137,11 +137,14 @@ func (b *secretSyncBackend) claimBlockedByGlobalSwitch(
 }
 
 func (b *secretSyncBackend) outboxClaimOwner(ctx context.Context, storage logical.Storage) (string, error) {
-	state, err := ensureRuntimeState(ctx, storage)
+	mountUUID, err := b.requiredMountUUID()
 	if err != nil {
 		return "", err
 	}
-	return state.PluginInstance.ID + "/" + b.dispatchWorkerID, nil
+	if _, err := ensureRuntimeState(ctx, storage); err != nil {
+		return "", err
+	}
+	return mountUUID + "/" + b.dispatchWorkerID, nil
 }
 
 func claimOutboxRecord(
@@ -275,7 +278,7 @@ func (b *secretSyncBackend) processUpsert(
 	if err != nil {
 		return err
 	}
-	runtimeIdentity, err := providerRuntimeIdentity(ctx, storage)
+	runtimeIdentity, err := b.providerRuntimeIdentity(ctx, storage)
 	if err != nil {
 		return err
 	}
@@ -483,7 +486,7 @@ func (b *secretSyncBackend) processDelete(
 	if err != nil {
 		return err
 	}
-	runtimeIdentity, err := providerRuntimeIdentity(ctx, storage)
+	runtimeIdentity, err := b.providerRuntimeIdentity(ctx, storage)
 	if err != nil {
 		return err
 	}

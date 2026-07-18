@@ -72,14 +72,14 @@ const (
 	maxDeleteRecoveryWindowDays     = 30
 	defaultHTTPTimeout              = 30 * time.Second
 
-	tagManaged        = "openbao-sync"
-	tagAssociationID  = "openbao-sync-association"
-	tagSourcePath     = "openbao-sync-path"
-	tagSourceVersion  = "openbao-sync-version"
-	tagObjectID       = "openbao-sync-object"
-	tagPayloadSHA256  = "openbao-sync-payload-sha256"
-	tagPluginInstance = "openbao-sync-plugin-instance"
-	tagRestoreEpoch   = "openbao-sync-restore-epoch"
+	tagManaged       = "openbao-sync"
+	tagAssociationID = "openbao-sync-association"
+	tagSourcePath    = "openbao-sync-path"
+	tagSourceVersion = "openbao-sync-version"
+	tagObjectID      = "openbao-sync-object"
+	tagPayloadSHA256 = "openbao-sync-payload-sha256"
+	tagMountUUID     = "openbao-sync-mount-uuid"
+	tagRestoreEpoch  = "openbao-sync-restore-epoch"
 )
 
 var providerHelpers = providerutil.New(ProviderType)
@@ -927,8 +927,8 @@ func ownershipTagsFromUpsert(req providers.UpsertRequest) []smtypes.Tag {
 		tag(tagObjectID, req.ObjectID),
 		tag(tagPayloadSHA256, req.PayloadSHA256),
 	}
-	if req.Runtime.PluginInstanceID != "" {
-		tags = append(tags, tag(tagPluginInstance, req.Runtime.PluginInstanceID))
+	if req.Runtime.MountUUID != "" {
+		tags = append(tags, tag(tagMountUUID, req.Runtime.MountUUID))
 	}
 	if req.Runtime.RestoreEpoch != "" {
 		tags = append(tags, tag(tagRestoreEpoch, req.Runtime.RestoreEpoch))
@@ -943,7 +943,7 @@ func ownedByRequest(tags []smtypes.Tag, identity providers.RequestIdentity) bool
 	return requiredTagMatches(tags, tagAssociationID, identity.AssociationID) &&
 		requiredTagMatches(tags, tagSourcePath, identity.SourcePath) &&
 		requiredTagMatches(tags, tagObjectID, identity.ObjectID) &&
-		runtimeTagMatches(tags, tagPluginInstance, identity.PluginInstanceID) &&
+		runtimeTagMatches(tags, tagMountUUID, identity.MountUUID) &&
 		runtimeTagMatches(tags, tagRestoreEpoch, identity.RestoreEpoch)
 }
 
@@ -952,10 +952,7 @@ func requiredTagMatches(tags []smtypes.Tag, key string, expected string) bool {
 }
 
 func runtimeTagMatches(tags []smtypes.Tag, key string, expected string) bool {
-	if expected == "" {
-		return true
-	}
-	return tagValue(tags, key) == expected
+	return expected != "" && tagValue(tags, key) == expected
 }
 
 func remoteSourceVersionNewer(tags []smtypes.Tag, sourceVersion int) bool {

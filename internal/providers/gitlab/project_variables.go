@@ -707,30 +707,30 @@ func variableMatchesInput(variable *gitlabVariable, input gitlabVariableInput) b
 }
 
 type variableMetadata struct {
-	AssociationID        string
-	SourcePath           string
-	SourcePathHash       string
-	ObjectID             string
-	ObjectIDHash         string
-	PluginInstanceID     string
-	PluginInstanceIDHash string
-	RestoreEpoch         string
-	RestoreEpochHash     string
-	SourceVersion        int
-	PayloadSHA256        string
-	PayloadFormat        string
+	AssociationID    string
+	SourcePath       string
+	SourcePathHash   string
+	ObjectID         string
+	ObjectIDHash     string
+	MountUUID        string
+	MountUUIDHash    string
+	RestoreEpoch     string
+	RestoreEpochHash string
+	SourceVersion    int
+	PayloadSHA256    string
+	PayloadFormat    string
 }
 
 func variableInputFromUpsert(options gitlabAssociationOptions, req providers.UpsertRequest) gitlabVariableInput {
 	metadata := variableMetadata{
-		AssociationID:    req.AssociationID,
-		SourcePath:       req.SourcePath,
-		ObjectID:         req.ObjectID,
-		PluginInstanceID: req.Runtime.PluginInstanceID,
-		RestoreEpoch:     req.Runtime.RestoreEpoch,
-		SourceVersion:    req.SourceVersion,
-		PayloadSHA256:    req.PayloadSHA256,
-		PayloadFormat:    req.Format,
+		AssociationID: req.AssociationID,
+		SourcePath:    req.SourcePath,
+		ObjectID:      req.ObjectID,
+		MountUUID:     req.Runtime.MountUUID,
+		RestoreEpoch:  req.Runtime.RestoreEpoch,
+		SourceVersion: req.SourceVersion,
+		PayloadSHA256: req.PayloadSHA256,
+		PayloadFormat: req.Format,
 	}
 	return gitlabVariableInput{
 		Key:              req.ResolvedName,
@@ -747,20 +747,20 @@ func variableInputFromUpsert(options gitlabAssociationOptions, req providers.Ups
 
 func variableDescriptionFromPlan(req providers.PlanRequest) string {
 	return metadataDescription(variableMetadata{
-		AssociationID:    req.AssociationID,
-		SourcePath:       req.SourcePath,
-		ObjectID:         req.ObjectID,
-		PluginInstanceID: req.Runtime.PluginInstanceID,
-		RestoreEpoch:     req.Runtime.RestoreEpoch,
-		SourceVersion:    req.SourceVersion,
-		PayloadSHA256:    req.PayloadSHA256,
-		PayloadFormat:    req.Format,
+		AssociationID: req.AssociationID,
+		SourcePath:    req.SourcePath,
+		ObjectID:      req.ObjectID,
+		MountUUID:     req.Runtime.MountUUID,
+		RestoreEpoch:  req.Runtime.RestoreEpoch,
+		SourceVersion: req.SourceVersion,
+		PayloadSHA256: req.PayloadSHA256,
+		PayloadFormat: req.Format,
 	})
 }
 
 func metadataDescription(metadata variableMetadata) string {
 	wire := metadata
-	compactWireIdentity(&wire.PluginInstanceID, &wire.PluginInstanceIDHash)
+	compactWireIdentity(&wire.MountUUID, &wire.MountUUIDHash)
 	compactWireIdentity(&wire.RestoreEpoch, &wire.RestoreEpochHash)
 	payload := humanMetadataDescription(wire, false)
 	if len(payload) <= variableDescriptionMaxBytes {
@@ -804,8 +804,8 @@ func metadataDescriptionFields(wire variableMetadata, compact bool) []metadataDe
 			{key: "a", value: wire.AssociationID},
 			{key: "h", value: wire.PayloadSHA256},
 			{key: "f", value: wire.PayloadFormat},
-			{key: "i", value: wire.PluginInstanceID},
-			{key: "ih", value: wire.PluginInstanceIDHash},
+			{key: "m", value: wire.MountUUID},
+			{key: "mh", value: wire.MountUUIDHash},
 			{key: "r", value: wire.RestoreEpoch},
 			{key: "rh", value: wire.RestoreEpochHash},
 		}
@@ -814,8 +814,8 @@ func metadataDescriptionFields(wire variableMetadata, compact bool) []metadataDe
 		{key: "assoc", value: wire.AssociationID},
 		{key: "sha", value: wire.PayloadSHA256},
 		{key: "fmt", value: wire.PayloadFormat},
-		{key: "inst", value: wire.PluginInstanceID},
-		{key: "inst_hash", value: wire.PluginInstanceIDHash},
+		{key: "mount", value: wire.MountUUID},
+		{key: "mount_hash", value: wire.MountUUIDHash},
 		{key: "epoch", value: wire.RestoreEpoch},
 		{key: "epoch_hash", value: wire.RestoreEpochHash},
 	}
@@ -914,18 +914,18 @@ func humanOwnershipMetadata(description string) (variableMetadata, bool, bool) {
 		return variableMetadata{}, false, true
 	}
 	return variableMetadata{
-		AssociationID:        metadataDescriptionFieldValue(fields, "assoc", "a"),
-		SourcePath:           summary.SourcePath,
-		SourcePathHash:       summary.SourcePathHash,
-		ObjectID:             summary.ObjectID,
-		ObjectIDHash:         summary.ObjectIDHash,
-		PluginInstanceID:     metadataDescriptionFieldValue(fields, "inst", "i"),
-		PluginInstanceIDHash: metadataDescriptionFieldValue(fields, "inst_hash", "ih"),
-		RestoreEpoch:         metadataDescriptionFieldValue(fields, "epoch", "r"),
-		RestoreEpochHash:     metadataDescriptionFieldValue(fields, "epoch_hash", "rh"),
-		SourceVersion:        summary.SourceVersion,
-		PayloadSHA256:        metadataDescriptionFieldValue(fields, "sha", "h"),
-		PayloadFormat:        metadataDescriptionFieldValue(fields, "fmt", "f"),
+		AssociationID:    metadataDescriptionFieldValue(fields, "assoc", "a"),
+		SourcePath:       summary.SourcePath,
+		SourcePathHash:   summary.SourcePathHash,
+		ObjectID:         summary.ObjectID,
+		ObjectIDHash:     summary.ObjectIDHash,
+		MountUUID:        metadataDescriptionFieldValue(fields, "mount", "m"),
+		MountUUIDHash:    metadataDescriptionFieldValue(fields, "mount_hash", "mh"),
+		RestoreEpoch:     metadataDescriptionFieldValue(fields, "epoch", "r"),
+		RestoreEpochHash: metadataDescriptionFieldValue(fields, "epoch_hash", "rh"),
+		SourceVersion:    summary.SourceVersion,
+		PayloadSHA256:    metadataDescriptionFieldValue(fields, "sha", "h"),
+		PayloadFormat:    metadataDescriptionFieldValue(fields, "fmt", "f"),
 	}, true, true
 }
 
@@ -1120,7 +1120,7 @@ func ownedByRequest(metadata variableMetadata, metadataOwned bool, identity prov
 	return metadata.AssociationID == identity.AssociationID &&
 		sourcePathMatches &&
 		objectIDMatches &&
-		runtimeMetadataValueMatches(metadata.PluginInstanceID, metadata.PluginInstanceIDHash, identity.PluginInstanceID) &&
+		runtimeMetadataValueMatches(metadata.MountUUID, metadata.MountUUIDHash, identity.MountUUID) &&
 		runtimeMetadataValueMatches(metadata.RestoreEpoch, metadata.RestoreEpochHash, identity.RestoreEpoch) &&
 		identity.AssociationID != "" &&
 		identity.SourcePath != "" &&
@@ -1128,10 +1128,8 @@ func ownedByRequest(metadata variableMetadata, metadataOwned bool, identity prov
 }
 
 func runtimeMetadataValueMatches(actual string, actualHash string, expected string) bool {
-	if expected == "" {
-		return true
-	}
-	return actual == expected || (actualHash != "" && metadataIdentityHashMatches(actualHash, expected))
+	return expected != "" &&
+		(actual == expected || (actualHash != "" && metadataIdentityHashMatches(actualHash, expected)))
 }
 
 func metadataIdentityHash(value string) string {

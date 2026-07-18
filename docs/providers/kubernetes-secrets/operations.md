@@ -21,9 +21,9 @@ Secret value in the namespace.
 
 The provider writes an ownership label and annotations that include the
 association ID, source path, source version, object ID, payload hash, payload
-format, data keys, plugin instance, and restore epoch. Owned update and delete
-operations require matching ownership metadata. If ownership cannot be proven,
-the provider returns an ownership error instead of mutating the Secret.
+format, data keys, OpenBao mount UUID, and restore epoch. Owned update and
+delete operations require matching ownership metadata. If ownership cannot be
+proven, the provider returns an ownership error instead of mutating the Secret.
 
 The exact Kubernetes metadata contract is:
 
@@ -37,7 +37,7 @@ The exact Kubernetes metadata contract is:
 | Annotation | `openbao.org/secrets-sync-payload-sha256` | Canonical payload hash |
 | Annotation | `openbao.org/secrets-sync-format` | Rendered payload format |
 | Annotation | `openbao.org/secrets-sync-data-keys` | Managed keys for `source-keys` data maps |
-| Annotation | `openbao.org/secrets-sync-plugin-instance` | Plugin mount instance ID |
+| Annotation | `openbao.org/secrets-sync-mount-uuid` | OpenBao-provided mount UUID |
 | Annotation | `openbao.org/secrets-sync-restore-epoch` | Restore epoch |
 
 These labels and annotations are plaintext Kubernetes object metadata. They do

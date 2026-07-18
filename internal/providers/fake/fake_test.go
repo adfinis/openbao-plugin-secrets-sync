@@ -244,7 +244,7 @@ func defaultFakeReadStateRequest(resolvedName string) providers.ReadStateRequest
 
 func defaultFakeRuntimeIdentity() providers.RuntimeIdentity {
 	return providers.RuntimeIdentity{
-		PluginInstanceID: "inst-test",
-		RestoreEpoch:     "epoch-test",
+		MountUUID:    "00000000-0000-4000-8000-000000000001",
+		RestoreEpoch: "epoch-test",
 	}
 }

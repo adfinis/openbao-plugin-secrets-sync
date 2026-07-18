@@ -34,14 +34,6 @@ func TestStorageRecordJSONTags(t *testing.T) {
 			},
 		},
 		{
-			name: "plugin instance",
-			typ:  reflect.TypeOf(pluginInstanceRecord{}),
-			want: []string{
-				"ID:id",
-				"CreatedTime:created_time",
-			},
-		},
-		{
 			name: "restore epoch",
 			typ:  reflect.TypeOf(restoreEpochRecord{}),
 			want: []string{

@@ -174,13 +174,13 @@ func canonicalAPIGoldenString(key string, value string) interface{} {
 
 func apiGoldenPlaceholderForKey(key string) (string, bool) {
 	placeholders := map[string]string{
-		"association_id":     "<association-id>",
-		"claim_owner":        "<claim-owner>",
-		"generation":         "<generation>",
-		"idempotency_key":    "<operation-id>",
-		"last_operation_id":  "<operation-id>",
-		"plugin_instance_id": "<plugin-instance-id>",
-		"restore_epoch":      "<restore-epoch>",
+		"association_id":    "<association-id>",
+		"claim_owner":       "<claim-owner>",
+		"generation":        "<generation>",
+		"idempotency_key":   "<operation-id>",
+		"last_operation_id": "<operation-id>",
+		"mount_uuid":        "<mount-uuid>",
+		"restore_epoch":     "<restore-epoch>",
 	}
 	placeholder, ok := placeholders[key]
 	return placeholder, ok
@@ -188,8 +188,8 @@ func apiGoldenPlaceholderForKey(key string) (string, bool) {
 
 func apiGoldenPlaceholderForValue(value string) (string, bool) {
 	switch {
-	case strings.HasPrefix(value, "inst-"):
-		return "<plugin-instance-id>", true
+	case value == testMountUUID:
+		return "<mount-uuid>", true
 	case strings.HasPrefix(value, "epoch-"):
 		return "<restore-epoch>", true
 	case strings.HasPrefix(value, "gen-"):

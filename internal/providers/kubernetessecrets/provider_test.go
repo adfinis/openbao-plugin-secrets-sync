@@ -41,7 +41,7 @@ const (
 	testPayloadSHAOld   = "sha256:6a81041dee1ed86a0d590b7d8c555c789cd4de82fbfa5b4e6881f4ebba1b6f41"
 	testPayloadSHANew   = "sha256:4cc28eb0fcebad7dbacc0970586ee420fd24ef182cf76c955e833f3da4a5ad3d"
 	testPayloadNew      = `{"password":"new"}`
-	testPluginInstance  = "inst-test"
+	testMountUUID       = "00000000-0000-4000-8000-000000000001"
 	testRestoreEpoch    = "epoch-test"
 )
 
@@ -83,16 +83,16 @@ func TestOwnershipMetadataKeys(t *testing.T) {
 		got  string
 		want string
 	}{
-		"managed label":              {got: labelManaged, want: "openbao.org/secrets-sync-managed"},
-		"association annotation":     {got: annotationAssociationID, want: "openbao.org/secrets-sync-association-id"},
-		"source path annotation":     {got: annotationSourcePath, want: "openbao.org/secrets-sync-source-path"},
-		"source version annotation":  {got: annotationSourceVersion, want: "openbao.org/secrets-sync-source-version"},
-		"object annotation":          {got: annotationObjectID, want: "openbao.org/secrets-sync-object-id"},
-		"payload hash annotation":    {got: annotationPayloadSHA256, want: "openbao.org/secrets-sync-payload-sha256"},
-		"format annotation":          {got: annotationFormat, want: "openbao.org/secrets-sync-format"},
-		"data keys annotation":       {got: annotationDataKeys, want: "openbao.org/secrets-sync-data-keys"},
-		"plugin instance annotation": {got: annotationPluginInstance, want: "openbao.org/secrets-sync-plugin-instance"},
-		"restore epoch annotation":   {got: annotationRestoreEpoch, want: "openbao.org/secrets-sync-restore-epoch"},
+		"managed label":             {got: labelManaged, want: "openbao.org/secrets-sync-managed"},
+		"association annotation":    {got: annotationAssociationID, want: "openbao.org/secrets-sync-association-id"},
+		"source path annotation":    {got: annotationSourcePath, want: "openbao.org/secrets-sync-source-path"},
+		"source version annotation": {got: annotationSourceVersion, want: "openbao.org/secrets-sync-source-version"},
+		"object annotation":         {got: annotationObjectID, want: "openbao.org/secrets-sync-object-id"},
+		"payload hash annotation":   {got: annotationPayloadSHA256, want: "openbao.org/secrets-sync-payload-sha256"},
+		"format annotation":         {got: annotationFormat, want: "openbao.org/secrets-sync-format"},
+		"data keys annotation":      {got: annotationDataKeys, want: "openbao.org/secrets-sync-data-keys"},
+		"mount UUID annotation":     {got: annotationMountUUID, want: "openbao.org/secrets-sync-mount-uuid"},
+		"restore epoch annotation":  {got: annotationRestoreEpoch, want: "openbao.org/secrets-sync-restore-epoch"},
 	}
 
 	for name, test := range tests {
@@ -711,7 +711,7 @@ func TestUpsertCreatesSecretWithOwnershipMetadata(t *testing.T) {
 	assertAnnotation(t, secret, annotationSourceVersion, "1")
 	assertAnnotation(t, secret, annotationObjectID, testObjectID)
 	assertAnnotation(t, secret, annotationPayloadSHA256, testPayloadSHANew)
-	assertAnnotation(t, secret, annotationPluginInstance, testPluginInstance)
+	assertAnnotation(t, secret, annotationMountUUID, testMountUUID)
 	assertAnnotation(t, secret, annotationRestoreEpoch, testRestoreEpoch)
 }
 
@@ -1070,14 +1070,34 @@ func TestUpsertRejectsUnsafeRemoteState(t *testing.T) {
 func TestOwnedByRequestRejectsRuntimeIdentityMismatch(t *testing.T) {
 	request := defaultUpsertRequest(testPayloadSHANew, []byte(testPayloadNew), 1)
 	secret := ownedSecret(testPayloadSHANew, 1, []byte(testPayloadNew))
-	secret.Annotations[annotationPluginInstance] = testPluginInstance
+	secret.Annotations[annotationMountUUID] = testMountUUID
 	secret.Annotations[annotationRestoreEpoch] = testRestoreEpoch
 	if !ownedByRequest(secret, request.OwnershipIdentity()) {
 		t.Fatal("ownedByRequest returned false for matching runtime identity")
 	}
-	secret.Annotations[annotationPluginInstance] = "inst-other"
+	missingMountUUID := request.OwnershipIdentity()
+	missingMountUUID.MountUUID = ""
+	if ownedByRequest(secret, missingMountUUID) {
+		t.Fatal("ownedByRequest returned true without a mount UUID")
+	}
+	missingRestoreEpoch := request.OwnershipIdentity()
+	missingRestoreEpoch.RestoreEpoch = ""
+	if ownedByRequest(secret, missingRestoreEpoch) {
+		t.Fatal("ownedByRequest returned true without a restore epoch")
+	}
+	secret.Annotations[annotationMountUUID] = "00000000-0000-4000-8000-000000000002"
 	if ownedByRequest(secret, request.OwnershipIdentity()) {
-		t.Fatal("ownedByRequest returned true for mismatched plugin instance")
+		t.Fatal("ownedByRequest returned true for mismatched mount UUID")
+	}
+}
+
+func TestOwnedByRequestRejectsLegacyPluginInstanceAnnotation(t *testing.T) {
+	request := defaultUpsertRequest(testPayloadSHANew, []byte(testPayloadNew), 1)
+	secret := ownedSecret(testPayloadSHANew, 1, []byte(testPayloadNew))
+	delete(secret.Annotations, annotationMountUUID)
+	secret.Annotations[metadataKeyPrefix+"plugin-instance"] = "inst-development"
+	if ownedByRequest(secret, request.OwnershipIdentity()) {
+		t.Fatal("ownedByRequest adopted legacy plugin-instance metadata")
 	}
 }
 
@@ -1525,8 +1545,8 @@ func runtimeWithClient(t *testing.T, client kubernetes.Interface) providers.Dest
 
 func defaultRuntimeIdentity() providers.RuntimeIdentity {
 	return providers.RuntimeIdentity{
-		PluginInstanceID: testPluginInstance,
-		RestoreEpoch:     testRestoreEpoch,
+		MountUUID:    testMountUUID,
+		RestoreEpoch: testRestoreEpoch,
 	}
 }
 
@@ -1539,14 +1559,14 @@ func ownedSecret(payloadSHA256 string, sourceVersion int, payload []byte) *corev
 				labelManaged: "true",
 			},
 			Annotations: map[string]string{
-				annotationAssociationID:  testAssociationID,
-				annotationSourcePath:     testSourcePath,
-				annotationSourceVersion:  "1",
-				annotationObjectID:       testObjectID,
-				annotationPayloadSHA256:  payloadSHA256,
-				annotationFormat:         "json",
-				annotationPluginInstance: testPluginInstance,
-				annotationRestoreEpoch:   testRestoreEpoch,
+				annotationAssociationID: testAssociationID,
+				annotationSourcePath:    testSourcePath,
+				annotationSourceVersion: "1",
+				annotationObjectID:      testObjectID,
+				annotationPayloadSHA256: payloadSHA256,
+				annotationFormat:        "json",
+				annotationMountUUID:     testMountUUID,
+				annotationRestoreEpoch:  testRestoreEpoch,
 			},
 			ResourceVersion: "rv-1",
 		},
@@ -1570,14 +1590,14 @@ func ownedDataMapSecret(
 				labelManaged: "true",
 			},
 			Annotations: map[string]string{
-				annotationAssociationID:  testAssociationID,
-				annotationSourcePath:     testSourcePath,
-				annotationSourceVersion:  "1",
-				annotationObjectID:       testObjectID,
-				annotationPayloadSHA256:  payloadSHA256,
-				annotationFormat:         payloadpkg.FormatDataMap,
-				annotationPluginInstance: testPluginInstance,
-				annotationRestoreEpoch:   testRestoreEpoch,
+				annotationAssociationID: testAssociationID,
+				annotationSourcePath:    testSourcePath,
+				annotationSourceVersion: "1",
+				annotationObjectID:      testObjectID,
+				annotationPayloadSHA256: payloadSHA256,
+				annotationFormat:        payloadpkg.FormatDataMap,
+				annotationMountUUID:     testMountUUID,
+				annotationRestoreEpoch:  testRestoreEpoch,
 			},
 			ResourceVersion: "rv-1",
 		},

@@ -34,7 +34,7 @@ const (
 	testEndpointURL     = "http://localhost:4566"
 	testRoleARN         = "arn:aws:iam::123456789012:role/openbao-plugin-secrets-sync"
 	testIdentityFile    = "/var/run/openbao/aws-web-identity.jwt"
-	testPluginInstance  = "inst-test"
+	testMountUUID       = "00000000-0000-4000-8000-000000000001"
 	testRestoreEpoch    = "epoch-test"
 )
 
@@ -861,7 +861,7 @@ func TestUpsertCreatesMissingSecretWithOwnershipTags(t *testing.T) {
 	assertTag(t, client.createSecretInput.Tags, tagSourcePath, testSourcePath)
 	assertTag(t, client.createSecretInput.Tags, tagObjectID, testObjectID)
 	assertTag(t, client.createSecretInput.Tags, tagPayloadSHA256, testPayloadSHANew)
-	assertTag(t, client.createSecretInput.Tags, tagPluginInstance, testPluginInstance)
+	assertTag(t, client.createSecretInput.Tags, tagMountUUID, testMountUUID)
 	assertTag(t, client.createSecretInput.Tags, tagRestoreEpoch, testRestoreEpoch)
 }
 
@@ -895,7 +895,7 @@ func TestUpsertUpdatesOwnedSecretAndTagsHash(t *testing.T) {
 		t.Fatalf("tag secret id = %s, want described ARN", got)
 	}
 	assertTag(t, client.tagResourceInput.Tags, tagPayloadSHA256, testPayloadSHANew)
-	assertTag(t, client.tagResourceInput.Tags, tagPluginInstance, testPluginInstance)
+	assertTag(t, client.tagResourceInput.Tags, tagMountUUID, testMountUUID)
 	assertTag(t, client.tagResourceInput.Tags, tagRestoreEpoch, testRestoreEpoch)
 }
 
@@ -1092,13 +1092,37 @@ func TestOwnedByRequestRejectsRuntimeIdentityMismatch(t *testing.T) {
 	if !ownedByRequest(tags, identity) {
 		t.Fatalf("ownedByRequest returned false for matching runtime identity")
 	}
+	missingMountUUID := identity
+	missingMountUUID.MountUUID = ""
+	if ownedByRequest(tags, missingMountUUID) {
+		t.Fatal("ownedByRequest returned true without a mount UUID")
+	}
+	missingRestoreEpoch := identity
+	missingRestoreEpoch.RestoreEpoch = ""
+	if ownedByRequest(tags, missingRestoreEpoch) {
+		t.Fatal("ownedByRequest returned true without a restore epoch")
+	}
 	for index := range tags {
-		if aws.ToString(tags[index].Key) == tagPluginInstance {
-			tags[index].Value = aws.String("inst-other")
+		if aws.ToString(tags[index].Key) == tagMountUUID {
+			tags[index].Value = aws.String("00000000-0000-4000-8000-000000000002")
 		}
 	}
 	if ownedByRequest(tags, identity) {
-		t.Fatal("ownedByRequest returned true for mismatched plugin instance")
+		t.Fatal("ownedByRequest returned true for mismatched mount UUID")
+	}
+}
+
+func TestOwnedByRequestRejectsLegacyPluginInstanceTag(t *testing.T) {
+	request := defaultUpsertRequest()
+	tags := ownershipTagsFromUpsert(request)
+	for index := range tags {
+		if aws.ToString(tags[index].Key) == tagMountUUID {
+			tags[index].Key = aws.String("openbao-sync-plugin-instance")
+			tags[index].Value = aws.String("inst-development")
+		}
+	}
+	if ownedByRequest(tags, request.OwnershipIdentity()) {
+		t.Fatal("ownedByRequest adopted legacy plugin-instance metadata")
 	}
 }
 
@@ -1574,8 +1598,8 @@ func runtimeWithDestination(
 
 func defaultRuntimeIdentity() providers.RuntimeIdentity {
 	return providers.RuntimeIdentity{
-		PluginInstanceID: testPluginInstance,
-		RestoreEpoch:     testRestoreEpoch,
+		MountUUID:    testMountUUID,
+		RestoreEpoch: testRestoreEpoch,
 	}
 }
 
@@ -1619,7 +1643,7 @@ func ownedDescribeOutputAtVersion(
 			tag(tagSourceVersion, strconv.Itoa(sourceVersion)),
 			tag(tagObjectID, testObjectID),
 			tag(tagPayloadSHA256, payloadSHA256),
-			tag(tagPluginInstance, testPluginInstance),
+			tag(tagMountUUID, testMountUUID),
 			tag(tagRestoreEpoch, testRestoreEpoch),
 		},
 		VersionIdsToStages: map[string][]string{

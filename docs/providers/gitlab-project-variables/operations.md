@@ -18,12 +18,13 @@ Scope the token to the target project where possible.
 The provider stores ownership metadata in the GitLab variable description. New
 writes use a labelled single-line description that starts with
 `OpenBao sync:`. The visible summary includes the source path, object ID, and
-source version, followed by association, payload hash, format, plugin instance,
-and restore epoch metadata. Long identity values are replaced with stable
-hashes when needed to stay within GitLab's description limit. Owned update and
-delete operations require matching ownership metadata. If ownership cannot be
-proven, the provider returns an ownership error instead of mutating the
-variable.
+source version, followed by association, payload hash, format, OpenBao mount
+UUID, and restore epoch metadata. Long identity values are replaced with stable
+hashes when needed to stay within GitLab's description limit. The readable
+mount fields are `mount` and `mount_hash`; compact descriptions use `m` and
+`mh`. Owned update and delete operations require matching ownership metadata.
+If ownership cannot be proven, the provider returns an ownership error instead
+of mutating the variable.
 
 Plan, upsert no-op detection, and reconcile compare the GitLab API value
 readback with the desired payload hash. Manual value edits are detected even

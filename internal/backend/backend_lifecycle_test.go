@@ -2,6 +2,7 @@ package backend
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 
@@ -35,7 +36,7 @@ func TestBackendStartsStorageLifecycleDuringInitialize(t *testing.T) {
 	if env.b.eventDispatchCh == nil {
 		t.Fatal("initialize must start the event dispatcher")
 	}
-	for _, key := range []string{storageSchemaKey, pluginInstanceKey, restoreEpochKey, configPath} {
+	for _, key := range []string{storageSchemaKey, restoreEpochKey, configPath} {
 		entry, err := env.storage.Get(context.Background(), key)
 		if err != nil {
 			t.Fatalf("read initialized key %q: %v", key, err)
@@ -43,6 +44,11 @@ func TestBackendStartsStorageLifecycleDuringInitialize(t *testing.T) {
 		if entry == nil {
 			t.Fatalf("initialized key %q is missing", key)
 		}
+	}
+	if entry, err := env.storage.Get(context.Background(), "identity/plugin-instance"); err != nil {
+		t.Fatalf("read removed plugin instance identity: %v", err)
+	} else if entry != nil {
+		t.Fatal("initialize must not persist the removed plugin instance identity")
 	}
 }
 
@@ -62,6 +68,34 @@ func TestBackendInitializeFailsClosedBeforeStartingDispatcher(t *testing.T) {
 	}
 	if env.b.eventDispatchCh != nil {
 		t.Fatal("failed initialization must not start the event dispatcher")
+	}
+}
+
+func TestBackendInitializeRequiresBackendUUID(t *testing.T) {
+	b := Backend(&logical.BackendConfig{})
+	storage := &logical.InmemStorage{}
+	err := b.Initialize(context.Background(), &logical.InitializationRequest{Storage: storage})
+	if !errors.Is(err, errBackendUUIDRequired) {
+		t.Fatalf("Initialize() error = %v, want %v", err, errBackendUUIDRequired)
+	}
+	if b.eventDispatchCh != nil {
+		t.Fatal("failed initialization must not start the event dispatcher")
+	}
+	if entries, err := storage.List(context.Background(), ""); err != nil {
+		t.Fatalf("list storage after failed initialization: %v", err)
+	} else if len(entries) != 0 {
+		t.Fatalf("failed initialization wrote storage entries: %v", entries)
+	}
+	resp, err := b.HandleRequest(context.Background(), &logical.Request{
+		Operation: logical.ReadOperation,
+		Path:      configPath,
+		Storage:   storage,
+	})
+	if !errors.Is(err, errBackendUUIDRequired) {
+		t.Fatalf("HandleRequest() error = %v, want %v", err, errBackendUUIDRequired)
+	}
+	if resp != nil {
+		t.Fatalf("HandleRequest() response = %#v, want nil", resp)
 	}
 }
 

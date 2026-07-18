@@ -102,7 +102,6 @@ var storageGoldenKeyReplacements = []struct {
 	pattern *regexp.Regexp
 	value   string
 }{
-	{pattern: regexp.MustCompile(`inst-[0-9a-f]{32}`), value: "<plugin-instance-id>"},
 	{pattern: regexp.MustCompile(`epoch-[0-9a-f]{32}`), value: "<restore-epoch>"},
 	{pattern: regexp.MustCompile(`gen-[0-9a-f]{32}`), value: "<generation>"},
 	{pattern: regexp.MustCompile(`assoc-[0-9a-f]{32}`), value: "<association-id>"},

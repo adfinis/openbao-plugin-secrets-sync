@@ -234,7 +234,7 @@ func (b *secretSyncBackend) loadReconcileLookupContext(
 			"destination config resolution failed",
 		)
 	}
-	runtimeIdentity, err := providerRuntimeIdentity(ctx, storage)
+	runtimeIdentity, err := b.providerRuntimeIdentity(ctx, storage)
 	if err != nil {
 		return reconcileLookupContext{}, newReconcileLookupFailure(
 			domain.SyncStateInternalError,
