@@ -202,6 +202,7 @@ func pathAssociations(b *secretSyncBackend) []*framework.Path {
 					Responses: apiAssociationsResponse(),
 				},
 			},
+			ExistenceCheck:  b.associationExistenceCheck,
 			HelpSynopsis:    "Manage associations.",
 			HelpDescription: "Associates source secrets with configured destinations for asynchronous sync.",
 		},
@@ -1139,28 +1140,79 @@ func (b *secretSyncBackend) associationUpdateBase(
 	if req.Operation != logical.UpdateOperation {
 		return nil, nil, nil
 	}
+	selection, err := b.associationSelectionForWrite(ctx, req.Storage, path, data)
+	if err != nil {
+		if isAssociationWriteSelectorError(err) {
+			return nil, logical.ErrorResponse(err.Error()), nil
+		}
+		return nil, nil, err
+	}
+	if selection.matchCount > 1 {
+		return nil, logical.ErrorResponse(
+			"association update is ambiguous for destination %s/%s; "+
+				"include provider identity fields or address one association explicitly",
+			selection.destinationType,
+			selection.destinationName,
+		), nil
+	}
+	return selection.record, nil, nil
+}
+
+type associationWriteSelection struct {
+	record          *associationRecord
+	destinationType string
+	destinationName string
+	matchCount      int
+}
+
+type associationWriteSelectorError struct {
+	err error
+}
+
+func (e associationWriteSelectorError) Error() string {
+	return e.err.Error()
+}
+
+func (e associationWriteSelectorError) Unwrap() error {
+	return e.err
+}
+
+func isAssociationWriteSelectorError(err error) bool {
+	var selectorErr associationWriteSelectorError
+	return errors.As(err, &selectorErr)
+}
+
+func (b *secretSyncBackend) associationSelectionForWrite(
+	ctx context.Context,
+	storage logical.Storage,
+	path string,
+	data *framework.FieldData,
+) (associationWriteSelection, error) {
 	destinationType, destinationName, err := associationDestinationFromFieldData(data, false)
 	if err != nil {
-		return nil, logical.ErrorResponse(err.Error()), nil
+		return associationWriteSelection{}, associationWriteSelectorError{err: err}
+	}
+	selection := associationWriteSelection{
+		destinationType: destinationType,
+		destinationName: destinationName,
 	}
 	if destinationType == "" || destinationName == "" {
-		return nil, nil, nil
+		return selection, nil
 	}
 	providerIdentity, identitySpecified, err := b.associationProviderIdentitySelector(
 		ctx,
-		req.Storage,
+		storage,
 		destinationType,
 		destinationName,
 		data,
 	)
 	if err != nil {
-		return nil, logical.ErrorResponse(err.Error()), nil
+		return associationWriteSelection{}, err
 	}
-	records, err := listAssociationsForPath(ctx, req.Storage, path)
+	records, err := listAssociationsForPath(ctx, storage, path)
 	if err != nil {
-		return nil, nil, err
+		return associationWriteSelection{}, err
 	}
-	var match *associationRecord
 	for i := range records {
 		if records[i].DestinationType != destinationType || records[i].DestinationName != destinationName {
 			continue
@@ -1168,17 +1220,12 @@ func (b *secretSyncBackend) associationUpdateBase(
 		if identitySpecified && records[i].ProviderIdentity != providerIdentity {
 			continue
 		}
-		if match != nil {
-			return nil, logical.ErrorResponse(
-				"association update is ambiguous for destination %s/%s; "+
-					"include provider identity fields or address one association explicitly",
-				destinationType,
-				destinationName,
-			), nil
+		selection.matchCount++
+		if selection.record == nil {
+			selection.record = &records[i]
 		}
-		match = &records[i]
 	}
-	return match, nil, nil
+	return selection, nil
 }
 
 func (b *secretSyncBackend) associationProviderIdentitySelector(
@@ -1198,26 +1245,43 @@ func (b *secretSyncBackend) associationProviderIdentitySelector(
 	if !identitySpecified {
 		return "", false, nil
 	}
-	provider, _, destinationConfig, err := b.associationProvider(
-		ctx,
-		storage,
-		destinationType,
-		destinationName,
-	)
+	provider, err := b.providerRegistry.MustGet(destinationType)
+	if err != nil {
+		return "", false, associationWriteSelectorError{err: err}
+	}
+	destination, err := getDestination(ctx, storage, destinationType, destinationName)
+	if err != nil {
+		return "", false, err
+	}
+	if destination == nil {
+		return "", false, associationWriteSelectorError{err: fmt.Errorf(
+			"destination %s/%s does not exist",
+			destinationType,
+			destinationName,
+		)}
+	}
+	if destination.Disabled {
+		return "", false, associationWriteSelectorError{err: fmt.Errorf(
+			"destination %s/%s is disabled",
+			destinationType,
+			destinationName,
+		)}
+	}
+	resolvedDestinationConfig, err := destinationConfig(ctx, storage, *destination)
 	if err != nil {
 		return "", false, err
 	}
 	providerConfig, err := associationProviderConfigFromFieldData(destinationType, nil, data)
 	if err != nil {
-		return "", false, err
+		return "", false, associationWriteSelectorError{err: err}
 	}
 	normalized, err := provider.NormalizeAssociationConfig(
 		ctx,
-		destinationConfig,
+		resolvedDestinationConfig,
 		providers.AssociationConfig{Config: providerConfig},
 	)
 	if err != nil {
-		return "", false, err
+		return "", false, associationWriteSelectorError{err: err}
 	}
 	return normalized.Identity, true, nil
 }
