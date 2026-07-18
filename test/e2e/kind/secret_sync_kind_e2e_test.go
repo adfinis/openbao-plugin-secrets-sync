@@ -38,16 +38,16 @@ const (
 	testPollInterval = 500 * time.Millisecond
 	testTimeout      = 90 * time.Second
 
-	kubernetesManagedLabel             = "openbao.org/secrets-sync-managed"
-	kubernetesAssociationIDAnnotation  = "openbao.org/secrets-sync-association-id"
-	kubernetesSourcePathAnnotation     = "openbao.org/secrets-sync-source-path"
-	kubernetesSourceVersionAnnotation  = "openbao.org/secrets-sync-source-version"
-	kubernetesObjectIDAnnotation       = "openbao.org/secrets-sync-object-id"
-	kubernetesPayloadSHA256Annotation  = "openbao.org/secrets-sync-payload-sha256"
-	kubernetesFormatAnnotation         = "openbao.org/secrets-sync-format"
-	kubernetesDataKeysAnnotation       = "openbao.org/secrets-sync-data-keys"
-	kubernetesPluginInstanceAnnotation = "openbao.org/secrets-sync-plugin-instance"
-	kubernetesRestoreEpochAnnotation   = "openbao.org/secrets-sync-restore-epoch"
+	kubernetesManagedLabel            = "openbao.org/secrets-sync-managed"
+	kubernetesAssociationIDAnnotation = "openbao.org/secrets-sync-association-id"
+	kubernetesSourcePathAnnotation    = "openbao.org/secrets-sync-source-path"
+	kubernetesSourceVersionAnnotation = "openbao.org/secrets-sync-source-version"
+	kubernetesObjectIDAnnotation      = "openbao.org/secrets-sync-object-id"
+	kubernetesPayloadSHA256Annotation = "openbao.org/secrets-sync-payload-sha256"
+	kubernetesFormatAnnotation        = "openbao.org/secrets-sync-format"
+	kubernetesDataKeysAnnotation      = "openbao.org/secrets-sync-data-keys"
+	kubernetesMountUUIDAnnotation     = "openbao.org/secrets-sync-mount-uuid"
+	kubernetesRestoreEpochAnnotation  = "openbao.org/secrets-sync-restore-epoch"
 )
 
 func TestOpenBaoPluginSyncsToKubernetesSecrets(t *testing.T) {
@@ -613,7 +613,7 @@ func assertKubernetesSecret(
 		}
 		for _, key := range []string{
 			kubernetesAssociationIDAnnotation,
-			kubernetesPluginInstanceAnnotation,
+			kubernetesMountUUIDAnnotation,
 			kubernetesRestoreEpochAnnotation,
 		} {
 			if secret.Annotations[key] == "" {
@@ -710,7 +710,7 @@ func assertKubernetesDataMapSecret(
 		}
 		for _, key := range []string{
 			kubernetesAssociationIDAnnotation,
-			kubernetesPluginInstanceAnnotation,
+			kubernetesMountUUIDAnnotation,
 			kubernetesRestoreEpochAnnotation,
 		} {
 			if secret.Annotations[key] == "" {
@@ -748,7 +748,7 @@ func assertKubernetesSecretPreservedAfterDataMapDelete(
 				key == kubernetesPayloadSHA256Annotation ||
 				key == kubernetesFormatAnnotation ||
 				key == kubernetesDataKeysAnnotation ||
-				key == kubernetesPluginInstanceAnnotation ||
+				key == kubernetesMountUUIDAnnotation ||
 				key == kubernetesRestoreEpochAnnotation {
 				return fmt.Errorf("managed annotation %s must be removed", key)
 			}

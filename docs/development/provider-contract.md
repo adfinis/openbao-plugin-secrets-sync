@@ -142,8 +142,8 @@ Provider mutation and read-state requests include runtime identity:
 
 ```go
 type RuntimeIdentity struct {
-    PluginInstanceID string
-    RestoreEpoch     string
+    MountUUID    string
+    RestoreEpoch string
 }
 ```
 
@@ -291,7 +291,7 @@ Providers write the following logical destination metadata where possible:
 
 ```text
 managed=<true>
-plugin_instance=<plugin-instance-id>
+mount_uuid=<mount-uuid>
 restore_epoch=<restore-epoch>
 association_id=<association-id>
 source_path=<source-path>

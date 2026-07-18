@@ -68,15 +68,15 @@ const (
 
 	labelManaged = metadataKeyPrefix + "managed"
 
-	annotationAssociationID  = metadataKeyPrefix + "association-id"
-	annotationSourcePath     = metadataKeyPrefix + "source-path"
-	annotationSourceVersion  = metadataKeyPrefix + "source-version"
-	annotationObjectID       = metadataKeyPrefix + "object-id"
-	annotationPayloadSHA256  = metadataKeyPrefix + "payload-sha256"
-	annotationFormat         = metadataKeyPrefix + "format"
-	annotationDataKeys       = metadataKeyPrefix + "data-keys"
-	annotationPluginInstance = metadataKeyPrefix + "plugin-instance"
-	annotationRestoreEpoch   = metadataKeyPrefix + "restore-epoch"
+	annotationAssociationID = metadataKeyPrefix + "association-id"
+	annotationSourcePath    = metadataKeyPrefix + "source-path"
+	annotationSourceVersion = metadataKeyPrefix + "source-version"
+	annotationObjectID      = metadataKeyPrefix + "object-id"
+	annotationPayloadSHA256 = metadataKeyPrefix + "payload-sha256"
+	annotationFormat        = metadataKeyPrefix + "format"
+	annotationDataKeys      = metadataKeyPrefix + "data-keys"
+	annotationMountUUID     = metadataKeyPrefix + "mount-uuid"
+	annotationRestoreEpoch  = metadataKeyPrefix + "restore-epoch"
 )
 
 var providerHelpers = providerutil.New(ProviderType)
@@ -792,8 +792,8 @@ func applyOwnershipMetadata(
 	secret.Annotations[annotationObjectID] = identity.ObjectID
 	secret.Annotations[annotationPayloadSHA256] = payloadSHA256
 	secret.Annotations[annotationFormat] = format
-	if identity.PluginInstanceID != "" {
-		secret.Annotations[annotationPluginInstance] = identity.PluginInstanceID
+	if identity.MountUUID != "" {
+		secret.Annotations[annotationMountUUID] = identity.MountUUID
 	}
 	if identity.RestoreEpoch != "" {
 		secret.Annotations[annotationRestoreEpoch] = identity.RestoreEpoch
@@ -824,7 +824,7 @@ func removeOwnershipMetadata(secret *corev1.Secret) {
 		annotationPayloadSHA256,
 		annotationFormat,
 		annotationDataKeys,
-		annotationPluginInstance,
+		annotationMountUUID,
 		annotationRestoreEpoch,
 	} {
 		delete(secret.Annotations, key)
@@ -845,7 +845,7 @@ func ownedByRequest(secret *corev1.Secret, identity providers.RequestIdentity) b
 	return requiredAnnotationMatches(secret.Annotations, annotationAssociationID, identity.AssociationID) &&
 		requiredAnnotationMatches(secret.Annotations, annotationSourcePath, identity.SourcePath) &&
 		requiredAnnotationMatches(secret.Annotations, annotationObjectID, identity.ObjectID) &&
-		runtimeAnnotationMatches(secret.Annotations, annotationPluginInstance, identity.PluginInstanceID) &&
+		runtimeAnnotationMatches(secret.Annotations, annotationMountUUID, identity.MountUUID) &&
 		runtimeAnnotationMatches(secret.Annotations, annotationRestoreEpoch, identity.RestoreEpoch)
 }
 
@@ -854,10 +854,7 @@ func requiredAnnotationMatches(annotations map[string]string, key string, expect
 }
 
 func runtimeAnnotationMatches(annotations map[string]string, key string, expected string) bool {
-	if expected == "" {
-		return true
-	}
-	return annotationValue(annotations, key) == expected
+	return expected != "" && annotationValue(annotations, key) == expected
 }
 
 func annotationValue(annotations map[string]string, key string) string {

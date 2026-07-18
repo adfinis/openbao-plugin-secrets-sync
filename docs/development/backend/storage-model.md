@@ -6,7 +6,6 @@ All keys below are relative to that storage view.
 ```text
 config
 schema/version
-identity/plugin-instance
 identity/restore-epoch
 
 data/<path>/versions/<version>
@@ -107,9 +106,13 @@ status diagnostics.
 
 ## Runtime Identity
 
-`identity/plugin-instance` is generated once per mount. Provider requests carry
-this ID so providers can write and verify ownership metadata for the OpenBao
-mount that produced a remote object.
+OpenBao supplies `BackendConfig.BackendUUID` as the stable UUID for the mounted
+backend. Secret Sync keeps this value in memory and carries it as `mount_uuid`
+in provider requests; it does not duplicate the mount identity in plugin
+storage. OpenBao's plugin catalog probes the factory before a mount exists, so
+the factory accepts an empty probe configuration. Storage initialization and
+every storage-backed request require the UUID and fail closed when it is
+missing.
 
 `identity/restore-epoch` is generated once per mount and rotates when an active
 restore guard is acknowledged. Providers include the restore epoch in ownership

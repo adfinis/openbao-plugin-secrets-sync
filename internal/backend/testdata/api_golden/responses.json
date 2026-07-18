@@ -99,7 +99,7 @@
       "drift_repair": "off",
       "event_dispatch_enabled": true,
       "event_dispatch_max_operations": 16,
-      "plugin_instance_id": "<plugin-instance-id>",
+      "mount_uuid": "<mount-uuid>",
       "queue_capacity": 1000,
       "restore_epoch": "<restore-epoch>",
       "restore_guard": false,

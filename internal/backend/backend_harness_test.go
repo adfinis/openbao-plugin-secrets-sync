@@ -20,6 +20,8 @@ type backendTestEnv struct {
 	storage logical.Storage
 }
 
+const testMountUUID = "00000000-0000-4000-8000-000000000001"
+
 func newBackendTestEnv(t *testing.T) *backendTestEnv {
 	t.Helper()
 	return &backendTestEnv{
@@ -29,9 +31,13 @@ func newBackendTestEnv(t *testing.T) *backendTestEnv {
 	}
 }
 
-func newBackendForTest(_ *logical.BackendConfig) *secretSyncBackend {
+func newBackendForTest(conf *logical.BackendConfig) *secretSyncBackend {
+	mountUUID := backendUUIDFromConfig(conf)
+	if mountUUID == "" {
+		mountUUID = testMountUUID
+	}
 	providerSet := append(productionProviders(), fake.Provider{})
-	return backendWithProviders(providerSet...)
+	return backendWithProviders(mountUUID, providerSet...)
 }
 
 func (env *backendTestEnv) handle(

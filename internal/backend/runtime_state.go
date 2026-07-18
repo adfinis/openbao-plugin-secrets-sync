@@ -12,9 +12,8 @@ import (
 )
 
 type runtimeState struct {
-	Schema         storageSchemaRecord
-	PluginInstance pluginInstanceRecord
-	RestoreEpoch   restoreEpochRecord
+	Schema       storageSchemaRecord
+	RestoreEpoch restoreEpochRecord
 }
 
 type storageSchemaCompatibilityError struct {
@@ -36,10 +35,6 @@ func ensureRuntimeState(ctx context.Context, storage logical.Storage) (runtimeSt
 	if err != nil {
 		return runtimeState{}, err
 	}
-	pluginInstance, err := ensurePluginInstance(ctx, storage, now)
-	if err != nil {
-		return runtimeState{}, err
-	}
 	restoreEpoch, err := ensureRestoreEpoch(ctx, storage, now)
 	if err != nil {
 		return runtimeState{}, err
@@ -48,20 +43,26 @@ func ensureRuntimeState(ctx context.Context, storage logical.Storage) (runtimeSt
 		return runtimeState{}, err
 	}
 	return runtimeState{
-		Schema:         schema,
-		PluginInstance: pluginInstance,
-		RestoreEpoch:   restoreEpoch,
+		Schema:       schema,
+		RestoreEpoch: restoreEpoch,
 	}, nil
 }
 
-func providerRuntimeIdentity(ctx context.Context, storage logical.Storage) (providers.RuntimeIdentity, error) {
+func (b *secretSyncBackend) providerRuntimeIdentity(
+	ctx context.Context,
+	storage logical.Storage,
+) (providers.RuntimeIdentity, error) {
+	mountUUID, err := b.requiredMountUUID()
+	if err != nil {
+		return providers.RuntimeIdentity{}, err
+	}
 	state, err := ensureRuntimeState(ctx, storage)
 	if err != nil {
 		return providers.RuntimeIdentity{}, err
 	}
 	return providers.RuntimeIdentity{
-		PluginInstanceID: state.PluginInstance.ID,
-		RestoreEpoch:     state.RestoreEpoch.Epoch,
+		MountUUID:    mountUUID,
+		RestoreEpoch: state.RestoreEpoch.Epoch,
 	}, nil
 }
 
@@ -129,44 +130,6 @@ func validateStorageSchemaVersions(
 
 func putStorageSchema(ctx context.Context, storage logical.Storage, record storageSchemaRecord) error {
 	entry, err := logical.StorageEntryJSON(storageSchemaKey, record)
-	if err != nil {
-		return err
-	}
-	return storage.Put(ctx, entry)
-}
-
-func ensurePluginInstance(
-	ctx context.Context,
-	storage logical.Storage,
-	now string,
-) (pluginInstanceRecord, error) {
-	entry, err := storage.Get(ctx, pluginInstanceKey)
-	if err != nil {
-		return pluginInstanceRecord{}, err
-	}
-	if entry == nil {
-		id, err := newRuntimeID("inst")
-		if err != nil {
-			return pluginInstanceRecord{}, err
-		}
-		record := pluginInstanceRecord{
-			ID:          id,
-			CreatedTime: now,
-		}
-		return record, putPluginInstance(ctx, storage, record)
-	}
-	var record pluginInstanceRecord
-	if err := entry.DecodeJSON(&record); err != nil {
-		return pluginInstanceRecord{}, err
-	}
-	if record.ID == "" {
-		return pluginInstanceRecord{}, fmt.Errorf("plugin instance identity is empty")
-	}
-	return record, nil
-}
-
-func putPluginInstance(ctx context.Context, storage logical.Storage, record pluginInstanceRecord) error {
-	entry, err := logical.StorageEntryJSON(pluginInstanceKey, record)
 	if err != nil {
 		return err
 	}

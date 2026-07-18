@@ -21,7 +21,7 @@ Threats in scope:
 - secret value leakage through logs, status, metrics, errors, or tests;
 - stale restore data overwriting newer remote destination state;
 - replay of old queue operations after plugin or OpenBao restart;
-- two plugin instances or restored clusters managing the same remote object.
+- two mounts or restored clusters managing the same remote object.
 
 Threats out of scope for the plugin:
 
@@ -204,7 +204,7 @@ provider:
 
 ```text
 managed=<true>
-plugin_instance=<plugin-instance-id>
+mount_uuid=<mount-uuid>
 restore_epoch=<restore-epoch>
 association_id=<association-id>
 source_path=<source-path>
@@ -214,10 +214,9 @@ payload_sha256=<hash>
 ```
 
 AWS Secrets Manager tags, Kubernetes annotations, and GitLab variable
-descriptions include plugin instance and restore epoch metadata. Provider
-ownership checks require these values to match the current mount identity when
-the request carries them; missing or mismatched values are treated as ownership
-loss.
+descriptions include the OpenBao mount UUID and restore epoch. Provider
+ownership checks require both values to match the current runtime identity;
+missing or mismatched values are treated as ownership loss.
 
 Remote ownership metadata is not encrypted as part of the source payload. It
 can expose source paths, remote names, versions, object identifiers, payload

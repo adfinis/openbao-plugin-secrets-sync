@@ -101,22 +101,26 @@ func (b *secretSyncBackend) pathConfigRead(
 	if err != nil {
 		return nil, err
 	}
+	mountUUID, err := b.requiredMountUUID()
+	if err != nil {
+		return nil, err
+	}
 	cfg, err := readGlobalConfig(ctx, req.Storage)
 	if err != nil {
 		return nil, err
 	}
 	b.observer.RestoreGuardActive(ctx, cfg.RestoreGuard)
-	return &logical.Response{Data: configResponse(state, cfg)}, nil
+	return &logical.Response{Data: configResponse(mountUUID, state, cfg)}, nil
 }
 
-func configResponse(state runtimeState, cfg globalConfig) map[string]interface{} { //nolint:forbidigo
+func configResponse(mountUUID string, state runtimeState, cfg globalConfig) map[string]interface{} { //nolint:forbidigo
 	return newResponseData(
 		responseField("security_posture", cfg.SecurityPosture),
 		responseField("disabled", cfg.Disabled),
 		responseField("restore_guard", cfg.RestoreGuard),
 		responseField("restore_guard_acknowledged_time", cfg.RestoreGuardAcknowledgedTime),
 		responseField("restore_epoch", state.RestoreEpoch.Epoch),
-		responseField("plugin_instance_id", state.PluginInstance.ID),
+		responseField("mount_uuid", mountUUID),
 		responseField("storage_schema_version", state.Schema.Version),
 		responseField("storage_schema_min_compatible_version", state.Schema.MinCompatibleVersion),
 		responseField("queue_capacity", cfg.QueueCapacity),
@@ -274,6 +278,10 @@ func (b *secretSyncBackend) pathConfigRestoreGuardAcknowledgeWrite(
 	b.configMu.Lock()
 	defer b.configMu.Unlock()
 
+	mountUUID, err := b.requiredMountUUID()
+	if err != nil {
+		return nil, err
+	}
 	state, err := ensureRuntimeState(ctx, req.Storage)
 	if err != nil {
 		return nil, err
@@ -297,7 +305,7 @@ func (b *secretSyncBackend) pathConfigRestoreGuardAcknowledgeWrite(
 	}
 	b.observer.RestoreGuardActive(ctx, cfg.RestoreGuard)
 	b.signalEventDispatch()
-	return &logical.Response{Data: configResponse(state, cfg)}, nil
+	return &logical.Response{Data: configResponse(mountUUID, state, cfg)}, nil
 }
 
 func putGlobalConfig(ctx context.Context, storage logical.Storage, cfg globalConfig) error {

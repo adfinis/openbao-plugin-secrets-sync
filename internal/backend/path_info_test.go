@@ -64,7 +64,7 @@ func TestInfoResponse(t *testing.T) {
 }
 
 func TestProductionInfoResponseOmitsFakeProvider(t *testing.T) {
-	b := Backend(&logical.BackendConfig{})
+	b := Backend(&logical.BackendConfig{BackendUUID: testMountUUID})
 	resp := handleRequest(t, b, &logical.InmemStorage{}, logical.ReadOperation, "info", nil)
 	assertNoErrorResponse(t, resp)
 
@@ -83,7 +83,7 @@ func TestProductionInfoResponseOmitsFakeProvider(t *testing.T) {
 }
 
 func TestProductionBackendRejectsFakeDestination(t *testing.T) {
-	b := Backend(&logical.BackendConfig{})
+	b := Backend(&logical.BackendConfig{BackendUUID: testMountUUID})
 	storage := &logical.InmemStorage{}
 	resp, err := b.HandleRequest(context.Background(), &logical.Request{
 		Operation: logical.UpdateOperation,

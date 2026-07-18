@@ -335,7 +335,7 @@ func TestPeriodicLeavesClaimedOperationOnDispatchContextCancellation(t *testing.
 }
 
 func TestPeriodicLeavesClaimedOperationWhenCanceledProviderRedactsCause(t *testing.T) {
-	b := Backend(&logical.BackendConfig{})
+	b := newBackendForTest(&logical.BackendConfig{})
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	b.providerRegistry = providers.MustNewRegistry(contextCanceledProvider{cancel: cancel})

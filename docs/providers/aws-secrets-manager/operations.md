@@ -41,10 +41,10 @@ sync decisions only when `value_drift_detection=true`.
 ## Ownership and delete behavior
 
 The provider writes ownership tags that include the association ID, source
-path, source version, object ID, payload hash, plugin instance, and restore
-epoch. Owned update and delete operations require matching ownership metadata.
-If ownership cannot be proven, the provider returns an ownership error instead
-of mutating the remote secret.
+path, source version, object ID, payload hash, OpenBao mount UUID, and restore
+epoch. The mount tag is `openbao-sync-mount-uuid`. Owned update and delete
+operations require matching ownership metadata. If ownership cannot be proven,
+the provider returns an ownership error instead of mutating the remote secret.
 
 Plan, upsert no-op detection, and reconcile compare AWS tag metadata by
 default. With `value_drift_detection=true`, explicit plan, upsert, and

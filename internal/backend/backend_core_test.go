@@ -9,12 +9,22 @@ import (
 )
 
 func TestFactoryCreatesLogicalBackend(t *testing.T) {
-	b, err := Factory(context.Background(), &logical.BackendConfig{})
+	b, err := Factory(context.Background(), &logical.BackendConfig{BackendUUID: testMountUUID})
 	if err != nil {
 		t.Fatalf("factory returned error: %v", err)
 	}
 	if b == nil {
 		t.Fatal("backend must not be nil")
+	}
+}
+
+func TestFactoryAllowsPluginCatalogProbeWithoutBackendUUID(t *testing.T) {
+	b, err := Factory(context.Background(), &logical.BackendConfig{})
+	if err != nil {
+		t.Fatalf("Factory() catalog probe error = %v", err)
+	}
+	if b == nil {
+		t.Fatal("Factory() catalog probe backend must not be nil")
 	}
 }
 

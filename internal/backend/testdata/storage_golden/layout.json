@@ -82,13 +82,6 @@
     }
   },
   {
-    "key": "identity/plugin-instance",
-    "value": {
-      "created_time": "<timestamp>",
-      "id": "<plugin-instance-id>"
-    }
-  },
-  {
     "key": "identity/restore-epoch",
     "value": {
       "created_time": "<timestamp>",

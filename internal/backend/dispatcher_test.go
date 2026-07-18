@@ -175,7 +175,7 @@ func TestLoadDispatchTargetContextFailures(t *testing.T) {
 
 func TestDriftRepairWarningLogsThresholdWithoutSecretIdentifiers(t *testing.T) {
 	var logs bytes.Buffer
-	b := Backend(&logical.BackendConfig{})
+	b := newBackendForTest(&logical.BackendConfig{})
 	if err := b.Setup(context.Background(), &logical.BackendConfig{
 		Logger: hclog.New(&hclog.LoggerOptions{
 			Output: &logs,

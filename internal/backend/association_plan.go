@@ -43,7 +43,7 @@ func (b *secretSyncBackend) pathAssociationPlan(
 	if err != nil {
 		return logical.ErrorResponse(err.Error()), nil
 	}
-	runtimeIdentity, err := providerRuntimeIdentity(ctx, req.Storage)
+	runtimeIdentity, err := b.providerRuntimeIdentity(ctx, req.Storage)
 	if err != nil {
 		return nil, err
 	}

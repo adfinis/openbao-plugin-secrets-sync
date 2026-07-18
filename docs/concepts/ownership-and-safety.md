@@ -19,7 +19,7 @@ The logical ownership record includes the fields each provider can carry:
 
 ```text
 managed=<true>
-plugin_instance=<plugin-instance-id>
+mount_uuid=<mount-uuid>
 restore_epoch=<restore-epoch>
 association_id=<association-id>
 source_path=<source-path>
@@ -39,13 +39,13 @@ over the object.
 
 ## Runtime Identity
 
-Each Secret Sync mount has a plugin instance ID and restore epoch. Providers
-include these values in ownership metadata where possible.
+Each Secret Sync mount has an OpenBao-provided mount UUID and a plugin-managed
+restore epoch. Providers include these values in ownership metadata.
 
-The plugin instance identifies the mount that created the remote object. The
-restore epoch distinguishes a restored or cloned mount from the earlier mount
-state. When restore guard is acknowledged, the restore epoch rotates so future
-provider writes carry a new reviewed epoch.
+The mount UUID identifies the mounted backend that created the remote object.
+The restore epoch distinguishes a restored or cloned mount from the earlier
+mount state. When restore guard is acknowledged, the restore epoch rotates so
+future provider writes carry a new reviewed epoch.
 
 ## Object States
 

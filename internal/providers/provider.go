@@ -72,24 +72,25 @@ type AssociationConfig struct {
 	Identity string
 }
 
-// RuntimeIdentity identifies the OpenBao mount instance that produced a provider request.
+// RuntimeIdentity identifies the OpenBao mounted backend that produced a provider request.
 type RuntimeIdentity struct {
-	PluginInstanceID string
-	RestoreEpoch     string
+	MountUUID    string
+	RestoreEpoch string
 }
 
 // RequestIdentity identifies the OpenBao association that owns a provider object.
 type RequestIdentity struct {
-	AssociationID    string
-	SourcePath       string
-	ObjectID         string
-	PluginInstanceID string
-	RestoreEpoch     string
+	AssociationID string
+	SourcePath    string
+	ObjectID      string
+	MountUUID     string
+	RestoreEpoch  string
 }
 
 // Complete reports whether the required ownership fields are present.
 func (i RequestIdentity) Complete() bool {
-	return i.AssociationID != "" && i.SourcePath != "" && i.ObjectID != ""
+	return i.AssociationID != "" && i.SourcePath != "" && i.ObjectID != "" &&
+		i.MountUUID != "" && i.RestoreEpoch != ""
 }
 
 // ErrorClass is a stable class for provider and provider-boundary failures.
@@ -236,11 +237,11 @@ func requestIdentity(
 	objectID string,
 ) RequestIdentity {
 	return RequestIdentity{
-		AssociationID:    associationID,
-		SourcePath:       sourcePath,
-		ObjectID:         objectID,
-		PluginInstanceID: runtime.PluginInstanceID,
-		RestoreEpoch:     runtime.RestoreEpoch,
+		AssociationID: associationID,
+		SourcePath:    sourcePath,
+		ObjectID:      objectID,
+		MountUUID:     runtime.MountUUID,
+		RestoreEpoch:  runtime.RestoreEpoch,
 	}
 }
 
