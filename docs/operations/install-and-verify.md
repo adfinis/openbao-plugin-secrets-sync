@@ -7,8 +7,9 @@ release automation.
 
 ## Compatibility
 
-The preview release is qualified against OpenBao `2.5.5`. Other OpenBao
-versions are not yet qualified. Preview releases do not establish API, storage,
+OpenBao `2.6.0` is the minimum supported server and the only version qualified
+for this preview release. OpenBao `2.5.x` is unsupported; later OpenBao releases
+remain unqualified until tested. Preview releases do not establish API, storage,
 provider-metadata, upgrade, downgrade, or migration compatibility across
 versions.
 
