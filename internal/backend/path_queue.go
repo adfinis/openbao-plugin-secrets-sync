@@ -53,9 +53,10 @@ func pathQueue(b *secretSyncBackend) []*framework.Path {
 			},
 			Operations: map[logical.Operation]framework.OperationHandler{
 				logical.UpdateOperation: &framework.PathOperation{
-					Callback:  b.pathQueueDrain,
-					Summary:   "Process due sync queue operations.",
-					Responses: apiQueueDrainResponse(),
+					Callback:                  b.pathQueueDrain,
+					Summary:                   "Process due sync queue operations.",
+					Responses:                 apiQueueDrainResponse(),
+					ForwardPerformanceStandby: true,
 				},
 			},
 			HelpSynopsis:    "Drain due sync queue work.",

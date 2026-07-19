@@ -953,8 +953,9 @@ func planDefaultFakeAssociation(
 }
 
 type recordingObserver struct {
-	operations   []observability.OperationEvent
-	driftRepairs []observability.DriftRepairEvent
+	operations            []observability.OperationEvent
+	driftRepairs          []observability.DriftRepairEvent
+	remoteMutationBlocked []observability.RemoteMutationBlockedEvent
 }
 
 func (*recordingObserver) QueueDepth(context.Context, string, int) {}
@@ -967,7 +968,11 @@ func (*recordingObserver) ProviderRequest(context.Context, observability.Provide
 
 func (*recordingObserver) ReadinessCheck(context.Context, observability.ReadinessCheckEvent) {}
 
-func (*recordingObserver) RemoteMutationBlocked(context.Context, observability.RemoteMutationBlockedEvent) {
+func (r *recordingObserver) RemoteMutationBlocked(
+	_ context.Context,
+	event observability.RemoteMutationBlockedEvent,
+) {
+	r.remoteMutationBlocked = append(r.remoteMutationBlocked, event)
 }
 
 func (*recordingObserver) ReconcileRun(context.Context, observability.ReconcileRunEvent) {}

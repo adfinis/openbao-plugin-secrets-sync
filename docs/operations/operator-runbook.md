@@ -194,7 +194,9 @@ completed sync.
 Event-triggered dispatch is enabled by default and wakes a bounded drain after
 enqueue-producing requests. Use `queue/drain` when you need deterministic local
 testing, a controlled catch-up batch, or an explicit operator action after
-temporarily disabling event dispatch.
+temporarily disabling event dispatch. When the request reaches a read-enabled
+HA standby, OpenBao forwards it to the active node before the plugin inspects or
+claims queue work.
 
 For deterministic local testing or controlled catch-up, drain due operations:
 
@@ -219,7 +221,10 @@ Cancel discards pending, retry-wait, or terminal failed work; it is not retained
 in the queue summary. Terminal failures are otherwise retained for at most seven
 days, with the newest 1,000 records taking precedence when the limit is reached.
 
-`queue/drain` can execute remote mutations. Keep it operator-scoped.
+`queue/drain` can execute remote mutations. Keep it operator-scoped. Forwarding
+is limited to an HA standby within the active cluster; Secret Sync does not
+forward drains from performance secondaries or enable cross-cluster forwarded
+storage.
 
 ## Operational signals
 
