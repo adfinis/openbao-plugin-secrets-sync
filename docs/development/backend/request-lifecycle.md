@@ -47,6 +47,20 @@ create-only token cannot use ambiguity to overwrite an existing record.
 Read-only or setup-read-only storage errors are treated as missing, following
 the native KV existence-check pattern; other storage errors fail the request.
 
+## HA Request Forwarding
+
+OpenBao can serve read-only plugin requests from HA standbys. The `queue/drain`
+update operation is marked `ForwardPerformanceStandby`, which is the SDK's
+operation-level signal that OpenBao must forward the request to the active node
+before invoking the drain callback. This avoids dispatching against an
+eventually consistent standby queue view.
+
+The backend replication guard remains in the callback and in periodic and
+event-triggered dispatch. Background work has no client request to forward, and
+remote mutation remains blocked on HA standbys, performance secondaries, DR
+secondaries, and replication bootstrapping states. The plugin does not enable
+`ForwardPerformanceSecondary` or `WriteForwardedStorage`.
+
 ## Source Writes
 
 Source data writes are KV-v2-like. A write creates a new version record and

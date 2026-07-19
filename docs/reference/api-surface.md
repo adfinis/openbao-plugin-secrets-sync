@@ -213,8 +213,11 @@ flags.
 Event-triggered dispatch normally wakes due queue work after enqueue and when
 retry-wait work becomes due.
 `queue/drain` can execute remote mutations and is operator-scoped for
-deterministic testing or controlled catch-up. Reconcile reads remote state but
-does not write destination secrets.
+deterministic testing or controlled catch-up. OpenBao forwards drain requests
+received by a read-enabled HA standby to the active node before entering the
+plugin callback. Queue and status reads can still be served from the standby's
+eventually consistent view. Reconcile reads remote state but does not write
+destination secrets.
 Queue operation reads include `trigger`, which is `user` for ordinary writes
 and manual syncs and `drift-repair` for background repair work.
 Status objects can include `verification`, `last_reconcile_time`,

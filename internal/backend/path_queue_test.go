@@ -2,6 +2,7 @@ package backend
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -457,6 +458,45 @@ func TestQueueDrainRejectsUnsafeReplicationNode(t *testing.T) {
 	}
 	if !strings.Contains(drainResp.Error().Error(), remoteMutationUnsafeError) {
 		t.Fatalf("drain unsafe replication error = %q, want %q", drainResp.Error().Error(), remoteMutationUnsafeError)
+	}
+	assertOutboxOperation(t, env.storage, operationID, 1, outboxStatePending)
+}
+
+func TestQueueDrainForwardsPerformanceStandbyBeforeCallback(t *testing.T) {
+	env := newBackendTestEnv(t)
+	recorder := &recordingObserver{}
+	env.b.observer = recorder
+
+	env.writeAppDBSecret("initial")
+	env.createFakeDestination("default")
+	associationResp := env.createDefaultFakeAssociation()
+	operationID := operationIDsFromResponse(t, associationResp)[0]
+	env.acknowledgeRestoreGuard()
+
+	if err := env.b.Setup(context.Background(), &logical.BackendConfig{
+		System: &logical.StaticSystemView{
+			ReplicationStateVal: consts.ReplicationPerformanceStandby,
+		},
+	}); err != nil {
+		t.Fatalf("setup backend: %v", err)
+	}
+	resp, err := env.b.HandleRequest(context.Background(), &logical.Request{
+		Operation: logical.UpdateOperation,
+		Path:      "queue/drain",
+		Storage:   env.storage,
+		Data:      map[string]interface{}{"max_operations": 1},
+	})
+	if resp != nil {
+		t.Fatalf("queue drain response = %#v, want nil forwarding response", resp)
+	}
+	if !errors.Is(err, logical.ErrReadOnly) {
+		t.Fatalf("queue drain error = %v, want %v", err, logical.ErrReadOnly)
+	}
+	if len(recorder.remoteMutationBlocked) != 0 {
+		t.Fatalf(
+			"remote mutation blocked events = %#v, want none before drain callback",
+			recorder.remoteMutationBlocked,
+		)
 	}
 	assertOutboxOperation(t, env.storage, operationID, 1, outboxStatePending)
 }

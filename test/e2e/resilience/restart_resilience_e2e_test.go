@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -62,10 +63,6 @@ func TestOpenBaoLifecyclePreservesSecretSyncState(t *testing.T) {
 
 	assertConfig(t, baoClient, false, false, "standard")
 	disableEventDispatch(t, baoClient)
-	write(t, baoClient, mountPath+"/config", map[string]interface{}{
-		"disabled": true,
-	})
-	assertConfig(t, baoClient, true, false, "standard")
 
 	write(t, baoClient, mountPath+"/destinations/aws-sm/prod", map[string]interface{}{
 		awssecretsmanager.ConfigKeyRegion:              awsRegion,
@@ -85,13 +82,29 @@ func TestOpenBaoLifecyclePreservesSecretSyncState(t *testing.T) {
 	assertRemoteMissing(t, ctx, awsClient, remoteName)
 
 	waitForRaftLeader(t, ctx, baoClient, raftNode0ID)
+	waitForOpenBaoStandby(t, ctx, standbyClient)
+	drainQueueForwardedFromStandby(t, ctx, standbyClient, raftNode1ID, 1)
+	assertQueue(t, baoClient, 0, 0)
+	assertRemotePayload(t, ctx, awsClient, remoteName, "initial")
+	assertStatus(t, baoClient, "SYNCED")
+	assertStatusEventually(t, ctx, standbyClient, "SYNCED")
+
+	write(t, baoClient, mountPath+"/config", map[string]interface{}{
+		"disabled": true,
+	})
+	writeSource(t, baoClient, "after-failover")
+	assertConfig(t, baoClient, true, false, "standard")
+	assertQueue(t, baoClient, 1, 0)
+	assertStatus(t, baoClient, "PENDING")
+	assertRemotePayload(t, ctx, awsClient, remoteName, "initial")
+
 	stopOpenBao(t, ctx)
 	standbyClient = newOpenBaoStandbyClient(t, rootToken)
 	waitForOpenBaoReady(t, ctx, standbyClient)
 	assertConfig(t, standbyClient, true, false, "standard")
 	assertQueue(t, standbyClient, 1, 0)
 	assertStatus(t, standbyClient, "PENDING")
-	assertRemoteMissing(t, ctx, awsClient, remoteName)
+	assertRemotePayload(t, ctx, awsClient, remoteName, "initial")
 	startOpenBao(t, ctx)
 	baoClient = newOpenBaoClient(t, rootToken)
 	waitForOpenBaoReady(t, ctx, baoClient)
@@ -107,7 +120,7 @@ func TestOpenBaoLifecyclePreservesSecretSyncState(t *testing.T) {
 	})
 	drainQueue(t, baoClient, 1)
 	assertQueue(t, baoClient, 0, 0)
-	assertRemotePayload(t, ctx, awsClient, remoteName, "initial")
+	assertRemotePayload(t, ctx, awsClient, remoteName, "after-failover")
 	assertStatus(t, baoClient, "SYNCED")
 	assertStatus(t, standbyClient, "SYNCED")
 
@@ -120,7 +133,7 @@ func TestOpenBaoLifecyclePreservesSecretSyncState(t *testing.T) {
 	assertConfig(t, baoClient, false, false, "standard")
 	assertQueue(t, baoClient, 0, 0)
 	assertStatus(t, baoClient, "SYNCED")
-	assertRemotePayload(t, ctx, awsClient, remoteName, "initial")
+	assertRemotePayload(t, ctx, awsClient, remoteName, "after-failover")
 
 	restartOpenBaoStandby(t, ctx)
 	standbyClient = newOpenBaoStandbyClient(t, rootToken)
@@ -135,7 +148,7 @@ func TestOpenBaoLifecyclePreservesSecretSyncState(t *testing.T) {
 	assertConfig(t, baoClient, true, false, "standard")
 	assertQueue(t, baoClient, 1, 0)
 	assertStatus(t, baoClient, "PENDING")
-	assertRemotePayload(t, ctx, awsClient, remoteName, "initial")
+	assertRemotePayload(t, ctx, awsClient, remoteName, "after-failover")
 
 	sealOpenBao(t, ctx, baoClient)
 	waitForOpenBaoSealed(t, ctx, baoClient)
@@ -239,6 +252,26 @@ func waitForOpenBaoReady(t *testing.T, ctx context.Context, client *api.Client) 
 		}
 		if !status.Initialized || status.Sealed {
 			return fmt.Errorf("openbao not ready: initialized=%v sealed=%v", status.Initialized, status.Sealed)
+		}
+		return nil
+	})
+}
+
+func waitForOpenBaoStandby(t *testing.T, ctx context.Context, client *api.Client) {
+	t.Helper()
+	waitFor(t, ctx, func() error {
+		leader, err := client.Sys().LeaderWithContext(ctx)
+		if err != nil {
+			return err
+		}
+		if leader == nil || !leader.HAEnabled {
+			return errors.New("OpenBao HA is not enabled")
+		}
+		if leader.IsSelf {
+			return errors.New("OpenBao node is still active")
+		}
+		if leader.LeaderAddress == "" {
+			return errors.New("OpenBao standby has no active leader")
 		}
 		return nil
 	})
@@ -455,6 +488,47 @@ func drainQueue(t *testing.T, client *api.Client, expectedProcessed int) {
 	})
 	if got := intFromSecret(t, secret.Data["processed"]); got != expectedProcessed {
 		t.Fatalf("queue drain processed = %d, want %d", got, expectedProcessed)
+	}
+}
+
+func drainQueueForwardedFromStandby(
+	t *testing.T,
+	ctx context.Context,
+	client *api.Client,
+	standbyNodeID string,
+	expectedProcessed int,
+) {
+	t.Helper()
+	request := client.NewRequest(http.MethodPut, "/v1/"+mountPath+"/queue/drain")
+	if err := request.SetJSONBody(map[string]interface{}{
+		"max_operations": expectedProcessed,
+	}); err != nil {
+		t.Fatalf("encode queue drain request: %v", err)
+	}
+	response, err := client.RawRequestWithContext(ctx, request)
+	if err != nil {
+		t.Fatalf("drain queue through standby: %v", err)
+	}
+	defer response.Body.Close() //nolint:errcheck
+	executingNodeID := response.Header.Get(api.RaftNodeIDHeaderName)
+	if executingNodeID == "" {
+		t.Fatal("forwarded queue drain response has no Raft node ID")
+	}
+	if executingNodeID == standbyNodeID {
+		t.Fatalf(
+			"queue drain executed on standby node %q instead of being forwarded",
+			standbyNodeID,
+		)
+	}
+	secret, err := api.ParseSecret(response.Body)
+	if err != nil {
+		t.Fatalf("parse forwarded queue drain response: %v", err)
+	}
+	if secret == nil {
+		t.Fatal("forwarded queue drain returned no secret")
+	}
+	if got := intFromSecret(t, secret.Data["processed"]); got != expectedProcessed {
+		t.Fatalf("forwarded queue drain processed = %d, want %d", got, expectedProcessed)
 	}
 }
 
