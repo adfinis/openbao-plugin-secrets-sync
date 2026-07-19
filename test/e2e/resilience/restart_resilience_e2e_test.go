@@ -83,6 +83,7 @@ func TestOpenBaoLifecyclePreservesSecretSyncState(t *testing.T) {
 
 	waitForRaftLeader(t, ctx, baoClient, raftNode0ID)
 	waitForOpenBaoStandby(t, ctx, standbyClient)
+	waitForSecretSyncRoute(t, ctx, standbyClient)
 	drainQueueForwardedFromStandby(t, ctx, standbyClient, raftNode1ID, 1)
 	assertQueue(t, baoClient, 0, 0)
 	assertRemotePayload(t, ctx, awsClient, remoteName, "initial")
@@ -272,6 +273,20 @@ func waitForOpenBaoStandby(t *testing.T, ctx context.Context, client *api.Client
 		}
 		if leader.LeaderAddress == "" {
 			return errors.New("OpenBao standby has no active leader")
+		}
+		return nil
+	})
+}
+
+func waitForSecretSyncRoute(t *testing.T, ctx context.Context, client *api.Client) {
+	t.Helper()
+	waitFor(t, ctx, func() error {
+		secret, err := client.Logical().ReadWithContext(ctx, mountPath+"/config")
+		if err != nil {
+			return err
+		}
+		if secret == nil {
+			return errors.New("Secret Sync config route returned no response")
 		}
 		return nil
 	})
