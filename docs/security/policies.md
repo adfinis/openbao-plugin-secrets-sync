@@ -6,6 +6,14 @@ wildcards to the deployment.
 
 The examples use `apps/team-a/*` as the delegated source prefix.
 
+OpenBao enforces `create` and `update` independently for `data/<path>`,
+`metadata/<path>`, `destinations/<type>/<name>`, and `associations/<path>`.
+`create` permits a missing logical resource but not an overwrite; `update`
+permits an existing resource but not creation. Grant both capabilities to roles
+that manage the full lifecycle. Source data and metadata share the metadata
+record for this decision, matching KV-v2 semantics. Association existence is
+resolved from the normalized destination and provider identity selector.
+
 Source paths can be nested, so the examples use prefix grants such as
 `sources/apps/team-a/*` rather than trying to match route suffixes like
 `*/enable`. Use fixed-depth `+` segments only when your source path layout is

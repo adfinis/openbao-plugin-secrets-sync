@@ -39,16 +39,7 @@ func TestOpenBaoPluginSyncsToLocalStackSecretsManager(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
 	defer cancel()
 
-	baoClient := newOpenBaoClient(t)
-	waitForOpenBao(t, ctx, baoClient)
-	switch pluginRegistrationMode() {
-	case "manual":
-		registerPlugin(t, baoClient)
-	case "oci":
-	default:
-		t.Fatalf("unsupported E2E_PLUGIN_REGISTRATION %q", pluginRegistrationMode())
-	}
-	mountPlugin(t, baoClient)
+	baoClient := setupMountedOpenBaoPlugin(t, ctx)
 
 	awsClient := newSecretsManagerClient(t, ctx)
 	remoteName := fmt.Sprintf("openbao-plugin-secrets-sync-e2e/%d", time.Now().UnixNano())
@@ -133,6 +124,220 @@ func TestOpenBaoPluginSyncsToLocalStackSecretsManager(t *testing.T) {
 	assertRemotePayload(t, ctx, awsClient, remoteName, "recovered")
 	assertStatus(t, baoClient, "SYNCED")
 	assertReconcilePlan(t, baoClient, "SYNCED")
+}
+
+func TestOpenBaoPluginEnforcesCreateUpdateACLs(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
+	defer cancel()
+
+	rootClient := setupMountedOpenBaoPlugin(t, ctx)
+	createClient := newCapabilityClient(t, rootClient, "secret-sync-create-only", "create", []string{
+		mountPath + "/data/acl/create-data",
+		mountPath + "/metadata/acl/create-metadata",
+		mountPath + "/destinations/aws-sm/acl-create",
+		mountPath + "/associations/acl/create-association",
+	})
+	updateClient := newCapabilityClient(t, rootClient, "secret-sync-update-only", "update", []string{
+		mountPath + "/data/acl/update-data",
+		mountPath + "/data/acl/missing-update-data",
+		mountPath + "/metadata/acl/update-metadata",
+		mountPath + "/metadata/acl/missing-update-metadata",
+		mountPath + "/destinations/aws-sm/acl-update",
+		mountPath + "/destinations/aws-sm/acl-missing-update",
+		mountPath + "/associations/acl/update-association",
+		mountPath + "/associations/acl/missing-update-association",
+	})
+
+	t.Run("data", func(t *testing.T) {
+		createPath := mountPath + "/data/acl/create-data"
+		write(t, createClient, createPath, map[string]interface{}{
+			"data": map[string]interface{}{"value": "created"},
+		})
+		writeExpectPermissionDenied(t, createClient, createPath, map[string]interface{}{
+			"data": map[string]interface{}{"value": "overwritten"},
+		})
+
+		writeExpectPermissionDenied(t, updateClient, mountPath+"/data/acl/missing-update-data", map[string]interface{}{
+			"data": map[string]interface{}{"value": "missing"},
+		})
+		updatePath := mountPath + "/data/acl/update-data"
+		write(t, rootClient, updatePath, map[string]interface{}{
+			"data": map[string]interface{}{"value": "initial"},
+		})
+		write(t, updateClient, updatePath, map[string]interface{}{
+			"data": map[string]interface{}{"value": "updated"},
+		})
+	})
+
+	t.Run("metadata", func(t *testing.T) {
+		createPath := mountPath + "/metadata/acl/create-metadata"
+		write(t, createClient, createPath, map[string]interface{}{"max_versions": 2})
+		writeExpectPermissionDenied(
+			t,
+			createClient,
+			createPath,
+			map[string]interface{}{"max_versions": 3},
+		)
+
+		writeExpectPermissionDenied(
+			t,
+			updateClient,
+			mountPath+"/metadata/acl/missing-update-metadata",
+			map[string]interface{}{"max_versions": 2},
+		)
+		updatePath := mountPath + "/metadata/acl/update-metadata"
+		write(t, rootClient, updatePath, map[string]interface{}{"max_versions": 2})
+		write(t, updateClient, updatePath, map[string]interface{}{"max_versions": 3})
+	})
+
+	t.Run("destinations", func(t *testing.T) {
+		createPath := mountPath + "/destinations/aws-sm/acl-create"
+		write(t, createClient, createPath, aclDestinationRequest("created"))
+		writeExpectPermissionDenied(t, createClient, createPath, aclDestinationRequest("overwritten"))
+
+		writeExpectPermissionDenied(
+			t,
+			updateClient,
+			mountPath+"/destinations/aws-sm/acl-missing-update",
+			aclDestinationRequest("missing"),
+		)
+		updatePath := mountPath + "/destinations/aws-sm/acl-update"
+		write(t, rootClient, updatePath, aclDestinationRequest("initial"))
+		write(t, updateClient, updatePath, map[string]interface{}{"description": "updated"})
+	})
+
+	t.Run("associations", func(t *testing.T) {
+		destinationPath := mountPath + "/destinations/aws-sm/acl-associations"
+		write(t, rootClient, destinationPath, aclDestinationRequest("association target"))
+
+		createSourcePath := mountPath + "/data/acl/create-association"
+		write(t, rootClient, createSourcePath, map[string]interface{}{
+			"data": map[string]interface{}{"value": "create"},
+		})
+		createPath := mountPath + "/associations/acl/create-association"
+		createRequest := aclAssociationRequest("aws-sm/acl-associations", "acl/create-association")
+		write(t, createClient, createPath, createRequest)
+		writeExpectPermissionDenied(t, createClient, createPath, createRequest)
+
+		missingSourcePath := mountPath + "/data/acl/missing-update-association"
+		write(t, rootClient, missingSourcePath, map[string]interface{}{
+			"data": map[string]interface{}{"value": "missing"},
+		})
+		missingPath := mountPath + "/associations/acl/missing-update-association"
+		writeExpectPermissionDenied(
+			t,
+			updateClient,
+			missingPath,
+			aclAssociationRequest("aws-sm/acl-associations", "acl/missing-update-association"),
+		)
+
+		updateSourcePath := mountPath + "/data/acl/update-association"
+		write(t, rootClient, updateSourcePath, map[string]interface{}{
+			"data": map[string]interface{}{"value": "update"},
+		})
+		updatePath := mountPath + "/associations/acl/update-association"
+		updateRequest := aclAssociationRequest("aws-sm/acl-associations", "acl/update-association")
+		write(t, rootClient, updatePath, updateRequest)
+		updateRequest["delete_mode"] = "retain"
+		write(t, updateClient, updatePath, updateRequest)
+	})
+}
+
+func setupMountedOpenBaoPlugin(t *testing.T, ctx context.Context) *api.Client {
+	t.Helper()
+	baoClient := newOpenBaoClient(t)
+	waitForOpenBao(t, ctx, baoClient)
+	switch pluginRegistrationMode() {
+	case "manual":
+		registerPlugin(t, baoClient)
+	case "oci":
+	default:
+		t.Fatalf("unsupported E2E_PLUGIN_REGISTRATION %q", pluginRegistrationMode())
+	}
+	mountPlugin(t, baoClient)
+	return baoClient
+}
+
+func newCapabilityClient(
+	t *testing.T,
+	rootClient *api.Client,
+	policyName string,
+	capability string,
+	paths []string,
+) *api.Client {
+	t.Helper()
+	var policy strings.Builder
+	for _, path := range paths {
+		_, _ = fmt.Fprintf(&policy, "path %q { capabilities = [%q] }\n", path, capability)
+	}
+	if err := rootClient.Sys().PutPolicy(policyName, policy.String()); err != nil {
+		t.Fatalf("write policy %s: %v", policyName, err)
+	}
+	t.Cleanup(func() {
+		_ = rootClient.Sys().DeletePolicy(policyName)
+	})
+	secret, err := rootClient.Auth().Token().Create(&api.TokenCreateRequest{
+		Policies:        []string{policyName},
+		NoDefaultPolicy: true,
+		TTL:             "10m",
+	})
+	if err != nil {
+		t.Fatalf("create token for policy %s: %v", policyName, err)
+	}
+	if secret == nil || secret.Auth == nil || secret.Auth.ClientToken == "" {
+		t.Fatalf("create token for policy %s returned no client token", policyName)
+	}
+	token := secret.Auth.ClientToken
+	t.Cleanup(func() {
+		_ = rootClient.Auth().Token().RevokeTree(token)
+	})
+	client, err := rootClient.Clone()
+	if err != nil {
+		t.Fatalf("clone OpenBao client for policy %s: %v", policyName, err)
+	}
+	client.SetToken(token)
+	return client
+}
+
+func aclDestinationRequest(description string) map[string]interface{} {
+	return map[string]interface{}{
+		"description":                                  description,
+		awssecretsmanager.ConfigKeyRegion:              awsRegion,
+		awssecretsmanager.ConfigKeyEndpointURL:         localstackInBao,
+		awssecretsmanager.ConfigKeyEndpointPolicy:      awssecretsmanager.EndpointPolicyLocal,
+		awssecretsmanager.ConfigKeyAuthMode:            awssecretsmanager.AuthModeDefault,
+		awssecretsmanager.ConfigKeyValueDriftDetection: "true",
+		"disabled":                       false,
+		"allowed_source_path_prefixes":   []string{"acl"},
+		"allowed_resolved_name_prefixes": []string{"acl/"},
+	}
+}
+
+func aclAssociationRequest(destination string, resolvedName string) map[string]interface{} {
+	return map[string]interface{}{
+		"destination":   destination,
+		"resolved_name": resolvedName,
+		"granularity":   "secret-path",
+		"format":        "json",
+		"delete_mode":   "delete",
+		"enabled":       false,
+	}
+}
+
+func writeExpectPermissionDenied(
+	t *testing.T,
+	client *api.Client,
+	path string,
+	data map[string]interface{},
+) {
+	t.Helper()
+	secret, err := client.Logical().Write(path, data)
+	if err == nil {
+		t.Fatalf("write %s response = %#v, want permission denied", path, secret)
+	}
+	if !strings.Contains(strings.ToLower(err.Error()), "permission denied") {
+		t.Fatalf("write %s error = %v, want permission denied", path, err)
+	}
 }
 
 func newOpenBaoClient(t *testing.T) *api.Client {

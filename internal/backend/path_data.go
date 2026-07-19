@@ -61,6 +61,7 @@ func pathData(b *secretSyncBackend) *framework.Path {
 				Responses: apiSourceDataMutationResponse(),
 			},
 		},
+		ExistenceCheck:      sourceMetadataExistenceCheck,
 		TakesArbitraryInput: true,
 		HelpSynopsis:        "Manage local source secret data.",
 		HelpDescription:     "Stores local source secret versions and enqueues pending sync operations.",

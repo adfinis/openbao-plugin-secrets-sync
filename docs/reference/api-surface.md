@@ -30,6 +30,15 @@ enqueue, and operators can explicitly drain due work with `queue/drain`.
   are top-level response data fields. On OpenBao error responses they are nested
   under `data` so the response remains an OpenBao error.
 
+OpenBao classifies writes to source data, source metadata, destinations, and
+associations as `create` when the selected logical resource is missing and as
+`update` when it exists. Policies can therefore grant creation without
+overwrite, or updates without creation. Data and metadata use the source
+metadata record as their shared existence boundary. Associations use the
+normalized destination and provider identity selector; an ambiguous selector
+that matches existing associations is treated as existing and cannot pass a
+create-only policy.
+
 ## Config and restore guard
 
 | Path | Purpose |

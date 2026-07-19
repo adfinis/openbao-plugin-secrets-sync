@@ -76,6 +76,7 @@ func pathMetadata(b *secretSyncBackend) []*framework.Path {
 					Responses: apiNoContentResponse("Source metadata and versions deleted."),
 				},
 			},
+			ExistenceCheck:  sourceMetadataExistenceCheck,
 			HelpSynopsis:    "Manage local metadata.",
 			HelpDescription: "Reads, lists, and deletes local source secret metadata.",
 		},

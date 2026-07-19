@@ -28,6 +28,25 @@ and runtime identity.
 Path code should stay close to the ownership above. Shared helpers belong in
 focused backend files only when multiple path groups depend on the same rule.
 
+## Create And Update ACL Classification
+
+OpenBao calls the backend existence check before ACL evaluation for paths that
+advertise both create and update operations. The backend provides checks for
+source data, source metadata, destinations, and associations so OpenBao can
+require the capability that matches current storage state.
+
+- data and metadata exist when the normalized source path has a metadata
+  record;
+- destinations exist when their canonical destination record exists;
+- associations exist when the normalized destination and provider identity
+  selector matches one or more records at the source path.
+
+An ambiguous association selector is classified as existing. The association
+write then returns its normal ambiguity error after ACL evaluation, and a
+create-only token cannot use ambiguity to overwrite an existing record.
+Read-only or setup-read-only storage errors are treated as missing, following
+the native KV existence-check pattern; other storage errors fail the request.
+
 ## Source Writes
 
 Source data writes are KV-v2-like. A write creates a new version record and

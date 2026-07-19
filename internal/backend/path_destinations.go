@@ -180,6 +180,7 @@ func pathDestinations(b *secretSyncBackend) []*framework.Path {
 					Responses: apiNoContentResponse("Destination deleted."),
 				},
 			},
+			ExistenceCheck:  destinationExistenceCheck,
 			HelpSynopsis:    "Manage destinations.",
 			HelpDescription: "Stores destination configuration for supported providers.",
 		},
