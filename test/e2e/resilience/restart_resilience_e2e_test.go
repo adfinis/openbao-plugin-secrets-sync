@@ -71,7 +71,9 @@ func TestOpenBaoLifecyclePreservesSecretSyncState(t *testing.T) {
 		awssecretsmanager.ConfigKeyAuthMode:            awssecretsmanager.AuthModeDefault,
 		awssecretsmanager.ConfigKeyValueDriftDetection: "true",
 	})
+	metricsTimestamp, transactionCommits := raftTransactionCommitMetric(t, ctx, baoClient)
 	writeSource(t, baoClient, "initial")
+	assertRaftTransactionCommitObserved(t, ctx, baoClient, metricsTimestamp, transactionCommits)
 
 	association := write(t, baoClient, mountPath+"/associations/app/db", associationRequest(remoteName))
 	if ids := stringSlice(t, association.Data["sync_operation_ids"]); len(ids) != 1 {
@@ -481,6 +483,62 @@ func writeSource(t *testing.T, client *api.Client, password string) {
 		"data": map[string]interface{}{
 			"password": password,
 		},
+	})
+}
+
+type sysMetricsResponse struct {
+	Timestamp string `json:"Timestamp"`
+	Samples   []struct {
+		Name  string `json:"Name"`
+		Count int    `json:"Count"`
+	} `json:"Samples"`
+}
+
+func raftTransactionCommitMetric(
+	t *testing.T,
+	ctx context.Context,
+	client *api.Client,
+) (string, int) {
+	t.Helper()
+	request := client.NewRequest(http.MethodGet, "/v1/sys/metrics")
+	response, err := client.RawRequestWithContext(ctx, request)
+	if err != nil {
+		t.Fatalf("read OpenBao metrics: %v", err)
+	}
+	defer response.Body.Close() //nolint:errcheck
+	var metricsResponse sysMetricsResponse
+	if err := json.NewDecoder(response.Body).Decode(&metricsResponse); err != nil {
+		t.Fatalf("decode OpenBao metrics: %v", err)
+	}
+	for _, sample := range metricsResponse.Samples {
+		if sample.Name == "raft-storage.txn-commit" ||
+			strings.HasSuffix(sample.Name, ".raft-storage.txn-commit") {
+			return metricsResponse.Timestamp, sample.Count
+		}
+	}
+	return metricsResponse.Timestamp, 0
+}
+
+func assertRaftTransactionCommitObserved(
+	t *testing.T,
+	ctx context.Context,
+	client *api.Client,
+	beforeTimestamp string,
+	beforeCount int,
+) {
+	t.Helper()
+	waitFor(t, ctx, func() error {
+		timestamp, count := raftTransactionCommitMetric(t, ctx, client)
+		if timestamp == beforeTimestamp {
+			if count <= beforeCount {
+				return fmt.Errorf("Raft transaction commits = %d, want greater than %d", count, beforeCount)
+			}
+			return nil
+		}
+		if count == 0 {
+			return fmt.Errorf("Raft transaction commits missing from metrics interval %q", timestamp)
+		}
+		return nil
 	})
 }
 
