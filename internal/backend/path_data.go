@@ -84,13 +84,32 @@ func (b *secretSyncBackend) pathDataWrite(
 	unlock := b.lockSourcePath(path)
 	defer unlock()
 
-	plan, response, err := dataWritePlanFromRequest(ctx, req.Storage, path, payload, data)
-	if response != nil || err != nil {
-		return response, err
+	var plan dataWritePlan
+	var response *logical.Response
+	err = b.withEnqueueMutationTransaction(ctx, req.Storage, func(storage logical.Storage) error {
+		var mutationErr error
+		plan, response, mutationErr = dataWritePlanFromRequest(ctx, storage, path, payload, data)
+		if response != nil || mutationErr != nil {
+			return mutationErr
+		}
+		response, mutationErr = b.commitDataWritePlan(
+			ctx,
+			storage,
+			path,
+			payload,
+			plan,
+			requestMountPath(req),
+		)
+		return mutationErr
+	})
+	if err != nil {
+		return nil, err
 	}
-	response, err = b.commitDataWritePlan(ctx, req.Storage, path, payload, plan, requestMountPath(req))
-	if response != nil || err != nil {
-		return response, err
+	if response != nil {
+		return response, nil
+	}
+	if len(plan.operations) > 0 {
+		b.signalEventDispatch()
 	}
 
 	return &logical.Response{Data: newResponseData(
@@ -193,10 +212,6 @@ func (b *secretSyncBackend) commitDataWritePlan(
 	plan dataWritePlan,
 	mount string,
 ) (*logical.Response, error) {
-	if len(plan.operations) > 0 {
-		b.enqueueMu.Lock()
-		defer b.enqueueMu.Unlock()
-	}
 	staleUpsertIDs, err := staleQueuedUpsertIDsForOperations(ctx, storage, plan.operations, plan.nowTime)
 	if err != nil {
 		return nil, err
@@ -244,9 +259,6 @@ func (b *secretSyncBackend) commitDataWritePlan(
 	}
 	if err := completeEnqueueIntent(ctx, storage, path, plan.nextVersion, plan.operations, plan.now); err != nil {
 		return nil, err
-	}
-	if len(plan.operations) > 0 {
-		b.signalEventDispatch()
 	}
 	return nil, nil
 }
@@ -393,37 +405,80 @@ func (b *secretSyncBackend) pathDataDelete(
 	unlock := b.lockSourcePath(path)
 	defer unlock()
 
-	metadata, shouldDelete, err := metadataForSourceDelete(ctx, req.Storage, path)
+	now := nowUTC().Format(timeFormatRFC3339)
+	var result dataDeleteMutationResult
+	var response *logical.Response
+	err = b.withEnqueueMutationTransaction(ctx, req.Storage, func(storage logical.Storage) error {
+		var mutationErr error
+		result, response, mutationErr = commitDataDeleteMutation(
+			ctx,
+			storage,
+			path,
+			now,
+			requestMountPath(req),
+		)
+		return mutationErr
+	})
 	if err != nil {
 		return nil, err
 	}
-	if !shouldDelete {
+	if response != nil {
+		return response, nil
+	}
+	if !result.deleted {
 		return nil, nil
 	}
-	now := nowUTC().Format(timeFormatRFC3339)
-	b.enqueueMu.Lock()
-	defer b.enqueueMu.Unlock()
-	deletePlan, err := buildSourceDeletePlan(ctx, req.Storage, path, metadata.Generation, metadata.CurrentVersion, now)
+	if len(result.plan.operations) > 0 {
+		b.signalEventDispatch()
+	}
+	return &logical.Response{Data: newResponseData(
+		responseField("metadata", newResponseData(
+			responseField("version", result.metadata.CurrentVersion),
+			responseField("deletion_time", now),
+			responseField("sync_operation_ids", result.plan.operationIDs),
+			responseField("sync_state", string(syncStateForOperationIDs(result.plan.operationIDs))),
+		)),
+	)}, nil
+}
+
+type dataDeleteMutationResult struct {
+	metadata *metadataRecord
+	plan     sourceDeletePlan
+	deleted  bool
+}
+
+func commitDataDeleteMutation(
+	ctx context.Context,
+	storage logical.Storage,
+	path string,
+	now string,
+	mount string,
+) (dataDeleteMutationResult, *logical.Response, error) {
+	metadata, shouldDelete, err := metadataForSourceDelete(ctx, storage, path)
+	if err != nil || !shouldDelete {
+		return dataDeleteMutationResult{}, nil, err
+	}
+	deletePlan, err := buildSourceDeletePlan(ctx, storage, path, metadata.Generation, metadata.CurrentVersion, now)
 	if err != nil {
-		return nil, err
+		return dataDeleteMutationResult{}, nil, err
 	}
 	if err := ensureQueueCapacityAfterReplacement(
 		ctx,
-		req.Storage,
+		storage,
 		deletePlan.additionalOperations,
 		len(deletePlan.staleUpsertIDs),
 	); err != nil {
-		return errorResponseForOperationError(err, requestMountPath(req)), nil
+		return dataDeleteMutationResult{}, errorResponseForOperationError(err, mount), nil
 	}
-	if err := ensureQueuedOutboxIDsUnclaimed(ctx, req.Storage, deletePlan.staleUpsertIDs); err != nil {
+	if err := ensureQueuedOutboxIDsUnclaimed(ctx, storage, deletePlan.staleUpsertIDs); err != nil {
 		if isQueuedOperationClaimedError(err) {
-			return logical.ErrorResponse(err.Error()), nil
+			return dataDeleteMutationResult{}, logical.ErrorResponse(err.Error()), nil
 		}
-		return nil, err
+		return dataDeleteMutationResult{}, nil, err
 	}
 	if err := putPendingEnqueueIntent(
 		ctx,
-		req.Storage,
+		storage,
 		path,
 		metadata.Generation,
 		metadata.CurrentVersion,
@@ -431,41 +486,35 @@ func (b *secretSyncBackend) pathDataDelete(
 		deletePlan.staleUpsertIDs,
 		now,
 	); err != nil {
-		return nil, err
+		return dataDeleteMutationResult{}, nil, err
 	}
-	if err := softDeleteVersion(ctx, req.Storage, metadata, path, metadata.CurrentVersion, now); err != nil {
-		return logical.ErrorResponse(err.Error()), nil
+	if err := softDeleteVersion(ctx, storage, metadata, path, metadata.CurrentVersion, now); err != nil {
+		return dataDeleteMutationResult{}, nil, err
 	}
-	if err := putMetadata(ctx, req.Storage, path, *metadata); err != nil {
-		return nil, err
+	if err := putMetadata(ctx, storage, path, *metadata); err != nil {
+		return dataDeleteMutationResult{}, nil, err
 	}
-	if err := cancelQueuedOutboxIDs(ctx, req.Storage, deletePlan.staleUpsertIDs); err != nil {
-		return nil, err
+	if err := cancelQueuedOutboxIDs(ctx, storage, deletePlan.staleUpsertIDs); err != nil {
+		return dataDeleteMutationResult{}, nil, err
 	}
-	if err := putOutboxRecords(ctx, req.Storage, deletePlan.operations); err != nil {
-		return nil, err
+	if err := putOutboxRecords(ctx, storage, deletePlan.operations); err != nil {
+		return dataDeleteMutationResult{}, nil, err
 	}
 	if err := completeEnqueueIntent(
 		ctx,
-		req.Storage,
+		storage,
 		path,
 		metadata.CurrentVersion,
 		deletePlan.operations,
 		now,
 	); err != nil {
-		return nil, err
+		return dataDeleteMutationResult{}, nil, err
 	}
-	if len(deletePlan.operations) > 0 {
-		b.signalEventDispatch()
-	}
-	return &logical.Response{Data: newResponseData(
-		responseField("metadata", newResponseData(
-			responseField("version", metadata.CurrentVersion),
-			responseField("deletion_time", now),
-			responseField("sync_operation_ids", deletePlan.operationIDs),
-			responseField("sync_state", string(syncStateForOperationIDs(deletePlan.operationIDs))),
-		)),
-	)}, nil
+	return dataDeleteMutationResult{
+		metadata: metadata,
+		plan:     deletePlan,
+		deleted:  true,
+	}, nil, nil
 }
 
 func metadataForSourceDelete(
