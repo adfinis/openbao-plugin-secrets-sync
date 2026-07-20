@@ -2,6 +2,7 @@ package backend
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/adfinis/openbao-plugin-secrets-sync/internal/outbox"
@@ -118,65 +119,63 @@ func (b *secretSyncBackend) runVersionMutation(
 	unlock := b.lockSourcePath(path)
 	defer unlock()
 
-	metadata, err := getMetadata(ctx, req.Storage, path)
-	if err != nil {
-		return nil, err
-	}
-	if metadata == nil {
-		return nil, nil
-	}
 	now := nowUTC().Format(timeFormatRFC3339)
 	signalDispatch := false
 	for _, version := range versions {
-		var mutationErr error
-		metadataCommitted := false
-		if version == metadata.CurrentVersion {
-			switch kind {
-			case versionMutationDelete, versionMutationDestroy:
-				var shouldSignal bool
-				shouldSignal, mutationErr = b.mutateCurrentVersionDelete(
-					ctx,
-					req.Storage,
-					metadata,
-					path,
-					version,
-					now,
-					mutate,
-				)
-				metadataCommitted = mutationErr == nil
-				signalDispatch = signalDispatch || shouldSignal
-			case versionMutationUndelete:
-				var shouldSignal bool
-				shouldSignal, mutationErr = b.mutateCurrentVersionUndelete(
-					ctx,
-					req.Storage,
-					metadata,
-					path,
-					version,
-					now,
-					mutate,
-				)
-				metadataCommitted = mutationErr == nil
-				signalDispatch = signalDispatch || shouldSignal
-			default:
-				mutationErr = mutate(ctx, req.Storage, metadata, path, version, now)
+		var shouldSignal bool
+		err = b.withEnqueueMutationTransaction(ctx, req.Storage, func(storage logical.Storage) error {
+			metadata, mutationErr := getMetadata(ctx, storage, path)
+			if mutationErr != nil || metadata == nil {
+				return mutationErr
 			}
-		} else {
-			mutationErr = mutate(ctx, req.Storage, metadata, path, version, now)
-		}
-		if mutationErr != nil {
-			return errorResponseForOperationError(mutationErr, requestMountPath(req)), nil
-		}
-		if !metadataCommitted {
-			if err := putMetadata(ctx, req.Storage, path, *metadata); err != nil {
-				return nil, err
+			shouldSignal, mutationErr = b.mutateSourceVersion(
+				ctx,
+				storage,
+				metadata,
+				path,
+				version,
+				now,
+				kind,
+				mutate,
+			)
+			return mutationErr
+		})
+		if err != nil {
+			if errors.Is(err, errQueueCapacity) || isQueuedOperationClaimedError(err) {
+				return errorResponseForOperationError(err, requestMountPath(req)), nil
 			}
+			return nil, err
 		}
+		signalDispatch = signalDispatch || shouldSignal
 	}
 	if signalDispatch {
 		b.signalEventDispatch()
 	}
 	return nil, nil
+}
+
+func (b *secretSyncBackend) mutateSourceVersion(
+	ctx context.Context,
+	storage logical.Storage,
+	metadata *metadataRecord,
+	path string,
+	version int,
+	now string,
+	kind versionMutationKind,
+	mutate versionMutationFunc,
+) (bool, error) {
+	if version == metadata.CurrentVersion {
+		switch kind {
+		case versionMutationDelete, versionMutationDestroy:
+			return b.mutateCurrentVersionDelete(ctx, storage, metadata, path, version, now, mutate)
+		case versionMutationUndelete:
+			return b.mutateCurrentVersionUndelete(ctx, storage, metadata, path, version, now, mutate)
+		}
+	}
+	if err := mutate(ctx, storage, metadata, path, version, now); err != nil {
+		return false, err
+	}
+	return false, putMetadata(ctx, storage, path, *metadata)
 }
 
 func (b *secretSyncBackend) mutateCurrentVersionDelete(
@@ -188,9 +187,6 @@ func (b *secretSyncBackend) mutateCurrentVersionDelete(
 	now string,
 	mutate versionMutationFunc,
 ) (bool, error) {
-	b.enqueueMu.Lock()
-	defer b.enqueueMu.Unlock()
-
 	deletePlan, err := buildSourceDeletePlan(ctx, storage, path, metadata.Generation, version, now)
 	if err != nil {
 		return false, err
@@ -295,9 +291,6 @@ func (b *secretSyncBackend) commitCurrentVersionUndelete(
 	mutate versionMutationFunc,
 	operations []outboxRecord,
 ) (bool, error) {
-	b.enqueueMu.Lock()
-	defer b.enqueueMu.Unlock()
-
 	staleDeleteIDs, err := queuedDeleteIDsForUpsertOperations(ctx, storage, operations)
 	if err != nil {
 		return false, err
