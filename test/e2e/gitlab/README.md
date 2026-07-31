@@ -12,7 +12,7 @@ drain, and status transitions against the real GitLab API.
 The GitLab container is deliberately not part of default CI. It is large, slow
 to boot, and intended for local provider confidence checks.
 
-The default GitLab image is pinned to `gitlab/gitlab-ce:18.7.1-ce.0` for
+The default GitLab image is pinned to `gitlab/gitlab-ce:19.2.0-ce.0` for
 repeatability. Override `E2E_GITLAB_IMAGE` when testing GitLab upgrades.
 
 ## Run
