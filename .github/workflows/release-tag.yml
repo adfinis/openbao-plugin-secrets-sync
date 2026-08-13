@@ -110,6 +110,30 @@ jobs:
             echo "RELEASE_TAG_SIGNING_FINGERPRINT=${fingerprint}"
           } >> "${GITHUB_ENV}"
 
+      - name: Export release tag signing public key
+        if: ${{ steps.release-tag-secrets.outputs.configured == 'true' }}
+        run: |
+          set -euo pipefail
+
+          if [[ -s "${GITHUB_WORKSPACE}/.github/release-signing-keys.asc" ]] && \
+             ! grep -q "PLACEHOLDER" "${GITHUB_WORKSPACE}/.github/release-signing-keys.asc"; then
+            echo "release-signing-keys.asc already contains a public key; skipping export" >&2
+            exit 0
+          fi
+
+          {
+            echo '## Release tag signing public key'
+            echo
+            echo 'No trusted public key is committed yet (or only the placeholder is),'
+            echo 'so `.github/workflows/release.yml` cannot verify signed tags. Copy the'
+            echo 'block below into `.github/release-signing-keys.asc` in its own reviewed'
+            echo 'pull request:'
+            echo
+            echo '```'
+            gpg --batch --export --armor "${RELEASE_TAG_SIGNING_FINGERPRINT}"
+            echo '```'
+          } >> "${GITHUB_STEP_SUMMARY}"
+
       - name: Create tag and draft release
         id: release_tag
         if: ${{ steps.release-tag-secrets.outputs.configured == 'true' }}
