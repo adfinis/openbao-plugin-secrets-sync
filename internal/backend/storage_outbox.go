@@ -315,16 +315,24 @@ func (b *secretSyncBackend) pruneTerminalOutboxRecords(
 		now,
 		maxRetainedTerminalOutboxRecords,
 		defaultTerminalOutboxPruneLimit,
+		defaultTerminalOutboxExcessLimit,
 	)
 	return err
 }
 
+// pruneTerminalOutboxRecordsLimit deletes at most excessLimit records that
+// are over the retained-count cap and at most expiredLimit records that are
+// past the age-based retention window, per call. Both branches are bounded
+// so a single call (made while b.enqueueMu is held) cannot be forced into
+// deleting an unbounded backlog in one pass; a backlog larger than either
+// limit drains gradually across subsequent periodic ticks instead.
 func pruneTerminalOutboxRecordsLimit(
 	ctx context.Context,
 	storage logical.Storage,
 	now time.Time,
 	maxRecords int,
 	expiredLimit int,
+	excessLimit int,
 ) (int, error) {
 	records, err := terminalOutboxRecords(ctx, storage)
 	if err != nil {
@@ -342,17 +350,20 @@ func pruneTerminalOutboxRecordsLimit(
 	cutoff := now.Add(-terminalOutboxRetention)
 	deleted := 0
 	expiredDeleted := 0
+	excessDeleted := 0
 	for index, record := range records {
 		retentionTime := terminalOutboxRetentionTime(record)
 		expired := !retentionTime.IsZero() && !retentionTime.After(cutoff)
-		if !shouldPruneTerminalOutboxRecord(index, excess, expired, expiredDeleted, expiredLimit) {
+		if !shouldPruneTerminalOutboxRecord(index, excess, expired, expiredDeleted, expiredLimit, excessDeleted, excessLimit) {
 			continue
 		}
 		if err := deleteOutbox(ctx, storage, record); err != nil {
 			return deleted, err
 		}
 		deleted++
-		if expired && index >= excess {
+		if index < excess {
+			excessDeleted++
+		} else if expired {
 			expiredDeleted++
 		}
 	}
@@ -383,9 +394,11 @@ func shouldPruneTerminalOutboxRecord(
 	expired bool,
 	expiredDeleted int,
 	expiredLimit int,
+	excessDeleted int,
+	excessLimit int,
 ) bool {
 	if index < excess {
-		return true
+		return excessLimit <= 0 || excessDeleted < excessLimit
 	}
 	if !expired {
 		return false
