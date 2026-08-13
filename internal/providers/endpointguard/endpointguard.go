@@ -131,11 +131,33 @@ func IsRestrictedHost(host string) bool {
 	return ok && IsRestrictedAddr(addr)
 }
 
+// additionalRestrictedIPv4Prefixes covers special-purpose IPv4 ranges that
+// netip.Addr.IsPrivate documents as out of scope (it only covers RFC 1918 and
+// RFC 4193), but that must still be treated as non-public for endpoint
+// guarding purposes.
+var additionalRestrictedIPv4Prefixes = []netip.Prefix{
+	netip.MustParsePrefix("0.0.0.0/8"),     // RFC 791 "this network"
+	netip.MustParsePrefix("100.64.0.0/10"), // RFC 6598 shared address space (CGNAT, Tailscale, etc.)
+	netip.MustParsePrefix("192.0.0.0/24"),  // RFC 6890 IETF protocol assignments
+	netip.MustParsePrefix("198.18.0.0/15"), // RFC 2544 benchmarking
+	netip.MustParsePrefix("240.0.0.0/4"),   // RFC 1112 reserved, includes the broadcast address
+}
+
 func IsRestrictedAddr(addr netip.Addr) bool {
 	addr = addr.Unmap()
-	return addr.IsLoopback() ||
+	if addr.IsLoopback() ||
 		addr.IsPrivate() ||
 		addr.IsLinkLocalUnicast() ||
 		addr.IsMulticast() ||
-		addr.IsUnspecified()
+		addr.IsUnspecified() {
+		return true
+	}
+	if addr.Is4() {
+		for _, prefix := range additionalRestrictedIPv4Prefixes {
+			if prefix.Contains(addr) {
+				return true
+			}
+		}
+	}
+	return false
 }
