@@ -918,6 +918,35 @@ func TestUpsertDataMapRemovesStaleManagedKeysAndPreservesForeignKeys(t *testing.
 	assertDataKeysAnnotation(t, updated, []string{"token", "username"})
 }
 
+func TestUpsertDataMapRecoversWhenOwnedSecretDataWasClearedOutOfBand(t *testing.T) {
+	initialPayload := mustDataMapPayload(t, map[string][]byte{
+		"username": []byte("old"),
+		"password": []byte("old-secret"),
+	})
+	// The secret is still owned (labels/annotations/managed-keys intact) but
+	// its Data was wiped out-of-band, e.g. `kubectl patch secret ... -p
+	// '{"data":{}}'`. This must not panic on the next sync.
+	secret := ownedDataMapSecret(initialPayload.SHA256, map[string][]byte{}, []string{"username", "password"})
+	client := fake.NewSimpleClientset(secret)
+
+	nextPayload := mustDataMapPayload(t, map[string][]byte{
+		"username": []byte("new"),
+	})
+	_, err := runtimeWithClient(t, client).Upsert(context.Background(), defaultDataMapUpsertRequest(nextPayload, 2))
+	if err != nil {
+		t.Fatalf("upsert: %v", err)
+	}
+
+	updated, err := client.CoreV1().Secrets(testNamespace).Get(context.Background(), testResolvedName, metav1.GetOptions{})
+	if err != nil {
+		t.Fatalf("get secret: %v", err)
+	}
+	if got := string(updated.Data["username"]); got != "new" {
+		t.Fatalf("username = %q, want new", got)
+	}
+	assertDataKeysAnnotation(t, updated, []string{"username"})
+}
+
 func TestUpsertDataMapRefreshesMetadataForMatchingPayload(t *testing.T) {
 	payload := mustDataMapPayload(t, map[string][]byte{
 		"username": []byte("app"),
