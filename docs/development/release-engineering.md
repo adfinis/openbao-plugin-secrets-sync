@@ -154,6 +154,18 @@ OPENBAO_SECRET_SYNC_RELEASE_TAG_GPG_EMAIL
 Set these values as repository Actions secrets. No broad personal access token
 is required for the default release path.
 
+The artifact workflow verifies each release tag's signature against the
+public key(s) committed at `.github/release-signing-keys.asc`. That file is
+not a secret — it only ever holds public key material — and it must contain
+the public key matching `OPENBAO_SECRET_SYNC_RELEASE_TAG_GPG_PRIVATE_KEY`
+before release verification can succeed. The release tag workflow exports the
+matching public key to its job summary (see "Export release tag signing
+public key" in `.github/workflows/release-tag.yml`) whenever the committed
+file is missing or still a placeholder; copy that block into
+`.github/release-signing-keys.asc` and submit it as its own reviewed pull
+request. Rotate the signing key by updating the four secrets above and then
+replacing the committed public key the same way.
+
 The tag ruleset protects semver tags from update and deletion. Automated tag
 creation is performed by `GITHUB_TOKEN` in the release-tag workflow. For
 GitHub App-based release automation, restrict semver tag creation to the
@@ -181,7 +193,8 @@ The workflow:
 
 - validates the dispatch source or protected manual approval;
 - checks out the tag;
-- requires an annotated tag with a PGP signature block;
+- requires an annotated tag whose PGP signature verifies against the
+  project's trusted release-signing public key(s);
 - runs release source gates: lint, vulnerability checks, license checks,
   filesystem scan, unit tests, race tests, and fuzz smoke tests;
 - requires the matching GitHub Release to already exist and be a draft;

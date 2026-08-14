@@ -109,8 +109,29 @@ jobs:
             exit 1
           fi
 
-          if ! git cat-file tag "${VERSION}^{tag}" | grep -q "BEGIN PGP SIGNATURE"; then
-            echo "release tag ${VERSION} must include a PGP signature" >&2
+          trusted_keys="${GITHUB_WORKSPACE}/.github/release-signing-keys.asc"
+          if [[ ! -s "${trusted_keys}" ]]; then
+            echo "trusted release-signing public key file not found or empty: ${trusted_keys}" >&2
+            exit 1
+          fi
+
+          export GNUPGHOME="${RUNNER_TEMP}/release-verify-gnupg"
+          mkdir -p "${GNUPGHOME}"
+          chmod 700 "${GNUPGHOME}"
+
+          if ! gpg --batch --import "${trusted_keys}"; then
+            echo "failed to import trusted release-signing public key(s) from ${trusted_keys}" >&2
+            exit 1
+          fi
+
+          imported_count="$(gpg --batch --list-keys --with-colons | awk -F: '$1=="pub"' | wc -l)"
+          if [[ "${imported_count}" -eq 0 ]]; then
+            echo "no public keys found in ${trusted_keys}" >&2
+            exit 1
+          fi
+
+          if ! git -c "gpg.program=gpg" verify-tag "${VERSION}"; then
+            echo "release tag ${VERSION} signature verification failed against the trusted release-signing key(s)" >&2
             exit 1
           fi
 
