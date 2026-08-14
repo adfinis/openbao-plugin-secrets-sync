@@ -1054,6 +1054,9 @@ func mergedDataMap(existing map[string][]byte, managedKeys []string, desired map
 	for _, key := range managedKeys {
 		delete(merged, key)
 	}
+	if merged == nil {
+		merged = make(map[string][]byte, len(desired))
+	}
 	for key, value := range desired {
 		merged[key] = append([]byte(nil), value...)
 	}
