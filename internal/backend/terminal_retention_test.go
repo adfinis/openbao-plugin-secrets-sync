@@ -35,7 +35,7 @@ func TestTerminalOutboxPruningBoundsCountAndAgeWork(t *testing.T) {
 			putTerminalOutboxFixture(t, storage, fmt.Sprintf("op-count-%d", index), now.Add(time.Duration(index)*time.Minute))
 		}
 
-		deleted, err := pruneTerminalOutboxRecordsLimit(context.Background(), storage, now.Add(time.Hour), 2, 100)
+		deleted, err := pruneTerminalOutboxRecordsLimit(context.Background(), storage, now.Add(time.Hour), 2, 100, 100)
 		if err != nil {
 			t.Fatalf("prune terminal count: %v", err)
 		}
@@ -59,7 +59,7 @@ func TestTerminalOutboxPruningBoundsCountAndAgeWork(t *testing.T) {
 			)
 		}
 
-		deleted, err := pruneTerminalOutboxRecordsLimit(context.Background(), storage, now, 10, 2)
+		deleted, err := pruneTerminalOutboxRecordsLimit(context.Background(), storage, now, 10, 2, 100)
 		if err != nil {
 			t.Fatalf("prune terminal age: %v", err)
 		}
@@ -72,6 +72,50 @@ func TestTerminalOutboxPruningBoundsCountAndAgeWork(t *testing.T) {
 		}
 		if len(ids) != 1 {
 			t.Fatalf("retained terminal records = %v, want one", ids)
+		}
+	})
+
+	t.Run("excess batch is capped per call", func(t *testing.T) {
+		storage := &logical.InmemStorage{}
+		now := nowUTC()
+		for index := range 5 {
+			putTerminalOutboxFixture(t, storage, fmt.Sprintf("op-excess-%d", index), now.Add(time.Duration(index)*time.Minute))
+		}
+
+		// maxRecords=1 makes all but the newest record "excess", but
+		// excessLimit=2 must bound how many are deleted in a single call so
+		// a large backlog can't force one call to delete everything while
+		// holding the enqueue lock.
+		deleted, err := pruneTerminalOutboxRecordsLimit(context.Background(), storage, now.Add(time.Hour), 1, 100, 2)
+		if err != nil {
+			t.Fatalf("prune terminal excess (first call): %v", err)
+		}
+		if deleted != 2 {
+			t.Fatalf("deleted excess terminal records on first call = %d, want 2", deleted)
+		}
+		ids, err := listOutboxIDsForState(context.Background(), storage, outboxStateFailedTerminal)
+		if err != nil {
+			t.Fatalf("list retained terminal records: %v", err)
+		}
+		if len(ids) != 3 {
+			t.Fatalf("retained terminal records after first call = %v, want 3", ids)
+		}
+
+		// A second call continues draining the remaining excess backlog,
+		// matching how successive periodic ticks would make progress.
+		deleted, err = pruneTerminalOutboxRecordsLimit(context.Background(), storage, now.Add(time.Hour), 1, 100, 2)
+		if err != nil {
+			t.Fatalf("prune terminal excess (second call): %v", err)
+		}
+		if deleted != 2 {
+			t.Fatalf("deleted excess terminal records on second call = %d, want 2", deleted)
+		}
+		ids, err = listOutboxIDsForState(context.Background(), storage, outboxStateFailedTerminal)
+		if err != nil {
+			t.Fatalf("list retained terminal records: %v", err)
+		}
+		if len(ids) != 1 {
+			t.Fatalf("retained terminal records after second call = %v, want 1", ids)
 		}
 	})
 }
