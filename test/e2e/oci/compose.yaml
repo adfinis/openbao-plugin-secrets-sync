@@ -31,7 +31,7 @@ services:
       retries: 30
 
   plugin-dir:
-    image: ${E2E_OPENBAO_IMAGE:-ghcr.io/openbao/openbao:2.6.1@sha256:5b2486ab0fb90bbc788cc345b0a08616dfb375873ee8be5df3a2fd4d378a67e0}
+    image: ${E2E_OPENBAO_IMAGE:-ghcr.io/openbao/openbao:2.6.2@sha256:11fd73a2102cda9c55d5d881a8c3210303146a7ec1e8ac76f526e175c6d24641}
     user: "0"
     entrypoint: ["/bin/sh", "-c"]
     command:
@@ -40,7 +40,7 @@ services:
       - openbao-plugins:/openbao/plugins
 
   openbao:
-    image: ${E2E_OPENBAO_IMAGE:-ghcr.io/openbao/openbao:2.6.1@sha256:5b2486ab0fb90bbc788cc345b0a08616dfb375873ee8be5df3a2fd4d378a67e0}
+    image: ${E2E_OPENBAO_IMAGE:-ghcr.io/openbao/openbao:2.6.2@sha256:11fd73a2102cda9c55d5d881a8c3210303146a7ec1e8ac76f526e175c6d24641}
     cap_add:
       - IPC_LOCK
     depends_on:
