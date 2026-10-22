@@ -6,7 +6,7 @@ bootstrap: ## Prepare local development prerequisites.
 	@$(MAKE) install-go-tools
 
 .PHONY: install-go-tools
-install-go-tools: ## Install pinned optional Go quality tools into bin/.
+install-go-tools: ## Install pinned Go quality tools into bin/.
 	@mkdir -p "$(GOBIN)"
 	@env -u GOFLAGS GOBIN="$(GOBIN)" "$(GO)" install mvdan.cc/gofumpt@$(GOFUMPT_VERSION)
 	@env -u GOFLAGS GOBIN="$(GOBIN)" "$(GO)" install honnef.co/go/tools/cmd/staticcheck@$(STATICCHECK_VERSION)

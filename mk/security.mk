@@ -1,8 +1,12 @@
 ##@ Security
 
 .PHONY: vulncheck
-vulncheck: ## Run govulncheck when installed.
-	@if command -v "$(GOVULNCHECK)" >/dev/null 2>&1; then "$(GOVULNCHECK)" ./...; else printf '%s\n' 'govulncheck not installed; skipping govulncheck.'; fi
+vulncheck: ## Run required Go vulnerability checks.
+	@if ! command -v "$(GOVULNCHECK)" >/dev/null 2>&1; then \
+		printf '%s\n' 'govulncheck is required; run make install-go-tools.' >&2; \
+		exit 1; \
+	fi
+	@"$(GOVULNCHECK)" ./...
 
 .PHONY: go-licenses
 go-licenses:
@@ -31,38 +35,37 @@ license-report: go-licenses ## Generate dependency license report.
 .PHONY: security-ci
 security-ci: vulncheck license-check security-scan-fs ## Run vulnerability, license, and filesystem security scans.
 
-.PHONY: security-scan-image
-security-scan-image: ## Run Trivy image scan against OCI_IMAGE when installed.
-	@if command -v "$(TRIVY)" >/dev/null 2>&1; then \
-		"$(TRIVY)" image \
-			--scanners vuln,misconfig \
-			--severity HIGH,CRITICAL \
-			--ignore-unfixed \
-			--exit-code 1 \
-			--ignorefile .trivyignore \
-			--skip-version-check \
-			"$(OCI_IMAGE)"; \
-	else \
-		printf '%s\n' 'trivy not installed; skipping image security scan.'; \
+.PHONY: require-trivy
+require-trivy:
+	@if ! command -v "$(TRIVY)" >/dev/null 2>&1; then \
+		printf '%s\n' 'trivy is required; install the version pinned in .ci/versions.yaml.' >&2; \
+		exit 1; \
 	fi
 
+.PHONY: security-scan-image
+security-scan-image: require-trivy ## Run the required Trivy image scan against OCI_IMAGE.
+	@"$(TRIVY)" image \
+		--scanners vuln,misconfig \
+		--severity HIGH,CRITICAL \
+		--ignore-unfixed \
+		--exit-code 1 \
+		--ignorefile .trivyignore \
+		--skip-version-check \
+		"$(OCI_IMAGE)"
+
 .PHONY: security-scan-fs
-security-scan-fs: ## Run Trivy filesystem scan when installed.
-	@if command -v "$(TRIVY)" >/dev/null 2>&1; then \
-		"$(TRIVY)" fs \
-			--scanners vuln,misconfig \
-			--severity HIGH,CRITICAL \
-			--ignore-unfixed \
-			--exit-code 1 \
-			--ignorefile .trivyignore \
-			--skip-version-check \
-			--skip-dirs artifacts \
-			--skip-dirs bin \
-			--skip-dirs dist \
-			.; \
-	else \
-		printf '%s\n' 'trivy not installed; skipping filesystem security scan.'; \
-	fi
+security-scan-fs: require-trivy ## Run the required Trivy filesystem scan.
+	@"$(TRIVY)" fs \
+		--scanners vuln,misconfig \
+		--severity HIGH,CRITICAL \
+		--ignore-unfixed \
+		--exit-code 1 \
+		--ignorefile .trivyignore \
+		--skip-version-check \
+		--skip-dirs artifacts \
+		--skip-dirs bin \
+		--skip-dirs dist \
+		.
 
 .PHONY: semgrep-rules-test
 semgrep-rules-test: ## Run Semgrep rule tests when installed.
