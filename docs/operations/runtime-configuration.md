@@ -18,16 +18,20 @@ one update does not restore another field from a stale snapshot.
 
 ## Restore guard
 
-Fresh mounts start with `restore_guard=false`. If `restore_guard=true` after a
-restore, clone, or manual restore-guard rearm, remote mutation is blocked until
-review is complete and the guard is acknowledged.
+Fresh mounts start with `restore_guard=false`. The plugin does not detect
+restore or cloning. The guard and pause settings are restored with the
+snapshot, so neither guarantees that a restored instance starts fenced.
+Prevent destination writes outside OpenBao before restore or startup, then set
+`restore_guard=true disabled=true` for review. An active guard blocks remote
+mutation until it is acknowledged.
 
 ```sh
 bao write -force secret-sync/config/restore-guard/acknowledge
 ```
 
 Use [Restore and clone review](restore-and-clone.md) before acknowledging the
-guard in restored or cloned environments.
+guard. Acknowledging an active guard rotates the restore epoch. Existing
+remote objects can then fail ownership checks and require operator remediation.
 
 ## Mount pause
 

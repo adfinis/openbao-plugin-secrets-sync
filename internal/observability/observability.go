@@ -130,8 +130,9 @@ type QueueCapacityEvent struct {
 	Utilization float64
 }
 
-// New returns the default OpenTelemetry recorder. It is safe when no OTel SDK
-// provider has been installed; the global OTel meter is no-op by default.
+// New returns a recorder using the process-global OpenTelemetry meter.
+// The standalone plugin installs no SDK meter provider or exporter, so its
+// default recorder is no-op. OpenBao core telemetry does not configure it.
 func New() Recorder {
 	recorder, err := NewWithMeter(otel.Meter(instrumentationName))
 	if err != nil {

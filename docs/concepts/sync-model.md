@@ -105,8 +105,11 @@ Providers attach ownership metadata to remote objects. Owned updates and deletes
 require matching metadata. If ownership cannot be proven, providers return an
 ownership error instead of overwriting remote state.
 
-Restore guard blocks remote mutation until an operator reviews destination
-state and acknowledges the guard. Mount-wide `disabled=true` also blocks
+An active restore guard blocks remote mutation until an operator reviews
+destination state and acknowledges the guard. The plugin does not detect
+restore or cloning; external fencing is required before startup. Follow
+[Restore and clone review](../operations/restore-and-clone.md).
+Mount-wide `disabled=true` also blocks
 background provider traffic and remote mutation. Manual reconcile remains
 available because it only reads provider state and updates local status.
 

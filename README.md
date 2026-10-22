@@ -36,8 +36,8 @@ The plugin supports:
   source delete unless overridden;
 - durable queued dispatch with status, manual sync, retry, cancel, drain, and
   reconcile surfaces;
-- restore and clone safeguards that prevent accidental mutation from an
-  unreviewed plugin identity;
+- a manual restore guard and ownership checks, with external destination
+  fencing required before restored or cloned instances start;
 - background drift detection and repair policy controls;
 - provider packages for AWS Secrets Manager, Kubernetes Secrets, and GitLab
   project variables;
