@@ -1,9 +1,15 @@
 # Observability
 
-Secret Sync emits low-cardinality OpenTelemetry metric API calls through
-`internal/observability`. The plugin does not configure an exporter, collector
-endpoint, or exporter credentials. Configure the OpenTelemetry SDK and exporter
-in the OpenBao deployment.
+The preview does not export plugin metrics. Its standalone process calls the
+OpenTelemetry metric API through `internal/observability`, but installs no SDK
+meter provider or exporter. The default global meter therefore records no
+measurements. OpenBao telemetry configuration and `OTEL_EXPORTER_OTLP_*`
+environment variables do not install an SDK inside the plugin process.
+
+Use `queue`, `status/<path>`, `sources/<path>/check`, destination health checks,
+and `reconcile/<path>/plan` to inspect the preview. Poll these APIs with
+appropriately scoped OpenBao credentials if the deployment needs automated
+checks. OpenBao core metrics do not include the plugin instruments listed below.
 
 Use [Convergence](../concepts/convergence.md) for queue and dispatch semantics,
 [Reconcile and drift](../concepts/reconcile-and-drift.md) for read-state and
@@ -12,8 +18,9 @@ troubleshooting commands.
 
 ## Metric Instruments
 
-OpenTelemetry instrument names are the plugin contract. Prometheus exporters
-may transform them into Prometheus names such as
+The following instruments describe the internal recorder and its tested
+attribute policy. They are not exported time series in the preview. A future
+Prometheus exporter could transform them into names such as
 `openbao_secret_sync_provider_requests_total` or
 `openbao_secret_sync_provider_request_duration_seconds`, but those suffixes are
 exporter output, not the in-plugin instrument names.
@@ -100,7 +107,8 @@ exported outside the OpenBao trust boundary.
 
 ## Operational Signals
 
-Useful starting points:
+The following are proposed alert inputs for a future export integration. They
+are unavailable from the preview binary:
 
 - `openbao.secret_sync.restore_guard.active` is last recorded as `1` after the
   expected restore or clone review window.
@@ -120,18 +128,16 @@ Useful starting points:
 - `openbao.secret_sync.readiness.checks` failures identify source or
   destination onboarding blockers.
 
-Use these signals to choose the next inspection path. Metrics do not include
-source paths or remote names, so move from a metric symptom to `queue`,
-`status/<path>`, `reconcile/<path>/plan`, or destination health checks when you
-need object-level context.
+Use the inspection APIs listed above for current operational evidence. The
+recorder deliberately excludes source paths and remote names from attributes.
 
 ## Exporter Boundary
 
-The plugin uses the global OpenTelemetry meter. Without an installed
-OpenTelemetry SDK meter provider, these instruments are no-op. Prefer standard
-OpenTelemetry environment variables such as `OTEL_EXPORTER_OTLP_*` for exporter
-configuration.
+Tests supply a meter or recorder in process and verify measurements and
+attributes. That seam does not provide an operator-configurable export path.
+The plugin has no bridge to OpenBao core telemetry. Upstream
+[OpenBao issue #2973](https://github.com/openbao/openbao/issues/2973) tracks
+external-plugin metrics support.
 
-Do not store exporter credentials in plugin storage. Keep exporter credentials,
-collector endpoints, sampling, and retention policy in the OpenBao deployment
-or platform observability stack.
+If an export integration is added, keep exporter credentials outside plugin
+storage and define its deployment and retention requirements with that change.

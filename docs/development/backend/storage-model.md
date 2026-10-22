@@ -117,7 +117,9 @@ missing.
 `identity/restore-epoch` is generated once per mount and rotates when an active
 restore guard is acknowledged. Providers include the restore epoch in ownership
 metadata where the destination supports it. This helps distinguish restored or
-cloned mounts that might otherwise manage the same remote object.
+cloned mounts after an operator arms and acknowledges the guard. The stored
+epoch can roll back with a snapshot; initialization does not detect restore or
+rotate it automatically. Existing remote metadata is not rewritten on rotation.
 
 Each source metadata record carries a random generation. Operation IDs and
 idempotency keys include that generation so deleting and recreating a source

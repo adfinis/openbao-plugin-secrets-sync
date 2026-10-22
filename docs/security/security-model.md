@@ -306,7 +306,8 @@ overwrite newer remote state.
 The plugin uses a restore guard:
 
 - fresh mounts start with `restore_guard=false`;
-- operators can set `restore_guard=true` after restore or clone review starts;
+- operators must fence destination writes outside the restored storage before
+  startup, then set `restore_guard=true disabled=true` for review;
 - event-triggered, periodic, and manual-drain remote mutation is disabled while
   the guard is active;
 - background drift detection may continue to update local status from provider
@@ -315,20 +316,26 @@ The plugin uses a restore guard:
 - `reconcile/<path>/plan` and `reconcile/<path>` remain available to inspect
   provider state before pushing restored data to destinations;
 - explicit operator acknowledgement to resume sync;
-- persisted restore epoch rotated on acknowledgement and included in provider
-  ownership metadata where possible.
+- the persisted restore epoch rotates when an active guard is acknowledged;
+  existing remote ownership metadata is not rewritten or adopted.
 
-Use the operator runbook for restore review.
+The plugin does not detect restore or cloning. A snapshot can restore an
+inactive guard and the earlier ownership identity. Follow
+[Restore and clone review](../operations/restore-and-clone.md) for external
+fencing, epoch rotation, and ownership remediation. Pause and guard settings
+do not cancel provider requests already in progress.
 
 ## Metrics
 
-Instrument metrics through the OpenTelemetry metric API where practical. The
-plugin must not store exporter credentials in plugin storage. Keep exporter and
-collector setup as a deployment concern.
+The preview calls the OpenTelemetry metric API but installs no SDK meter
+provider or exporter. Its standalone process does not export plugin metrics
+through OpenBao core telemetry. Deployment configuration or OpenTelemetry
+environment variables alone cannot activate export. The plugin must not store
+exporter credentials in plugin storage.
 
 OpenTelemetry instrument names are documented in
-[Observability](../operations/observability.md). Security-relevant instruments
-include:
+[Observability](../operations/observability.md). The internal recorder's
+security-relevant instruments include:
 
 ```text
 openbao.secret_sync.queue.depth
@@ -344,8 +351,8 @@ openbao.secret_sync.drift.repairs
 openbao.secret_sync.restore_guard.active
 ```
 
-Prometheus exporters may translate instrument names and units into Prometheus
-series such as `openbao_secret_sync_operations_total`.
+A future Prometheus export integration could translate instrument names and
+units into series such as `openbao_secret_sync_operations_total`.
 
 Metric labels do not include secret values, high-cardinality source paths,
 resolved remote names, destination names, association ids, operation ids,

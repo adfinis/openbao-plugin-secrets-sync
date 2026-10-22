@@ -47,11 +47,21 @@ Acknowledging an active restore guard rotates the restore epoch. Provider
 requests carry the current restore epoch where the destination supports
 ownership metadata.
 
+The guard defaults to false and is stored in the snapshot timeline. Initialize
+does not detect a restore or arm the guard. Operators must fence destinations
+outside the restored storage before startup. Epoch rotation does not rewrite
+remote ownership metadata or provide automatic adoption. See
+[Restore and clone review](../../operations/restore-and-clone.md).
+
 ## Disabled Mounts
 
-`disabled=true` is a mount pause. It blocks background provider traffic and
-remote mutation. Periodic work returns before drift detection or dispatch, and
-event dispatch does not process queue work.
+`disabled=true` is a mount pause. It gates new background provider work and
+remote mutation dispatch. Periodic work returns before drift detection or
+dispatch, and event dispatch does not process queue work.
+
+Configuration writes do not cancel provider requests or a reconciliation pass
+that already read the previous configuration. Pause is not a quiescence
+barrier.
 
 Manual reconcile remains available because it does not write destination
 secrets. Destination source and remote-name constraints still apply before

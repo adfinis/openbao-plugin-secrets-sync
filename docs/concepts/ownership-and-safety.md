@@ -43,9 +43,12 @@ Each Secret Sync mount has an OpenBao-provided mount UUID and a plugin-managed
 restore epoch. Providers include these values in ownership metadata.
 
 The mount UUID identifies the mounted backend that created the remote object.
-The restore epoch distinguishes a restored or cloned mount from the earlier
-mount state. When restore guard is acknowledged, the restore epoch rotates so
-future provider writes carry a new reviewed epoch.
+The restore epoch is stored in OpenBao storage and can be rolled back with a
+snapshot. It does not detect restore or cloning. Acknowledging an active
+restore guard rotates the epoch so future provider requests carry a new
+reviewed identity. Existing remote objects retain their previous metadata and
+can fail ownership checks after rotation. The plugin does not adopt them
+automatically.
 
 ## Object States
 
@@ -87,6 +90,10 @@ current source version.
 Association `delete_mode` defaults to `retain`. Remote delete is enqueued only
 when `delete_mode=delete`.
 
+The accepted value `delete_mode=orphan` is an alias of `retain`. Both modes
+preserve remote values and ownership metadata. Neither mode detaches ownership
+or transfers the remote object to another association.
+
 Provider delete must prove ownership before mutating the remote object. Missing
 owned objects are treated idempotently. Provider-specific delete behavior is
 documented in the provider operations pages.
@@ -107,9 +114,12 @@ commands.
 
 ## Restore Guard
 
-Restore guard blocks remote mutation until an operator reviews local and remote
-state. Manual reconcile remains available because it only reads provider state
-and updates local status.
+Restore guard blocks remote mutation when it is active. It defaults to false
+and is restored with the snapshot. Fence destination writes outside OpenBao
+before restored or cloned instances start, then arm the guard and review local
+and remote state. Follow [Restore and clone review](../operations/restore-and-clone.md).
+Manual reconcile remains available because it only reads provider state and
+updates local status.
 
 Acknowledging restore guard is consent to resume remote mutation with the
 current local source versions. If `drift_repair=repair` is enabled, it also

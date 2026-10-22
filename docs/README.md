@@ -53,8 +53,8 @@ page when you need to choose the right detailed document.
   work, and dispatch tuning.
 - [Operator runbook](operations/operator-runbook.md) gives operational checks,
   troubleshooting flows, restore-guard handling, and failure response guidance.
-- [Observability](operations/observability.md) describes the OpenTelemetry
-  metric surface and attribute policy.
+- [Observability](operations/observability.md) describes current inspection APIs,
+  the internal metric vocabulary, and the preview's lack of metric export.
 - [Install and verify release artifacts](operations/install-and-verify.md)
   describes artifact verification and plugin installation.
 - [Restore and clone review](operations/restore-and-clone.md) describes the

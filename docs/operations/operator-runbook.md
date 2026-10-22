@@ -23,12 +23,10 @@ Confirm the mount responds:
 bao read secret-sync/config
 ```
 
-If `restore_guard=true`, remote mutation is blocked until restore or clone
-review is complete and the guard is acknowledged:
-
-```sh
-bao write -force secret-sync/config/restore-guard/acknowledge
-```
+If `restore_guard=true`, keep it active until the
+[restore and clone review](restore-and-clone.md) is complete. Acknowledgement
+rotates the ownership epoch and can make existing remote objects fail ownership
+checks. An inactive guard does not prove that a restored instance is safe.
 
 Check mount-wide pause and queue capacity:
 
@@ -230,23 +228,20 @@ storage.
 
 ## Operational signals
 
-The plugin emits OpenTelemetry metric API calls only. Exporter setup remains an
-OpenBao deployment concern.
+The preview does not export plugin metrics. OpenBao telemetry configuration
+does not activate the plugin's internal OpenTelemetry recorder. See
+[Observability](observability.md) for the instrumentation boundary.
 
-Useful alert inputs:
+Inspect these API responses:
 
-- `openbao.secret_sync.restore_guard.active` stays `1` after an expected
-  restore or deployment review window;
-- `openbao.secret_sync.queue.utilization` remains high or increases while
-  `openbao.secret_sync.queue.depth{state="pending"}` is not draining;
-- `openbao.secret_sync.remote_mutation.blocked` increases with reason
-  `disabled`, `restore_guard`, or `replication_state`;
-- `openbao.secret_sync.provider.requests` failures increase by provider,
-  operation, or error class;
-- `openbao.secret_sync.drift.repairs` failures or retries increase by
-  destination type or granularity;
-- `openbao.secret_sync.readiness.checks` failures identify onboarding blockers
-  without exposing source paths or destination names.
+- `config` for mount pause and restore guard state;
+- `queue` for capacity pressure, pending work, retries, and terminal failures;
+- `status/<path>` for per-object sync results and diagnostics;
+- `sources/<path>/check` and destination health checks for onboarding blockers;
+- `reconcile/<path>/plan` for current remote state and ownership evidence.
+
+If automated checks poll these paths, scope their OpenBao credentials to the
+required read and check operations. Do not collect source value responses.
 
 ## Status and reconcile
 
@@ -334,27 +329,11 @@ to use while the restore guard is active.
 Use [Restore and clone review](restore-and-clone.md) for the full review
 workflow.
 
-After restore or clone, keep mutation blocked until remote ownership has been
-reviewed:
-
-```sh
-bao read secret-sync/config
-bao read secret-sync/reconcile/app/db/plan
-```
-
-For each important source path:
-
-1. Review local source version and association state.
-2. Run reconcile plan.
-3. Inspect remote ownership and payload hash status.
-4. Cancel, retry, or re-plan queued operations as needed.
-5. Acknowledge restore guard only after the destination state is understood.
-
-Resume remote mutation:
-
-```sh
-bao write -force secret-sync/config/restore-guard/acknowledge
-```
+Fence destination writes outside the restored storage before startup or
+restore. Then arm `restore_guard=true disabled=true`, inventory local work, and
+review remote state. Keep the mount disabled and externally fenced during
+epoch rotation and ownership remediation. The full procedure includes the
+checks required before destination writes resume.
 
 ## Evidence to capture
 
