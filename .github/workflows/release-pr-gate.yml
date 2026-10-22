@@ -2,79 +2,108 @@ name: Release PR Gate
 
 on:
   pull_request_target:
-    types:
-      - opened
-      - synchronize
-      - reopened
-      - labeled
-      - ready_for_review
-    paths:
-      - 'CHANGELOG.md'
-      - '.release-please-manifest.json'
-  pull_request_review:
-    types:
-      - submitted
+    branches: [main]
+    types: [opened, synchronize, reopened, edited, labeled, unlabeled, ready_for_review, converted_to_draft]
+  workflow_run:
+    workflows: [Release Review Event]
+    types: [completed]
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: Pull request number to evaluate.
+        required: true
+        type: string
+      head_sha:
+        description: Exact pull request head commit to evaluate.
+        required: true
+        type: string
 
 permissions:
   contents: read
   issues: read
   pull-requests: read
 
-concurrency:
-  group: release-pr-gate-${{ github.event.pull_request.number }}
-  cancel-in-progress: true
-
 jobs:
-  gate:
-    name: Gate Release PR Merge
+  resolve:
+    name: Resolve Readiness Candidate
     runs-on: ubuntu-24.04
-    if: ${{ !github.event.repository.fork }}
+    if: ${{ !github.event.repository.fork && (github.event_name != 'workflow_dispatch' || github.ref == 'refs/heads/main') }}
+    outputs:
+      pr_number: ${{ steps.candidate.outputs.pr_number }}
+      head_sha: ${{ steps.candidate.outputs.head_sha }}
     steps:
-      - name: Evaluate release PR gate
+      - name: Resolve metadata without PR code or artifacts
+        id: candidate
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
-          PR_NUMBER: ${{ github.event.pull_request.number }}
-          REQUIRED_LABEL: release:ready
-          REQUIRED_APPROVER: ${{ vars.OPENBAO_SECRET_SYNC_RELEASE_REQUIRED_APPROVER }}
           EVENT_NAME: ${{ github.event_name }}
-          REVIEW_STATE: ${{ github.event.review.state || '' }}
+          REPOSITORY_ID: ${{ github.repository_id }}
+          PR_NUMBER: ${{ github.event.pull_request.number || inputs.pr_number }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha || inputs.head_sha }}
         run: |
           set -euo pipefail
-
-          if [[ "${EVENT_NAME}" == "pull_request_review" && "${REVIEW_STATE}" != "approved" ]]; then
-            echo "Review event is not an approval; skipping release PR gate."
-            exit 0
+          if [[ "${EVENT_NAME}" == workflow_run ]]; then
+            # Association metadata comes from GitHub, not a notifier artifact.
+            candidates="$(jq -ce --argjson repo_id "${REPOSITORY_ID}" '
+              [.workflow_run.pull_requests[]?
+              | select(.head.ref == "release-please--branches--main" and
+                .head.repo.id == $repo_id and .base.ref == "main")]' "${GITHUB_EVENT_PATH}")"
+            if [[ "$(jq 'length' <<<"${candidates}")" == 0 ]]; then
+              candidates="$(gh api "repos/${REPO}/pulls" --method GET \
+                -f state=open -f base=main -f head="${REPO%%/*}:release-please--branches--main" \
+                --paginate --slurp | jq -ce 'add')"
+            fi
+            count="$(jq 'length' <<<"${candidates}")"
+            if [[ "${count}" == 0 ]]; then
+              echo "No open release candidate needs review refresh."
+              exit 0
+            fi
+            [[ "${count}" == 1 ]] || { echo "Multiple release candidates found" >&2; exit 1; }
+            PR_NUMBER="$(jq -er '.[0].number' <<<"${candidates}")"
+            HEAD_SHA="$(jq -er '.[0].head.sha' <<<"${candidates}")"
           fi
+          [[ "${PR_NUMBER}" =~ ^[1-9][0-9]*$ && "${HEAD_SHA}" =~ ^[0-9a-f]{40}$ ]] || exit 1
+          printf 'pr_number=%s\nhead_sha=%s\n' "${PR_NUMBER}" "${HEAD_SHA}" >> "${GITHUB_OUTPUT}"
 
-          files="$(gh api "repos/${REPO}/pulls/${PR_NUMBER}/files" --paginate --jq '.[].filename')"
-          if ! (echo "${files}" | grep -qx "CHANGELOG.md" && echo "${files}" | grep -qx ".release-please-manifest.json"); then
-            echo "Not a release PR (missing CHANGELOG.md and/or .release-please-manifest.json); skipping gate."
-            exit 0
-          fi
+  gate:
+    name: Evaluate Release Readiness
+    needs: [resolve]
+    if: ${{ needs.resolve.outputs.pr_number != '' }}
+    runs-on: ubuntu-24.04
+    concurrency:
+      group: release-pr-gate-${{ needs.resolve.outputs.pr_number }}
+      cancel-in-progress: false
+    permissions:
+      contents: read
+      issues: read
+      pull-requests: read
+      statuses: write
+    steps:
+      - name: Mark candidate pending before checkout
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          EXPECTED_HEAD_SHA: ${{ needs.resolve.outputs.head_sha }}
+        run: |
+          set -euo pipefail
+          [[ "${EXPECTED_HEAD_SHA}" =~ ^[0-9a-f]{40}$ ]] || exit 1
+          gh api "repos/${REPO}/statuses/${EXPECTED_HEAD_SHA}" --method POST \
+            -f context='Release Readiness' -f state=pending \
+            -f description='Evaluating current PR release readiness' \
+            -f target_url="${GITHUB_SERVER_URL}/${REPO}/actions/runs/${GITHUB_RUN_ID}" >/dev/null
 
-          if [[ -z "${REQUIRED_APPROVER}" ]]; then
-            echo "OPENBAO_SECRET_SYNC_RELEASE_REQUIRED_APPROVER repository variable is required for release PR gating." >&2
-            exit 1
-          fi
+      - name: Checkout protected readiness tooling
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.base.sha || github.sha }}
+          persist-credentials: false
 
-          labels="$(gh api "repos/${REPO}/issues/${PR_NUMBER}/labels" --paginate --jq '.[].name')"
-          if ! echo "${labels}" | grep -qx "${REQUIRED_LABEL}"; then
-            echo "Missing required label '${REQUIRED_LABEL}' on release PR." >&2
-            echo "Add it when the PR is ready to be merged." >&2
-            exit 1
-          fi
-
-          reviews="$(gh api "repos/${REPO}/pulls/${PR_NUMBER}/reviews" --paginate)"
-          approver_state="$(
-            jq -r \
-              --arg approver "${REQUIRED_APPROVER}" \
-              'map(select(.user.login == $approver)) | sort_by(.submitted_at) | last | .state // ""' \
-              <<<"${reviews}"
-          )"
-          if [[ "${approver_state}" != "APPROVED" ]]; then
-            echo "Missing latest approval from '${REQUIRED_APPROVER}' on release PR." >&2
-            exit 1
-          fi
-
-          echo "Release PR gate satisfied."
+      - name: Evaluate and publish PR head status
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ needs.resolve.outputs.pr_number }}
+          EXPECTED_HEAD_SHA: ${{ needs.resolve.outputs.head_sha }}
+          REQUIRED_APPROVER: ${{ vars.OPENBAO_SECRET_SYNC_RELEASE_REQUIRED_APPROVER }}
+        run: bash hack/ci/publish-release-readiness.sh

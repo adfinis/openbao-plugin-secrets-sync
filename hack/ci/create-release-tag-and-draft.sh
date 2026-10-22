@@ -8,6 +8,7 @@ BASE_BRANCH="${BASE_BRANCH:-main}"
 MANIFEST_FILE="${MANIFEST_FILE:-.release-please-manifest.json}"
 RELEASE_NOTES_DIR="${RELEASE_NOTES_DIR:-release-notes}"
 DRY_RUN="${DRY_RUN:-0}"
+PREFLIGHT_ONLY="${PREFLIGHT_ONLY:-0}"
 BEFORE_SHA="${BEFORE_SHA:-}"
 
 GH_READ_TOKEN="${GH_READ_TOKEN:-${GH_TOKEN:-}}"
@@ -18,8 +19,8 @@ if [[ -z "${GH_READ_TOKEN}" ]]; then
   exit 1
 fi
 
-if [[ "${DRY_RUN}" != "1" && -z "${GH_WRITE_TOKEN}" ]]; then
-  echo "GH_WRITE_TOKEN or GH_TOKEN is required unless DRY_RUN=1" >&2
+if [[ "${DRY_RUN}" != "1" && "${PREFLIGHT_ONLY}" != "1" && -z "${GH_WRITE_TOKEN}" ]]; then
+  echo "GH_WRITE_TOKEN or GH_TOKEN is required unless DRY_RUN=1 or PREFLIGHT_ONLY=1" >&2
   exit 1
 fi
 
@@ -158,12 +159,13 @@ require_git_tag_signing() {
 require_file "${MANIFEST_FILE}"
 
 version="$(jq -er '."."' "${MANIFEST_FILE}")"
-if ! [[ "${version}" =~ ^[0-9]+\.[0-9]+\.[0-9]+([\-+].*)?$ ]]; then
+if ! [[ "${version}" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
   echo "release-please manifest version must be semver, got ${version}" >&2
   exit 1
 fi
 write_output "version" "${version}"
 write_output "release_ready" "false"
+write_output "candidate_ready" "false"
 
 release_pr_title="chore(${BASE_BRANCH}): release ${version}"
 pr_candidates="$(
@@ -179,6 +181,10 @@ match_count="$(
   jq -r --arg title "${release_pr_title}" '[.[] | select(.title == $title)] | length' <<<"${pr_candidates}"
 )"
 
+if [[ "${match_count}" == "0" && -n "${APPROVED_PR_NUMBER:-}" ]]; then
+  echo "approved release candidate is no longer available" >&2
+  exit 1
+fi
 if [[ "${match_count}" == "0" ]] && ! is_release_pr_file_update; then
   echo "No merged release PR titled '${release_pr_title}' found; skipping non-release metadata update."
   exit 0
@@ -197,7 +203,7 @@ release_pr_number="$(
 release_pr_json="$(
   gh_read pr view "${release_pr_number}" \
     --repo "${REPO}" \
-    --json number,title,state,body,mergeCommit,mergedAt,url
+    --json number,title,state,body,headRefOid,mergeCommit,mergedAt,url
 )"
 
 release_pr_state="$(jq -r '.state' <<<"${release_pr_json}")"
@@ -208,11 +214,51 @@ if [[ "${release_pr_state}" != "MERGED" || -z "${merge_oid}" ]]; then
   exit 1
 fi
 
+if ! git merge-base --is-ancestor "${merge_oid}" HEAD; then
+  echo "selected release merge is outside the pinned workflow history" >&2
+  exit 1
+fi
 manifest_at_merge="$(git show "${merge_oid}:${MANIFEST_FILE}" | jq -er '."."')"
 if [[ "${manifest_at_merge}" != "${version}" ]]; then
   echo "release manifest at merge commit ${merge_oid} does not match ${version}" >&2
   echo "  manifest@merge: ${manifest_at_merge}" >&2
   exit 1
+fi
+
+head_oid="$(jq -er '.headRefOid' <<<"${release_pr_json}")"
+for binding in \
+  "${APPROVED_PR_NUMBER:-}:${release_pr_number}" \
+  "${APPROVED_HEAD_SHA:-}:${head_oid}" \
+  "${APPROVED_MERGE_SHA:-}:${merge_oid}" \
+  "${APPROVED_VERSION:-}:${version}"
+do
+  approved="${binding%%:*}"
+  actual="${binding#*:}"
+  if [[ -n "${approved}" && "${approved}" != "${actual}" ]]; then
+    echo "release candidate changed after preflight approval" >&2
+    exit 1
+  fi
+done
+script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+GH_TOKEN="${GH_READ_TOKEN}" PR_NUMBER="${release_pr_number}" \
+  EXPECTED_HEAD_SHA="${head_oid}" EXPECTED_MERGE_SHA="${merge_oid}" READINESS_MODE=tag \
+  bash "${script_dir}/release-readiness.sh"
+write_output "candidate_ready" "true"
+write_output "pr_number" "${release_pr_number}"
+write_output "head_sha" "${head_oid}"
+write_output "merge_sha" "${merge_oid}"
+if [[ "${PREFLIGHT_ONLY}" == "1" ]]; then
+  printf 'Candidate: version=%s PR=#%s head=%s merge=%s\n' \
+    "${version}" "${release_pr_number}" "${head_oid}" "${merge_oid}"
+  if [[ -n "${GITHUB_STEP_SUMMARY:-}" ]]; then
+    {
+      printf 'Release candidate `%s` from PR #%s\n\n' "${version}" "${release_pr_number}"
+      printf -- '- PR head: `%s`\n- Tag target: `%s`\n\n' "${head_oid}" "${merge_oid}"
+      echo 'Approval permits a signed tag, draft GitHub Release, and automatic artifact/GHCR publication.'
+      echo 'Publishing the draft GitHub Release remains a separate maintainer action.'
+    } >> "${GITHUB_STEP_SUMMARY}"
+  fi
+  exit 0
 fi
 
 notes_file="$(mktemp)"

@@ -236,15 +236,7 @@ func releaseTestKeys(t *testing.T) ([]string, []signingKey) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	env := make([]string, 0, len(os.Environ())+8)
-	for _, entry := range os.Environ() {
-		name, _, _ := strings.Cut(entry, "=")
-		if !strings.HasPrefix(name, "GIT_") && !strings.HasPrefix(name, "GITHUB_") &&
-			name != "GNUPGHOME" && name != "TMPDIR" {
-			env = append(env, entry)
-		}
-	}
-	env = append(env, "GNUPGHOME="+home, "TMPDIR=/tmp", "GIT_CONFIG_NOSYSTEM=1", "GIT_CONFIG_GLOBAL=/dev/null")
+	env := append(releaseTestEnvironment(), "GNUPGHOME="+home, "TMPDIR=/tmp")
 	t.Cleanup(func() {
 		// #nosec G204 -- home is the temporary keyring created by this test.
 		cmd := exec.Command("gpgconf", "--homedir", home, "--kill", "all")
@@ -267,6 +259,18 @@ func releaseTestKeys(t *testing.T) ([]string, []signingKey) {
 		keys = append(keys, key)
 	}
 	return env, keys
+}
+
+func releaseTestEnvironment() []string {
+	env := make([]string, 0, len(os.Environ())+2)
+	for _, entry := range os.Environ() {
+		name, _, _ := strings.Cut(entry, "=")
+		if !strings.HasPrefix(name, "GIT_") && !strings.HasPrefix(name, "GITHUB_") &&
+			!strings.HasPrefix(name, "GH_") && name != "GNUPGHOME" && name != "TMPDIR" {
+			env = append(env, entry)
+		}
+	}
+	return append(env, "GIT_CONFIG_NOSYSTEM=1", "GIT_CONFIG_GLOBAL=/dev/null")
 }
 
 func readSigningKey(t *testing.T, env []string, identity string) signingKey {

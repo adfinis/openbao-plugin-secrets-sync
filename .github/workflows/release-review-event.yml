@@ -1,0 +1,17 @@
+name: Release Review Event
+
+on:
+  pull_request_review:
+    types: [submitted, edited, dismissed]
+
+permissions: {}
+
+jobs:
+  notify:
+    name: Signal Review Metadata Change
+    runs-on: ubuntu-24.04
+    steps:
+      # The trusted workflow_run consumer reads live GitHub metadata only.
+      # No PR code, artifacts, credentials, or event-provided commands are used.
+      - name: Signal review update
+        run: 'true'

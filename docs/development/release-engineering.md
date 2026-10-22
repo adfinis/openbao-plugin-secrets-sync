@@ -129,23 +129,66 @@ REPO=adfinis/openbao-plugin-secrets-sync OWNER=adfinis \
 
 ## Release flow
 
-The release process has three separate automation steps:
+The release process separates release readiness, approval, and publication:
 
-1. `.github/workflows/release-please.yml` opens or updates the release PR using
-   the repository `GITHUB_TOKEN` and `skip-github-release: true`.
-2. `.github/workflows/release-pr-gate.yml` requires the `release:ready` label
-   and approval from the user configured in the
-   `OPENBAO_SECRET_SYNC_RELEASE_REQUIRED_APPROVER` repository variable.
-3. `.github/workflows/release-tag.yml` creates a signed annotated semver tag and
-   a draft GitHub Release from the merged release PR, then dispatches
-   `.github/workflows/release.yml` with a `repository_dispatch` event.
+1. `.github/workflows/release-please.yml` opens or updates the release PR with
+   the repository `GITHUB_TOKEN` and `skip-github-release: true`. It dispatches
+   validation and the metadata-only release-readiness evaluator.
+2. `.github/workflows/release-pr-gate.yml` publishes the `Release Readiness`
+   commit status on the exact PR head. Ordinary PRs pass without release
+   approval. Release PRs must use the same-repository
+   `release-please--branches--main` branch, update both release metadata files,
+   and be ready for review. They require `release:ready` and current-head
+   approval from `OPENBAO_SECRET_SYNC_RELEASE_REQUIRED_APPROVER`.
+3. `.github/workflows/release-tag.yml` inspects the merged candidate without
+   signing secrets or GitHub writes. It reports the version, PR head, and merge
+   commit before requesting approval through the protected `release-manual`
+   environment. After approval it revalidates those identities, the readiness
+   label, and the designated approval before a step receives signing-secret
+   values or imports the key. The approval must predate the PR merge.
+4. The tag job creates a signed tag and draft GitHub Release, then dispatches
+   `.github/workflows/release.yml`. That workflow uploads draft assets and
+   publishes the OCI image to GHCR. These effects are included in tag-job
+   approval. Publishing the draft GitHub Release remains a separate action.
 
-Release Please commits are signed off through `release-please-config.json` with
-the `github-actions[bot]` identity. Release PR checks created by
-`GITHUB_TOKEN` can require manual approval in the GitHub UI before they run.
-Because `GITHUB_TOKEN`-created pull requests do not trigger normal pull request
-workflows, the release-please workflow explicitly dispatches the required
-`Core Quality` and `Dependency Review` checks against the release PR branch.
+Approval submitted after merge does not qualify. If a release PR merges without
+qualifying current-head approval, prepare a release candidate with a new version
+and obtain approval before merging it.
+
+Configure `Release Readiness` as a required status context in the main-branch
+ruleset alongside `Core Quality` and `Dependency Review`. Workflow code alone
+does not make a status mandatory. Verify the status appears on ordinary and
+release PR heads before enabling that requirement. Include an actual Dependabot
+`pull_request_target` run and an ordinary fork PR in that qualification; local
+tests do not establish the actor's token permissions or required-context
+eligibility. Keep the context optional until these hosted checks succeed.
+The evaluator job has a separate name so a job check does not collide with the
+commit-status context.
+
+The evaluator uses protected-branch tooling and reads PR metadata only. It does
+not execute PR code. A permissionless review-event notifier wakes the trusted
+default-branch workflow, which resolves the live canonical release PR through
+the GitHub API. It reads no artifacts or event-provided commands. Label removal,
+review dismissal, changes requested, draft conversion, and source updates trigger reevaluation. Comments do not revoke an
+approval; a later dismissal or changes-requested review does. Approval on an
+older head does not qualify. API failures prevent a successful decision.
+Metadata events are asynchronous; a status is not an atomic lock on labels or
+reviews. The review consumer resolves GitHub-associated release heads before its
+serialized status writer marks them pending and performs live validation.
+If GitHub supplies no associated head and its API is unavailable, it cannot
+invalidate a prior status until metadata access recovers. Verify the
+hosted review-event association and required-status behavior before activating
+the ruleset requirement. Tag creation therefore evaluates the policy again
+after environment approval and immediately before its release actions.
+
+Release Please commits carry the `github-actions[bot]` sign-off configured in
+`release-please-config.json`. GITHUB_TOKEN-created PR updates can produce
+approval-required pull-request runs. Approve only the inspected candidate's
+runs. Explicitly dispatched validation remains useful, but successful job
+checks from a dispatch do not by themselves establish that required PR checks
+are satisfied. Verify the PR's required contexts and rollup for its current
+head. See [GitHub workflow triggers](https://docs.github.com/en/actions/how-tos/write-workflows/choose-when-workflows-run/trigger-a-workflow#triggering-a-workflow-from-a-workflow)
+and [required status checks](https://docs.github.com/en/pull-requests/how-tos/merge-and-close-pull-requests/troubleshooting-required-status-checks#checks-from-some-workflow-jobs-are-not-evaluated).
 
 The release tag workflow requires the signing key secrets:
 
