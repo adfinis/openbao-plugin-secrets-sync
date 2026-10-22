@@ -28,6 +28,7 @@ func TestQueueCancelPurgesTerminalOperation(t *testing.T) {
 }
 
 func TestTerminalOutboxPruningBoundsCountAndAgeWork(t *testing.T) {
+	b := &secretSyncBackend{}
 	t.Run("count", func(t *testing.T) {
 		storage := &logical.InmemStorage{}
 		now := nowUTC()
@@ -35,7 +36,7 @@ func TestTerminalOutboxPruningBoundsCountAndAgeWork(t *testing.T) {
 			putTerminalOutboxFixture(t, storage, fmt.Sprintf("op-count-%d", index), now.Add(time.Duration(index)*time.Minute))
 		}
 
-		deleted, err := pruneTerminalOutboxRecordsLimit(context.Background(), storage, now.Add(time.Hour), 2, 100)
+		deleted, err := b.pruneTerminalOutboxRecordsLimit(context.Background(), storage, now.Add(time.Hour), 2, 100, 100)
 		if err != nil {
 			t.Fatalf("prune terminal count: %v", err)
 		}
@@ -59,7 +60,7 @@ func TestTerminalOutboxPruningBoundsCountAndAgeWork(t *testing.T) {
 			)
 		}
 
-		deleted, err := pruneTerminalOutboxRecordsLimit(context.Background(), storage, now, 10, 2)
+		deleted, err := b.pruneTerminalOutboxRecordsLimit(context.Background(), storage, now, 10, 2, 100)
 		if err != nil {
 			t.Fatalf("prune terminal age: %v", err)
 		}
@@ -74,6 +75,51 @@ func TestTerminalOutboxPruningBoundsCountAndAgeWork(t *testing.T) {
 			t.Fatalf("retained terminal records = %v, want one", ids)
 		}
 	})
+}
+
+func TestTerminalOutboxExcessPruningIsCapped(t *testing.T) {
+	b := &secretSyncBackend{}
+	storage := &logical.InmemStorage{}
+	now := nowUTC()
+	for index := range 5 {
+		putTerminalOutboxFixture(t, storage, fmt.Sprintf("op-excess-%d", index), now.Add(time.Duration(index)*time.Minute))
+	}
+
+	// maxRecords=1 makes all but the newest record "excess", but
+	// excessLimit=2 must bound how many are deleted in a single call so
+	// a large backlog can't force one call to delete everything while
+	// holding the enqueue lock.
+	deleted, err := b.pruneTerminalOutboxRecordsLimit(context.Background(), storage, now.Add(time.Hour), 1, 100, 2)
+	if err != nil {
+		t.Fatalf("prune terminal excess (first call): %v", err)
+	}
+	if deleted != 2 {
+		t.Fatalf("deleted excess terminal records on first call = %d, want 2", deleted)
+	}
+	ids, err := listOutboxIDsForState(context.Background(), storage, outboxStateFailedTerminal)
+	if err != nil {
+		t.Fatalf("list retained terminal records: %v", err)
+	}
+	if len(ids) != 3 {
+		t.Fatalf("retained terminal records after first call = %v, want 3", ids)
+	}
+
+	// A second call continues draining the remaining excess backlog,
+	// matching how successive periodic ticks would make progress.
+	deleted, err = b.pruneTerminalOutboxRecordsLimit(context.Background(), storage, now.Add(time.Hour), 1, 100, 2)
+	if err != nil {
+		t.Fatalf("prune terminal excess (second call): %v", err)
+	}
+	if deleted != 2 {
+		t.Fatalf("deleted excess terminal records on second call = %d, want 2", deleted)
+	}
+	ids, err = listOutboxIDsForState(context.Background(), storage, outboxStateFailedTerminal)
+	if err != nil {
+		t.Fatalf("list retained terminal records: %v", err)
+	}
+	if len(ids) != 1 {
+		t.Fatalf("retained terminal records after second call = %v, want 1", ids)
+	}
 }
 
 func TestPeriodicPrunesExpiredTerminalOperationWhileDisabled(t *testing.T) {
@@ -93,6 +139,36 @@ func TestPeriodicPrunesExpiredTerminalOperationWhileDisabled(t *testing.T) {
 		t.Fatalf("disabled periodic cleanup: %v", err)
 	}
 	assertOutboxMissing(t, env.storage, "op-expired-disabled")
+}
+
+func TestTerminalPruningCombinesAgeAndCountLimits(t *testing.T) {
+	storage := &logical.InmemStorage{}
+	b := &secretSyncBackend{}
+	now := nowUTC()
+	for index := range 9 {
+		terminalTime := now.Add(time.Duration(index) * time.Minute)
+		if index < 6 {
+			terminalTime = now.Add(-terminalOutboxRetention - time.Duration(6-index)*time.Minute)
+		}
+		putTerminalOutboxFixture(t, storage, fmt.Sprintf("op-%d", index), terminalTime)
+	}
+	for pass := range 2 {
+		deleted, err := b.pruneTerminalOutboxRecordsLimit(context.Background(), storage, now, 4, 1, 2)
+		if err != nil || deleted != 3 {
+			t.Fatalf("pass %d: prune = %d, %v; want three, nil", pass, deleted, err)
+		}
+		if pass == 0 {
+			for _, index := range []int{0, 1, 5} {
+				assertOutboxMissing(t, storage, fmt.Sprintf("op-%d", index))
+			}
+		}
+	}
+	for index := range 6 {
+		assertOutboxMissing(t, storage, fmt.Sprintf("op-%d", index))
+	}
+	for _, index := range []int{6, 7, 8} {
+		assertOutboxOperation(t, storage, fmt.Sprintf("op-%d", index), 1, outboxStateFailedTerminal)
+	}
 }
 
 func TestAssociationAndSourceDeletionPurgeTerminalHistory(t *testing.T) {

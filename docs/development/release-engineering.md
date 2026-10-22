@@ -48,6 +48,11 @@ OpenBao OCI plugin version is used directly as the image tag.
 
 ## Local artifact build
 
+The normal Go test suite includes offline release verification tests. These
+require Git, Bash, GnuPG (`gpg` and `gpgconf`), and `jq`. The tests create
+short-lived signing keys in temporary directories and do not use maintainer
+credentials.
+
 Build release artifacts locally:
 
 ```sh
@@ -154,6 +159,40 @@ OPENBAO_SECRET_SYNC_RELEASE_TAG_GPG_EMAIL
 Set these values as repository Actions secrets. No broad personal access token
 is required for the default release path.
 
+### Trusted signing keys
+
+The artifact workflow verifies release tags with the public keys in
+`.github/release-signing-keys.asc` from the pinned protected `main` commit
+that runs the workflow. It reads neither keys nor verification tooling from
+the candidate release. Verification uses an isolated GnuPG keyring with
+automatic key retrieval disabled. Unknown, expired, and revoked keys fail
+verification.
+
+The trust file must contain the public key that matches
+`OPENBAO_SECRET_SYNC_RELEASE_TAG_GPG_PRIVATE_KEY`. A placeholder or missing
+key blocks artifact builds. To bootstrap the trust file:
+
+1. Merge the `Export Release Public Key` workflow into `main`.
+2. Run `.github/workflows/release-public-key.yml` on `main`. The job requires
+   approval through the protected `release-manual` environment.
+3. Download the `release-public-key` artifact. It contains only an armored
+   public key and its primary fingerprint. The workflow creates no tag or
+   release and has no repository write permissions.
+4. Check the workflow commit, run, and fingerprint against the intended
+   signing identity. Replace `.github/release-signing-keys.asc` with the
+   exported public key through a reviewed pull request.
+5. Merge the key before merging the release PR or running artifact recovery.
+
+The export rejects secrets that contain multiple primary secret keys. It
+uses a temporary keyring and removes it after export. Do not download or
+commit the private signing key.
+
+For planned rotation, add the next public key through review before changing
+the signing secrets. Keep previous public keys while their releases need
+recovery. Remove a compromised key from the trust file and review affected
+releases before recovery. Removing a key blocks future artifact builds for
+tags signed only by that key.
+
 The tag ruleset protects semver tags from update and deletion. Automated tag
 creation is performed by `GITHUB_TOKEN` in the release-tag workflow. For
 GitHub App-based release automation, restrict semver tag creation to the
@@ -168,20 +207,27 @@ The workflow in `.github/workflows/release.yml` runs on the internal
 repository_dispatch: release-artifacts
 ```
 
-The release-tag workflow emits that dispatch only after it has created or
-verified the signed tag and created or refreshed the matching draft GitHub
-Release. Existing signed tags are immutable and are never refreshed.
+The release-tag workflow emits that dispatch after it creates the tag or
+confirms an existing tag's target commit, then creates or refreshes the
+matching draft GitHub Release. The artifact workflow verifies the signature
+before building. Existing signed tags are immutable and are never refreshed.
 
-Manual artifact recovery is available through `workflow_dispatch` with a tag
-input, but the job waits for the protected `release-manual` environment before
-using release permissions. Configure that environment with required reviewers,
+Manual artifact recovery is available through `workflow_dispatch` on `main`
+with a tag input. The job waits for the protected `release-manual` environment
+before using release permissions. Configure that environment with required reviewers,
 protected branches only, and administrator bypass disabled.
 
 The workflow:
 
 - validates the dispatch source or protected manual approval;
-- checks out the tag;
-- requires an annotated tag with a PGP signature block;
+- loads verification tooling and trusted keys from the workflow's pinned
+  protected `main` commit;
+- requires a signed annotated tag with the requested name that points directly
+  to a commit in that protected history;
+- verifies the PGP signature against the reviewed public keys;
+- checks the tagged release manifest version and, for automatic dispatch,
+  the expected commit;
+- checks out the verified commit ID for the build;
 - runs release source gates: lint, vulnerability checks, license checks,
   filesystem scan, unit tests, race tests, and fuzz smoke tests;
 - requires the matching GitHub Release to already exist and be a draft;

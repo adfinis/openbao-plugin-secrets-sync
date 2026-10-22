@@ -174,12 +174,8 @@ validated:
 - default AWS endpoints remain preferred for production;
 - AWS private custom endpoints are rechecked at client creation time and every
   DNS answer must remain private;
-- GitLab `base_url` rejects localhost, private, link-local, multicast, and
-  unspecified hosts by default, and rechecks DNS answers at client creation
-  time unless `allow_private_network=true` is set;
-- Kubernetes token-auth `api_server` rejects localhost, private, link-local,
-  multicast, and unspecified hosts by default, and rechecks DNS answers at
-  client creation time unless `allow_private_api_server=true` is set;
+- GitLab `base_url` and Kubernetes token-auth `api_server` use the shared
+  endpoint address policy below;
 - optional explicit allowlists are still required for hardened private endpoint
   deployments;
 - AWS and GitLab provider-owned HTTP clients do not inherit ambient proxy
@@ -189,6 +185,42 @@ validated:
 Provider clients use context timeouts and bounded network behavior where the
 provider owns HTTP transport. AWS and GitLab providers use bounded default HTTP
 clients; GitLab provider requests also use bounded response-body reads.
+
+### GitLab and Kubernetes endpoint address policy
+
+Without `allow_private_network=true` for GitLab or
+`allow_private_api_server=true` for Kubernetes token auth, the provider rejects
+localhost, invalid addresses, loopback, private, link-local, multicast, and
+unspecified addresses. It also rejects special-purpose ranges that the
+[IANA IPv4 registry](https://www.iana.org/assignments/iana-ipv4-special-registry/)
+or [IANA IPv6 registry](https://www.iana.org/assignments/iana-ipv6-special-registry/)
+does not mark globally reachable. This includes shared address space
+(`100.64.0.0/10`), documentation, benchmarking, reserved, deprecated, and
+indeterminate-reachability ranges. The checked-in prefix policy was reviewed
+against the registries on 2026-10-22.
+
+More specific globally reachable assignments take precedence over their parent
+reservation. For example, `192.0.0.9` and `192.0.0.10` remain allowed within
+`192.0.0.0/24`. The policy also preserves the globally reachable assignments
+within `2001::/23`. Deprecated IPv4-compatible IPv6 (`::/96`) and site-local
+IPv6 (`fec0::/10`) require the private-network opt-in.
+
+IPv4-mapped IPv6 addresses use the IPv4 policy. The well-known NAT64 prefix
+`64:ff9b::/96` also uses the policy of its embedded IPv4 address, as required
+for non-global IPv4 destinations by
+[RFC 6052 section 3.1](https://www.rfc-editor.org/rfc/rfc6052#section-3.1).
+An IPv6 zone identifier does not exempt an address from classification.
+
+The provider checks IP literals during config validation and DNS answers at
+client creation. For every new connection, it checks the complete DNS answer
+before dialing an approved IP directly. A mixed public and restricted answer
+is rejected. The private-network opt-ins bypass these address restrictions;
+enable them only for an approved endpoint. Kubernetes in-cluster and kubeconfig
+auth do not use this token-auth policy.
+
+This classification does not prove Internet routability or inspect deployment
+routes, network-specific translation prefixes, or external gateways. Use
+network egress controls to enforce the deployment's destination boundaries.
 
 ## Ownership and collision controls
 

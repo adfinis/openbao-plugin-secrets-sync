@@ -25,20 +25,22 @@ jobs:
   manual-approval:
     name: Approve Manual Release Recovery
     runs-on: ubuntu-24.04
-    if: ${{ github.event_name == 'workflow_dispatch' }}
+    if: ${{ !github.event.repository.fork && github.ref == 'refs/heads/main' && github.event_name == 'workflow_dispatch' }}
     environment:
       name: release-manual
     permissions: {}
     steps:
       - name: Confirm protected manual release recovery
-        run: echo "Manual release recovery approved for ${{ inputs.tag }}"
+        env:
+          RELEASE_TAG: ${{ inputs.tag }}
+        run: printf 'Manual release recovery approved for %s\n' "${RELEASE_TAG}"
 
   artifacts:
     name: Build And Upload Plugin Artifacts
     runs-on: ubuntu-24.04
     needs:
       - manual-approval
-    if: ${{ always() && !cancelled() && !github.event.repository.fork && (github.event_name != 'workflow_dispatch' || needs.manual-approval.result == 'success') }}
+    if: ${{ always() && !cancelled() && !github.event.repository.fork && github.ref == 'refs/heads/main' && (github.event_name != 'workflow_dispatch' || needs.manual-approval.result == 'success') }}
     steps:
       - name: Resolve release ref
         id: release
@@ -84,41 +86,37 @@ jobs:
             echo "OCI image tags cannot contain '+', so release tags with semver build metadata are not supported." >&2
             exit 1
           fi
+          if [[ -n "${expected_commit}" ]] && ! [[ "${expected_commit}" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "dispatch commit must be a full commit ID" >&2
+            exit 1
+          fi
           {
             echo "version=${version}"
-            echo "ref=refs/tags/${version}"
             echo "expected_commit=${expected_commit}"
           } >> "${GITHUB_OUTPUT}"
 
-      - name: Checkout
+      - name: Checkout protected verification tooling
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ steps.release.outputs.ref }}
+          ref: ${{ github.sha }}
           fetch-depth: 0
 
       - name: Verify release tag
+        id: verify-tag
         env:
           VERSION: ${{ steps.release.outputs.version }}
           EXPECTED_COMMIT: ${{ steps.release.outputs.expected_commit }}
+          TRUSTED_COMMIT: ${{ github.sha }}
         run: |
           set -euo pipefail
-          git fetch --force --tags origin "refs/tags/${VERSION}:refs/tags/${VERSION}"
+          git fetch --force origin "refs/tags/${VERSION}:refs/tags/${VERSION}"
+          bash hack/ci/verify-release-tag.sh
 
-          if ! git rev-parse -q --verify "${VERSION}^{tag}" >/dev/null; then
-            echo "release tag ${VERSION} must be an annotated tag" >&2
-            exit 1
-          fi
-
-          if ! git cat-file tag "${VERSION}^{tag}" | grep -q "BEGIN PGP SIGNATURE"; then
-            echo "release tag ${VERSION} must include a PGP signature" >&2
-            exit 1
-          fi
-
-          tag_commit="$(git rev-list -n1 "${VERSION}")"
-          if [[ -n "${EXPECTED_COMMIT}" && "${tag_commit}" != "${EXPECTED_COMMIT}" ]]; then
-            echo "release tag ${VERSION} points at ${tag_commit}, expected ${EXPECTED_COMMIT}" >&2
-            exit 1
-          fi
+      - name: Checkout verified release commit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ steps.verify-tag.outputs.commit }}
+          fetch-depth: 0
 
       - name: Setup repo tools
         uses: ./.github/actions/setup-repo-tools

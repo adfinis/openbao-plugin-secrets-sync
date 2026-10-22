@@ -25,6 +25,11 @@ make ci-core
 `ci-core` runs tidy checks, lint, security checks, unit tests, race tests, fuzz
 smoke targets, a build, and release artifact generation.
 
+Required security targets fail if `govulncheck` or Trivy cannot run. A missing
+scanner does not count as a successful check. Run `make install-go-tools` to
+install the Go quality tools. Install Semgrep and Trivy separately at the
+versions pinned in `.ci/versions.yaml` before running `make ci-core`.
+
 Use `git diff --check` before committing documentation or generated text.
 
 ## Test lanes

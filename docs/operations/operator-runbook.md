@@ -218,8 +218,10 @@ bao write -force secret-sync/queue/<operation-id>/cancel
 ```
 
 Cancel discards pending, retry-wait, or terminal failed work; it is not retained
-in the queue summary. Terminal failures are otherwise retained for at most seven
-days, with the newest 1,000 records taking precedence when the limit is reached.
+in the queue summary. Periodic cleanup targets the newest 1,000 terminal records
+and removes records older than seven days. Each pass removes up to 100 excess
+records and 100 additional expired records. A backlog can exceed these retention
+targets until subsequent passes drain it. Cleanup also runs on disabled mounts.
 
 `queue/drain` can execute remote mutations. Keep it operator-scoped. Forwarding
 is limited to an HA standby within the active cluster; Secret Sync does not

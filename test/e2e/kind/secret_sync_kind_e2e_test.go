@@ -160,6 +160,25 @@ func TestOpenBaoPluginSyncsSourceKeyDataMapWithTokenAuth(t *testing.T) {
 	})
 
 	secret := getKubernetesSecret(t, ctx, kubeClient, namespace, remoteName)
+	secret.Data = nil
+	updateKubernetesSecret(t, ctx, kubeClient, namespace, secret)
+	secret = getKubernetesSecret(t, ctx, kubeClient, namespace, remoteName)
+	if len(secret.Data) != 0 {
+		t.Fatal("secret data must be cleared before resync")
+	}
+	write(t, baoClient, mountPath+"/associations/app/db/sync", map[string]interface{}{
+		"destination": "k8s/token-prod",
+	})
+	assertKubernetesDataMapSecret(t, ctx, kubeClient, namespace, remoteName, dataMapExpectation{
+		Managed: map[string]string{
+			"APP_username": "app",
+			"APP_password": "initial-secret",
+		},
+		SourceVersion: "1",
+	})
+	assertStatus(t, baoClient, "SYNCED")
+
+	secret = getKubernetesSecret(t, ctx, kubeClient, namespace, remoteName)
 	secret.Data["FOREIGN"] = []byte("preserved")
 	updateKubernetesSecret(t, ctx, kubeClient, namespace, secret)
 
