@@ -188,6 +188,41 @@ func TestValidateDestinationConfig(t *testing.T) {
 			},
 		},
 		{
+			name: "CGNAT https rejected without opt in",
+			config: map[string]string{
+				ConfigKeyBaseURL:   "https://100.64.0.1",
+				ConfigKeyProjectID: testProjectID,
+				ConfigKeyToken:     testToken,
+			},
+			errorClass: providers.ErrorClassValidation,
+		},
+		{
+			name: "CGNAT https with private network opt in",
+			config: map[string]string{
+				ConfigKeyBaseURL:             "https://100.64.0.1",
+				ConfigKeyProjectID:           testProjectID,
+				ConfigKeyToken:               testToken,
+				ConfigKeyAllowPrivateNetwork: testBoolTrue,
+			},
+		},
+		{
+			name: "IPv6 documentation rejected without opt in",
+			config: map[string]string{
+				ConfigKeyBaseURL:   "https://[2001:db8::1]",
+				ConfigKeyProjectID: testProjectID,
+				ConfigKeyToken:     testToken,
+			},
+			errorClass: providers.ErrorClassValidation,
+		},
+		{
+			name: "globally reachable IETF exception allowed",
+			config: map[string]string{
+				ConfigKeyBaseURL:   "https://192.0.0.9",
+				ConfigKeyProjectID: testProjectID,
+				ConfigKeyToken:     testToken,
+			},
+		},
+		{
 			name: "invalid private network opt in",
 			config: map[string]string{
 				ConfigKeyProjectID:           testProjectID,
@@ -317,7 +352,7 @@ func TestValidateBaseURLResolution(t *testing.T) {
 				ConfigKeyBaseURL: "https://gitlab.example.com",
 			},
 			resolve: func(context.Context, string, string) ([]netip.Addr, error) {
-				return []netip.Addr{netip.MustParseAddr("203.0.113.10")}, nil
+				return []netip.Addr{netip.MustParseAddr("8.8.8.8")}, nil
 			},
 		},
 		{
@@ -351,13 +386,27 @@ func TestValidateBaseURLResolution(t *testing.T) {
 			errorClass: providers.ErrorClassUnavailable,
 		},
 		{
+			name: "CGNAT DNS rejected",
+			resolve: func(context.Context, string, string) ([]netip.Addr, error) {
+				return []netip.Addr{netip.MustParseAddr("100.64.0.1")}, nil
+			},
+			errorClass: providers.ErrorClassValidation,
+		},
+		{
+			name: "mixed public IPv4 and restricted IPv6 rejected",
+			resolve: func(context.Context, string, string) ([]netip.Addr, error) {
+				return []netip.Addr{netip.MustParseAddr("8.8.8.8"), netip.MustParseAddr("2001:db8::1")}, nil
+			},
+			errorClass: providers.ErrorClassValidation,
+		},
+		{
 			name: "private opt in skips DNS guard",
 			overrides: map[string]string{
 				ConfigKeyBaseURL:             "https://gitlab.example.com",
 				ConfigKeyAllowPrivateNetwork: testBoolTrue,
 			},
 			resolve: func(context.Context, string, string) ([]netip.Addr, error) {
-				return []netip.Addr{netip.MustParseAddr("127.0.0.1")}, nil
+				return []netip.Addr{netip.MustParseAddr("100.64.0.1")}, nil
 			},
 		},
 	}
@@ -934,7 +983,7 @@ func TestDefaultClientFactoryUsesHardenedHTTPClient(t *testing.T) {
 		context.Background(),
 		defaultDestinationConfig(),
 		func(context.Context, string, string) ([]netip.Addr, error) {
-			return []netip.Addr{netip.MustParseAddr("203.0.113.10")}, nil
+			return []netip.Addr{netip.MustParseAddr("8.8.8.8")}, nil
 		},
 	)
 	if err != nil {
@@ -963,29 +1012,38 @@ func TestDefaultClientFactoryUsesHardenedHTTPClient(t *testing.T) {
 }
 
 func TestDefaultClientFactoryRejectsDNSRebindingAtDial(t *testing.T) {
-	resolverCalls := 0
-	client, err := defaultClientFactoryWithResolver(
-		context.Background(),
-		defaultDestinationConfig(),
-		func(context.Context, string, string) ([]netip.Addr, error) {
-			resolverCalls++
-			if resolverCalls == 1 {
-				return []netip.Addr{netip.MustParseAddr("203.0.113.10")}, nil
+	for _, reboundAddress := range []string{
+		"127.0.0.1", "100.64.0.1", "::ffff:100.64.0.1", "203.0.113.1",
+		"2001:db8::1", "2001:db8::1%test-zone", "64:ff9b::a00:1",
+	} {
+		t.Run(reboundAddress, func(t *testing.T) {
+			resolverCalls := 0
+			client, err := defaultClientFactoryWithResolver(
+				context.Background(),
+				defaultDestinationConfig(),
+				func(context.Context, string, string) ([]netip.Addr, error) {
+					resolverCalls++
+					if resolverCalls == 1 {
+						return []netip.Addr{netip.MustParseAddr("8.8.8.8")}, nil
+					}
+					return []netip.Addr{netip.MustParseAddr(reboundAddress)}, nil
+				},
+			)
+			if err != nil {
+				t.Fatalf("default client factory: %v", err)
 			}
-			return []netip.Addr{netip.MustParseAddr("127.0.0.1")}, nil
-		},
-	)
-	if err != nil {
-		t.Fatalf("default client factory: %v", err)
-	}
-	httpClient := client.(httpProjectVariableClient)
-	transport := httpClient.client.Transport.(*http.Transport)
-	_, err = transport.DialContext(context.Background(), "tcp", "gitlab.com:443")
-	if err == nil || !strings.Contains(err.Error(), "endpoint address is not allowed") {
-		t.Fatalf("dial error = %v, want disallowed rebound address", err)
-	}
-	if resolverCalls != 2 {
-		t.Fatalf("resolver calls = %d, want validation and dial lookups", resolverCalls)
+			httpClient := client.(httpProjectVariableClient)
+			transport := httpClient.client.Transport.(*http.Transport)
+			ctx, cancel := context.WithCancel(context.Background())
+			cancel() // A policy regression must not make a network connection.
+			_, err = transport.DialContext(ctx, "tcp", "gitlab.com:443")
+			if err == nil || !strings.Contains(err.Error(), "endpoint address is not allowed") {
+				t.Fatalf("dial error = %v, want disallowed rebound address", err)
+			}
+			if resolverCalls != 2 {
+				t.Fatalf("resolver calls = %d, want validation and dial lookups", resolverCalls)
+			}
+		})
 	}
 }
 

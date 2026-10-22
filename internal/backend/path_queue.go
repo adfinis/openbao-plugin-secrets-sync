@@ -12,6 +12,7 @@ import (
 const (
 	defaultDrainMaxOperations        = 100
 	defaultTerminalOutboxPruneLimit  = 100
+	defaultTerminalOutboxExcessLimit = 100
 	maxRetainedTerminalOutboxRecords = 1000
 	terminalOutboxRetention          = 7 * 24 * time.Hour
 	restoreGuardActiveError          = "restore guard is active; acknowledge " +

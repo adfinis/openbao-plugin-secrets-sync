@@ -307,29 +307,56 @@ func (b *secretSyncBackend) pruneTerminalOutboxRecords(
 	storage logical.Storage,
 	now time.Time,
 ) error {
-	b.enqueueMu.Lock()
-	defer b.enqueueMu.Unlock()
-	_, err := pruneTerminalOutboxRecordsLimit(
+	_, err := b.pruneTerminalOutboxRecordsLimit(
 		ctx,
 		storage,
 		now,
 		maxRetainedTerminalOutboxRecords,
 		defaultTerminalOutboxPruneLimit,
+		defaultTerminalOutboxExcessLimit,
 	)
 	return err
 }
 
-func pruneTerminalOutboxRecordsLimit(
+// pruneTerminalOutboxRecordsLimit discovers candidates without enqueueMu and
+// revalidates each candidate under the lock before deleting it. Positive limits
+// bound both deletion attempts and deletions, including when candidates change.
+func (b *secretSyncBackend) pruneTerminalOutboxRecordsLimit(
 	ctx context.Context,
 	storage logical.Storage,
 	now time.Time,
 	maxRecords int,
 	expiredLimit int,
+	excessLimit int,
 ) (int, error) {
 	records, err := terminalOutboxRecords(ctx, storage)
 	if err != nil {
 		return 0, err
 	}
+	candidates := terminalOutboxPruneCandidates(records, now, maxRecords, expiredLimit, excessLimit)
+	deleted := 0
+	for _, record := range candidates {
+		if err := ctx.Err(); err != nil {
+			return deleted, err
+		}
+		pruned, err := b.pruneTerminalOutboxRecord(ctx, storage, record)
+		if err != nil {
+			return deleted, err
+		}
+		if pruned {
+			deleted++
+		}
+	}
+	return deleted, nil
+}
+
+func terminalOutboxPruneCandidates(
+	records []outboxRecord,
+	now time.Time,
+	maxRecords int,
+	expiredLimit int,
+	excessLimit int,
+) []outboxRecord {
 	sort.Slice(records, func(i int, j int) bool {
 		left := terminalOutboxRetentionTime(records[i])
 		right := terminalOutboxRetentionTime(records[j])
@@ -340,27 +367,62 @@ func pruneTerminalOutboxRecordsLimit(
 	})
 	excess := max(len(records)-maxRecords, 0)
 	cutoff := now.Add(-terminalOutboxRetention)
-	deleted := 0
-	expiredDeleted := 0
+	capacity := len(records)
+	if expiredLimit > 0 && excessLimit > 0 {
+		capacity = min(capacity, expiredLimit+excessLimit)
+	}
+	candidates := make([]outboxRecord, 0, capacity)
+	expiredSelected := 0
+	excessSelected := 0
 	for index, record := range records {
 		retentionTime := terminalOutboxRetentionTime(record)
 		expired := !retentionTime.IsZero() && !retentionTime.After(cutoff)
-		if !shouldPruneTerminalOutboxRecord(index, excess, expired, expiredDeleted, expiredLimit) {
+		if !shouldPruneTerminalOutboxRecord(
+			index, excess, expired, expiredSelected, expiredLimit, excessSelected, excessLimit,
+		) {
 			continue
 		}
-		if err := deleteOutbox(ctx, storage, record); err != nil {
-			return deleted, err
-		}
-		deleted++
-		if expired && index >= excess {
-			expiredDeleted++
+		candidates = append(candidates, record)
+		if index < excess {
+			excessSelected++
+		} else if expired {
+			expiredSelected++
 		}
 	}
-	return deleted, nil
+	return candidates
+}
+
+func (b *secretSyncBackend) pruneTerminalOutboxRecord(
+	ctx context.Context,
+	storage logical.Storage,
+	expected outboxRecord,
+) (bool, error) {
+	b.enqueueMu.Lock()
+	defer b.enqueueMu.Unlock()
+
+	pruned := false
+	// Transactions protect against source mutations that use native storage
+	// transactions without enqueueMu. Other queue mutations use the same lock.
+	err := logical.WithTransaction(ctx, storage, func(tx logical.Storage) error {
+		current, err := getOutbox(ctx, tx, expected.ID)
+		if err != nil {
+			return err
+		}
+		if current == nil || *current != expected || current.State != outboxStateFailedTerminal ||
+			isOutboxClaimActive(*current, nowUTC()) {
+			return nil
+		}
+		if err := deleteOutbox(ctx, tx, *current); err != nil {
+			return err
+		}
+		pruned = true
+		return nil
+	})
+	return pruned && err == nil, err
 }
 
 func terminalOutboxRecords(ctx context.Context, storage logical.Storage) ([]outboxRecord, error) {
-	ids, err := listOutboxIDsForState(ctx, storage, outboxStateFailedTerminal)
+	ids, err := storage.List(ctx, outboxByStateStoragePrefix+outboxStateFailedTerminal+"/")
 	if err != nil {
 		return nil, err
 	}
@@ -381,16 +443,18 @@ func shouldPruneTerminalOutboxRecord(
 	index int,
 	excess int,
 	expired bool,
-	expiredDeleted int,
+	expiredSelected int,
 	expiredLimit int,
+	excessSelected int,
+	excessLimit int,
 ) bool {
 	if index < excess {
-		return true
+		return excessLimit <= 0 || excessSelected < excessLimit
 	}
 	if !expired {
 		return false
 	}
-	return expiredLimit <= 0 || expiredDeleted < expiredLimit
+	return expiredLimit <= 0 || expiredSelected < expiredLimit
 }
 
 func terminalOutboxRetentionTime(record outboxRecord) time.Time {

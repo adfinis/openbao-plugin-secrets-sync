@@ -16,11 +16,23 @@ canceled
 ```
 
 Only `pending` and `retry_wait` are dispatchable. Terminal failures remain
-visible for operator inspection and retry decisions. The backend retains at
-most the newest 1,000 terminal records and prunes terminal records older than
-seven days in bounded batches. Operators can explicitly cancel a terminal
-record to purge it sooner. Canceled operations are removed from durable queue
-storage after returning their final response snapshot.
+visible for operator inspection and retry decisions. Periodic cleanup targets
+the newest 1,000 terminal records and removes records older than seven days.
+Each pass selects at most 100 records above the count target and 100 additional
+expired records. A backlog can exceed either target until later passes drain it.
+Operators can cancel a terminal record to purge it sooner. Canceled operations
+are removed from durable queue storage after returning their final response
+snapshot.
+
+Cleanup lists and loads the terminal-state index and sorts canonical records
+without holding `enqueueMu`. This scan still grows with the terminal backlog.
+Only the selected candidates enter the deletion phase, so the number of locked
+storage operations does not grow with the backlog. Each candidate acquires the
+lock separately and must still match the discovered canonical record, remain
+terminal, and have no active claim before deletion. Changed or missing records
+are skipped until a later pass. When storage supports native transactions,
+revalidation and deletion of the canonical record and its indexes use one
+transaction per candidate. The lock is released between candidates.
 
 ## Enqueue Intent
 
@@ -109,11 +121,12 @@ The OpenBao periodic callback is the recovery path for queue progress. It:
 1. checks replication safety;
 2. ensures runtime state and schema compatibility;
 3. reads mount config;
-4. returns early when `disabled=true`;
-5. recovers incomplete enqueue intents;
-6. runs periodic drift work when configured;
-7. returns before dispatch when restore guard is active;
-8. processes due outbox operations when mutation gates allow it.
+4. prunes terminal records in bounded batches, including on disabled mounts;
+5. returns early when `disabled=true`;
+6. recovers incomplete enqueue intents;
+7. runs periodic drift work when configured;
+8. returns before dispatch when restore guard is active;
+9. processes due outbox operations when mutation gates allow it.
 
 This ordering intentionally allows restore-guarded mounts to detect drift while
 still blocking repair enqueue and remote mutation.
