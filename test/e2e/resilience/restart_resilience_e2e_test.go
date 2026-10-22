@@ -256,6 +256,7 @@ func waitForOpenBaoReady(t *testing.T, ctx context.Context, client *api.Client) 
 		if !status.Initialized || status.Sealed {
 			return fmt.Errorf("openbao not ready: initialized=%v sealed=%v", status.Initialized, status.Sealed)
 		}
+		t.Logf("OpenBao server version: %s", status.Version)
 		return nil
 	})
 }

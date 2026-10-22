@@ -43,6 +43,7 @@ func TestOpenBaoPluginSyncsToGitLabProjectVariables(t *testing.T) {
 	mountPlugin(t, baoClient)
 
 	gitLabClient := newGitLabClient(t)
+	logGitLabServerVersion(t, ctx, gitLabClient)
 	variableKey := fmt.Sprintf("OPENBAO_SECRET_SYNC_E2E_%d", time.Now().UnixNano())
 	t.Cleanup(func() {
 		_ = gitLabClient.deleteVariable(context.Background(), variableKey)
@@ -255,6 +256,7 @@ func waitForOpenBao(t *testing.T, ctx context.Context, client *api.Client) {
 		if !health.Initialized || health.Sealed {
 			return fmt.Errorf("openbao not ready: initialized=%v sealed=%v", health.Initialized, health.Sealed)
 		}
+		t.Logf("OpenBao server version: %s", health.Version)
 		return nil
 	})
 }
@@ -521,6 +523,34 @@ func newGitLabClient(t *testing.T) gitLabClient {
 		environmentScope: env("E2E_GITLAB_ENVIRONMENT_SCOPE", "production"),
 		httpClient:       &http.Client{Timeout: 10 * time.Second},
 	}
+}
+
+func logGitLabServerVersion(t *testing.T, ctx context.Context, client gitLabClient) {
+	t.Helper()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, client.baseURL+"/api/v4/metadata", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("PRIVATE-TOKEN", client.token)
+	resp, err := client.httpClient.Do(req) //nolint:gosec // Opt-in local Docker GitLab endpoint.
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("GitLab metadata status = %d", resp.StatusCode)
+	}
+	var metadata struct {
+		Version  string `json:"version"`
+		Revision string `json:"revision"`
+	}
+	if err := json.NewDecoder(io.LimitReader(resp.Body, 65536)).Decode(&metadata); err != nil {
+		t.Fatal(err)
+	}
+	if metadata.Version == "" || metadata.Revision == "" {
+		t.Fatal("GitLab metadata must include version and revision")
+	}
+	t.Logf("GitLab server version: %s, revision: %s", metadata.Version, metadata.Revision)
 }
 
 func (c gitLabClient) getVariable(ctx context.Context, key string) (*gitLabVariable, error) {

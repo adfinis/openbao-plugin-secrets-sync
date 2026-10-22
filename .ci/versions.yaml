@@ -9,6 +9,8 @@ toolchain:
   go: "1.26.10"
   taskRunner: make
   qualityTools:
+    actionlint: "1.7.11"
+    buildx: "0.31.1"
     gofumpt: "0.9.2"
     staticcheck: "0.7.0"
     govulncheck: "1.2.0"
@@ -19,23 +21,28 @@ toolchain:
     cosign: "3.0.4"
     pinStatus: pinned
   githubActions:
-    attestBuildProvenance: a2bbfa25375fe432b6a289bc6b6cd05ecd0c4c32
-    cache: cdf6c1fa76f9f475f3d7449005a359c84ca0f306
-    checkout: 9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
-    cosignInstaller: 6f9f17788090df1f26f669e9d70d6ae9567deba6
-    createGithubAppToken: bcd2ba49218906704ab6c1aa796996da409d3eb1
-    dependencyReview: 2031cfc080254a8a887f58cffee85186f0e49e48
-    dockerSetupBuildx: d7f5e7f509e45cec5c76c4d5afdd7de93d0b3df5
-    releasePlease: 45996ed1f6d02564a971a2fa1b5860e934307cf7
-    setupGo: 4b73464bb391d4059bd26b0524d20df3927bd417
-    setupTrivy: 81e514348e19b6112ce2a7e3ecbafe19c1e1f567
-    uploadArtifact: 043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+    actions/attest-build-provenance: 4d101475d8b20a2381f78447822ac1eab6504dd8
+    actions/cache: cdf6c1fa76f9f475f3d7449005a359c84ca0f306
+    actions/checkout: 3d3c42e5aac5ba805825da76410c181273ba90b1
+    actions/dependency-review-action: a1d282b36b6f3519aa1f3fc636f609c47dddb294
+    actions/setup-go: 4b73464bb391d4059bd26b0524d20df3927bd417
+    actions/upload-artifact: cf430e030ddbb5b0abf93d22962f4752f3646cd9
+    aquasecurity/setup-trivy: 81e514348e19b6112ce2a7e3ecbafe19c1e1f567
+    docker/setup-buildx-action: f87e5991a6d7451dcb8d9637bfbc97413f497069
+    googleapis/release-please-action: 45996ed1f6d02564a971a2fa1b5860e934307cf7
+    kineticcafe/actions-dco: 5f160e3ee086af8fc0fb567b8add0937d074123e
+    sigstore/cosign-installer: 6f9f17788090df1f26f669e9d70d6ae9567deba6
 
 validation:
   openbao:
-    primary: "2.6.0"
-    image: ghcr.io/openbao/openbao:2.6.0@sha256:900bb64d0671cd1d82b693c56206f7263b582445f3a3bb6ba6e5213f524a6653
-    imageDigest: sha256:900bb64d0671cd1d82b693c56206f7263b582445f3a3bb6ba6e5213f524a6653
+    primary: "2.6.4"
+    image: ghcr.io/openbao/openbao:2.6.4@sha256:cf2340fc9a22cb9358ca0defd1f39b65673836bd23fe2bb8984a07e11fe13ef4
+    imageDigest: sha256:cf2340fc9a22cb9358ca0defd1f39b65673836bd23fe2bb8984a07e11fe13ef4
+    digestStatus: pinned
+  gitlab:
+    primary: "19.5.1"
+    image: gitlab/gitlab-ce:19.5.1-ce.0@sha256:bb79dc86267c557fd11e7feb0cd9dd506dd02e991ecdd6cae11ca7d7e5d36fc3
+    imageDigest: sha256:bb79dc86267c557fd11e7feb0cd9dd506dd02e991ecdd6cae11ca7d7e5d36fc3
     digestStatus: pinned
   kubernetes:
     kind: "v0.31.0"

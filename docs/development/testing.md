@@ -32,6 +32,21 @@ versions pinned in `.ci/versions.yaml` before running `make ci-core`.
 
 Use `git diff --check` before committing documentation or generated text.
 
+## Version policy
+
+`make versions-check` compares `.ci/versions.yaml` with the Go version files,
+Make tool and image defaults, the Kind build image, Compose defaults, and
+GitHub Action pins. It discovers workflow and composite-action files under
+`.github` and Compose fixtures under `test/e2e`. An unlisted external action,
+a changed pin, or a mismatched default fails the check. Keep local actions
+under `.github/actions` so their external dependencies are checked too.
+
+OpenBao and GitLab defaults include image digests. Environment overrides remain
+available for upgrade tests. Record the resolved Compose images and the
+server versions reported by the e2e tests with the candidate commit. Passing
+`versions-check` proves configuration consistency; the matching e2e lanes
+provide runtime qualification.
+
 ## Test lanes
 
 | Lane | Commands | Evidence |

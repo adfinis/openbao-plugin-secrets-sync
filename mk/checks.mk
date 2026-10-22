@@ -105,6 +105,5 @@ fuzz: ## Run curated fuzz smoke targets.
 	done
 
 .PHONY: versions-check
-versions-check: ## Check central version policy exists and contains no floating latest.
-	@test -f .ci/versions.yaml
-	@! grep -R -n 'latest' .ci/versions.yaml
+versions-check: ## Check toolchain, workflow pins, and fixture defaults against version policy.
+	@"$(GO)" run ./hack/tools/version_policy

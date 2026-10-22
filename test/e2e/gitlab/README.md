@@ -9,10 +9,11 @@ inside GitLab, registers and mounts the plugin, then verifies create, update,
 delete, reconcile/read-state, ownership metadata, payload hash metadata, queue
 drain, and status transitions against the real GitLab API.
 
-The GitLab container is deliberately not part of default CI. It is large, slow
-to boot, and intended for local provider confidence checks.
+The GitLab fixture is opt-in for ordinary PRs and required for preview
+qualification. Record the candidate commit, resolved images, and server
+versions with the test results.
 
-The default GitLab image is pinned to `gitlab/gitlab-ce:19.2.0-ce.0` for
+The default GitLab image is pinned to `gitlab/gitlab-ce:19.5.1-ce.0` with a manifest digest for
 repeatability. Override `E2E_GITLAB_IMAGE` when testing GitLab upgrades.
 
 ## Run

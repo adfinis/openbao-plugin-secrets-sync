@@ -14,9 +14,10 @@ Secrets Manager secrets, Kubernetes Secrets, or GitLab project variables.
 This repository is in preview and is not production-ready. Use it for local
 evaluation, design feedback, provider development, and controlled testing.
 
-OpenBao `2.6.0` is the minimum supported server and the only version qualified
-for this preview release. OpenBao `2.5.x` is unsupported; later OpenBao releases
-remain unqualified until tested.
+The plugin requires the OpenBao `2.6.0` APIs. The preview qualification
+baseline is OpenBao `2.6.4` and GitLab CE `19.5.1`, as pinned in
+`.ci/versions.yaml`. OpenBao `2.5.x` is unsupported. Other server versions
+remain unqualified until their test lanes pass.
 
 Before a stable release, APIs, response fields, storage records, provider
 behavior, defaults, and operational guidance can change. Do not rely on preview
