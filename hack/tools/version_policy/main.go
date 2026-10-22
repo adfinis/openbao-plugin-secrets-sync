@@ -140,7 +140,7 @@ func checkDefaults(root string, p versionPolicy) error {
 	return errors.Join(problems...)
 }
 
-func checkCompose(root string, p versionPolicy) error {
+func findComposeFiles(root string) ([]string, error) {
 	var paths []string
 	err := filepath.WalkDir(filepath.Join(root, "test/e2e"), func(path string, entry os.DirEntry, err error) error {
 		if err != nil {
@@ -151,6 +151,11 @@ func checkCompose(root string, p versionPolicy) error {
 		}
 		return nil
 	})
+	return paths, err
+}
+
+func checkCompose(root string, p versionPolicy) error {
+	paths, err := findComposeFiles(root)
 	if err != nil {
 		return err
 	}

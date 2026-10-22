@@ -110,7 +110,8 @@ func TestVersionPolicyDiscoversNewCallSites(t *testing.T) {
 		},
 		{
 			"renamed GitLab service with digest", "test/e2e/new/compose.yaml",
-			"services:\n  gitlab-ce:\n    image: gitlab/gitlab-ce@sha256:" + strings.Repeat("0", 64) + "\n", "services.gitlab-ce",
+			"services:\n  gitlab-ce:\n    image: gitlab/gitlab-ce@sha256:" + strings.Repeat("0", 64) + "\n",
+			"services.gitlab-ce",
 		},
 		{
 			"Docker Hub GitLab reference", "test/e2e/new/compose.yaml",
