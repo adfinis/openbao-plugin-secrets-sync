@@ -923,28 +923,64 @@ func TestUpsertDataMapRecoversWhenOwnedSecretDataWasClearedOutOfBand(t *testing.
 		"username": []byte("old"),
 		"password": []byte("old-secret"),
 	})
-	// The secret is still owned (labels/annotations/managed-keys intact) but
-	// its Data was wiped out-of-band, e.g. `kubectl patch secret ... -p
-	// '{"data":{}}'`. This must not panic on the next sync.
-	secret := ownedDataMapSecret(initialPayload.SHA256, map[string][]byte{}, []string{"username", "password"})
-	client := fake.NewSimpleClientset(secret)
-
 	nextPayload := mustDataMapPayload(t, map[string][]byte{
 		"username": []byte("new"),
 	})
-	_, err := runtimeWithClient(t, client).Upsert(context.Background(), defaultDataMapUpsertRequest(nextPayload, 2))
-	if err != nil {
-		t.Fatalf("upsert: %v", err)
-	}
 
-	updated, err := client.CoreV1().Secrets(testNamespace).Get(context.Background(), testResolvedName, metav1.GetOptions{})
-	if err != nil {
-		t.Fatalf("get secret: %v", err)
+	for _, test := range []struct {
+		name string
+		data map[string][]byte
+	}{
+		{name: "nil"},
+		{name: "empty", data: map[string][]byte{}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			for _, requestCase := range []struct {
+				name    string
+				request providers.UpsertRequest
+			}{
+				{name: "unchanged-payload", request: defaultDataMapUpsertRequest(initialPayload, 1)},
+				{name: "rotated-payload", request: defaultDataMapUpsertRequest(nextPayload, 2)},
+			} {
+				t.Run(requestCase.name, func(t *testing.T) {
+					// Clear Data while preserving ownership and managed-key metadata,
+					// as with kubectl patch secret ... --type=merge -p '{"data":null}'.
+					secret := ownedDataMapSecret(initialPayload.SHA256, initialPayload.Data, dataMapKeys(initialPayload.Data))
+					secret.Data = test.data
+					client := fake.NewSimpleClientset(secret)
+					request := requestCase.request
+					_, err := runtimeWithClient(t, client).Upsert(context.Background(), request)
+					if err != nil {
+						t.Fatalf("upsert: %v", err)
+					}
+
+					updated, err := client.CoreV1().Secrets(testNamespace).Get(
+						context.Background(),
+						testResolvedName,
+						metav1.GetOptions{},
+					)
+					if err != nil {
+						t.Fatalf("get secret: %v", err)
+					}
+					if len(updated.Data) != len(request.DataMap) {
+						t.Fatalf("data key count = %d, want %d", len(updated.Data), len(request.DataMap))
+					}
+					for key, want := range request.DataMap {
+						if got := string(updated.Data[key]); got != string(want) {
+							t.Fatalf("data key %s = %q, want %q", key, got, want)
+						}
+					}
+					if !ownedByRequest(updated, request.OwnershipIdentity()) {
+						t.Fatal("restored secret must retain ownership metadata")
+					}
+					assertAnnotation(t, updated, annotationSourceVersion, strconv.Itoa(request.SourceVersion))
+					assertAnnotation(t, updated, annotationPayloadSHA256, request.PayloadSHA256)
+					assertAnnotation(t, updated, annotationFormat, request.Format)
+					assertDataKeysAnnotation(t, updated, dataMapKeys(request.DataMap))
+				})
+			}
+		})
 	}
-	if got := string(updated.Data["username"]); got != "new" {
-		t.Fatalf("username = %q, want new", got)
-	}
-	assertDataKeysAnnotation(t, updated, []string{"username"})
 }
 
 func TestUpsertDataMapRefreshesMetadataForMatchingPayload(t *testing.T) {
