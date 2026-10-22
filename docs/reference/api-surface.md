@@ -129,6 +129,14 @@ with active destinations and returns `sync_operation_ids` plus `sync_state`.
 Queue admission failure rolls the enablement state back. Source checks report
 `source_sync_enabled` and block with `source_sync_not_enabled` only when source
 sync is required and missing.
+
+When enabled associations with active destinations exist but source sync is not
+enabled in hardened posture, a source write still stores the new version. Its
+`metadata` returns `sync_state=VALIDATION_ERROR`, no `sync_operation_ids`, and a
+`hint` with an `enable_source` action in `next_actions`. Enabling source sync enqueues the
+current version. `NO_ASSOCIATION` remains the write result when no enabled
+association with an active destination targets the source.
+
 Source paths cannot end with reserved association route segments such as
 `plan`, `disable`, `enable`, or `sync`.
 

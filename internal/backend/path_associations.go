@@ -263,8 +263,9 @@ func associationRequestFields() map[string]*framework.FieldSchema {
 				"Requires {{ key }} and defaults to {{ key }} when source-key data mapping is enabled.",
 		},
 		"delete_mode": {
-			Type:        framework.TypeString,
-			Description: "Remote delete behavior for this association: retain, delete, or orphan.",
+			Type: framework.TypeString,
+			Description: "Remote delete behavior: retain (default), delete, or orphan (alias of retain). " +
+				"Retain and orphan preserve remote ownership metadata.",
 		},
 		awssecretsmanager.ConfigKeyDeleteRecoveryWindowDays: {
 			Type: framework.TypeInt,

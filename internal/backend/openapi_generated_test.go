@@ -25,6 +25,7 @@ var apiGoldenOperations = map[string]apiGoldenOperation{
 	"config.read.initial":       {path: configPath, operation: logical.ReadOperation},
 	"config.update":             {path: configPath, operation: logical.UpdateOperation},
 	"data.read.latest":          {path: "data/app/db", operation: logical.ReadOperation},
+	"data.write.blocked":        {path: "data/app/db", operation: logical.UpdateOperation},
 	"data.write.initial":        {path: "data/app/db", operation: logical.UpdateOperation},
 	"destinations.check":        {path: "destinations/fake/default/check", operation: logical.ReadOperation},
 	"destinations.health":       {path: "destinations/fake/default/health", operation: logical.ReadOperation},

@@ -130,7 +130,7 @@ func validationDiagnostic(mount, sourcePath, destinationRef, message string) dia
 	case strings.Contains(normalized, "source path is not eligible") ||
 		strings.Contains(normalized, "source sync must be enabled"):
 		return diagnostic{
-			Hint: "Source sync must be enabled before this association can sync in hardened posture.",
+			Hint: "Source sync must be enabled before this source can sync in hardened posture.",
 			NextActions: []diagnosticAction{
 				enableSourceAction(mount, sourcePath),
 			},
@@ -386,6 +386,7 @@ func enableSourceAction(mount, sourcePath string) diagnosticAction {
 		Operation: "write",
 		Path:      fmt.Sprintf("sources/%s/enable", sourcePath),
 		Mount:     mount,
+		Force:     true,
 	}
 }
 

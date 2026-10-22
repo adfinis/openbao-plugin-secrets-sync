@@ -124,6 +124,27 @@
       }
     }
   },
+  "data.write.blocked": {
+    "data": {
+      "metadata": {
+        "created_time": "<timestamp>",
+        "hint": "Source version was stored, but sync work was not enqueued. Source sync must be enabled before this source can sync in hardened posture.",
+        "next_actions": [
+          {
+            "action": "enable_source",
+            "command": "bao write -force <mount>/sources/app/db/enable",
+            "force": true,
+            "mutates_remote": false,
+            "operation": "write",
+            "path": "sources/app/db/enable"
+          }
+        ],
+        "sync_operation_ids": [],
+        "sync_state": "VALIDATION_ERROR",
+        "version": 2
+      }
+    }
+  },
   "data.write.initial": {
     "data": {
       "metadata": {

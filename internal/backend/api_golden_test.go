@@ -86,6 +86,12 @@ func TestAPIGoldenResponses(t *testing.T) {
 	capture.response(t, "status.read.synced", env.read("status/app/db"))
 	capture.response(t, "reconcile.plan.synced", env.read("reconcile/app/db/plan"))
 	capture.response(t, "reconcile.apply.synced", env.update("reconcile/app/db"))
+	if resp := env.update(configPath, map[string]interface{}{
+		"security_posture": securityPostureHardened,
+	}); resp != nil && resp.IsError() {
+		t.Fatalf("configure hardened posture: %v", resp.Error())
+	}
+	capture.response(t, "data.write.blocked", env.writeAppDBSecret("rotated"))
 
 	assertAPIGolden(t, capture.responses)
 }

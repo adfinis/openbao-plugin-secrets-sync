@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/adfinis/openbao-plugin-secrets-sync/internal/domain"
 	"github.com/adfinis/openbao-plugin-secrets-sync/internal/outbox"
 	"github.com/openbao/openbao/sdk/v2/framework"
 	"github.com/openbao/openbao/sdk/v2/logical"
@@ -112,13 +113,21 @@ func (b *secretSyncBackend) pathDataWrite(
 		b.signalEventDispatch()
 	}
 
+	state := syncStateForOperationIDs(plan.operationIDs)
+	fields := []responseEntry{
+		responseField("version", plan.nextVersion),
+		responseField("created_time", plan.now),
+		responseField("sync_operation_ids", plan.operationIDs),
+	}
+	if plan.syncEligibilityError != nil {
+		state = domain.SyncStateValidationError
+		diagnostic := validationDiagnostic(requestMountPath(req), path, "", plan.syncEligibilityError.Error())
+		diagnostic.Hint = "Source version was stored, but sync work was not enqueued. " + diagnostic.Hint
+		fields = append(fields, diagnosticResponseFields(diagnostic)...)
+	}
+	fields = append(fields, responseField("sync_state", string(state)))
 	return &logical.Response{Data: newResponseData(
-		responseField("metadata", newResponseData(
-			responseField("version", plan.nextVersion),
-			responseField("created_time", plan.now),
-			responseField("sync_operation_ids", plan.operationIDs),
-			responseField("sync_state", string(syncStateForOperationIDs(plan.operationIDs))),
-		)),
+		responseField("metadata", newResponseData(fields...)),
 	)}, nil
 }
 
@@ -130,6 +139,7 @@ type dataWritePlan struct {
 	associationReservationUpdates []associationRecord
 	operations                    []outboxRecord
 	operationIDs                  []string
+	syncEligibilityError          error
 }
 
 func dataWritePlanFromRequest(
@@ -163,7 +173,11 @@ func dataWritePlanFromRequest(
 	if err != nil {
 		return dataWritePlan{}, nil, err
 	}
+	var syncEligibilityError error
 	if err := validateSourceEligibility(metadata, cfg); err != nil {
+		if len(associations) > 0 {
+			syncEligibilityError = err
+		}
 		associations = nil
 	}
 
@@ -201,6 +215,7 @@ func dataWritePlanFromRequest(
 		associationReservationUpdates: associationReservationUpdates,
 		operations:                    operations,
 		operationIDs:                  operationIDs,
+		syncEligibilityError:          syncEligibilityError,
 	}, nil, nil
 }
 

@@ -103,7 +103,7 @@ Common states:
 | `DESTINATION_POLICY_ERROR` | Provider authorization or destination policy blocked the operation. | Fix IAM/RBAC/token scope or destination prefixes. |
 | `DESTINATION_RATE_LIMITED` | Provider rate limit blocked the operation. | Let retry progress or reduce drain pressure. |
 | `DESTINATION_UNAVAILABLE` | Provider endpoint or dependency was unavailable. | Wait for recovery, then retry if needed. |
-| `VALIDATION_ERROR` | Local association, destination, payload, or provider rule is invalid. | Fix the invalid field and plan again. |
+| `VALIDATION_ERROR` | A local readiness or validation rule blocks sync, such as missing source enablement in hardened posture. | Follow `next_actions`, fix the reported condition, then plan or sync again. |
 | `QUEUE_BLOCKED` | Queue capacity, restore guard, disabled state, or replication safety blocked work. | Follow `next_actions`. |
 | `DISABLED` | Association or destination is disabled. | Enable intentionally before syncing. |
 | `UNKNOWN` | Provider could not provide enough comparable state. | Inspect provider docs and reconcile output. |

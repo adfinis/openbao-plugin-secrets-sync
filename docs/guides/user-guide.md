@@ -161,6 +161,10 @@ bao delete secret-sync/data/app/db
 Use `delete_mode=retain` when remote secrets must remain after local source
 deletion. This is the default.
 
+The accepted value `delete_mode=orphan` is an alias of `retain`. Both modes
+preserve remote values and ownership metadata. Neither mode detaches ownership
+or transfers the remote object to another association.
+
 ## Common association commands
 
 Read associations for a source path:
