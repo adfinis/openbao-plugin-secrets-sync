@@ -319,6 +319,12 @@ publishing:
 5. Review the curated and generated release notes, and confirm preview releases
    are marked as prereleases.
 
+After the first OCI upload, check the package visibility. GHCR creates new
+packages as private by default. A package administrator must change visibility
+to Public before anonymous consumer tests can pass. Public visibility cannot
+be reverted. Verify anonymous download before publishing the GitHub Release.
+See [GitHub package visibility](https://docs.github.com/en/packages/learn-github-packages/configuring-a-packages-access-control-and-visibility).
+
 Publish only after the draft is complete. For the first preview:
 
 ```sh

@@ -57,8 +57,8 @@ Provider behavior differs:
   `value_drift_detection=true` on the destination to detect manual value edits
   that leave tags unchanged.
 - Kubernetes Secrets use value verification by reading Secret data.
-- GitLab project variables use value verification through GitLab variable
-  readback.
+- GitLab project variables use value verification when the API returns a value.
+  Hidden variables with unavailable values use metadata verification.
 
 If verification is `metadata`, a manual value-only change can be invisible when
 the provider metadata still matches.
