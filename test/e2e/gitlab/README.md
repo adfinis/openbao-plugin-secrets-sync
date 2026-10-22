@@ -13,8 +13,44 @@ The GitLab fixture is opt-in for ordinary PRs and required for preview
 qualification. Record the candidate commit, resolved images, and server
 versions with the test results.
 
-The default GitLab image is pinned to `gitlab/gitlab-ce:19.5.1-ce.0` with a manifest digest for
-repeatability. Override `E2E_GITLAB_IMAGE` when testing GitLab upgrades.
+The default GitLab image is pinned to `gitlab/gitlab-ce:19.5.1-ce.0` with a
+manifest digest for repeatability. Override `E2E_GITLAB_IMAGE` when testing
+GitLab upgrades.
+
+## Qualification coverage
+
+The Make target runs these sequential subtests. Each scenario mounts a fresh
+plugin and cleans up its test variables. Do not run the scenarios in parallel
+because they share one OpenBao mount.
+
+| Scenario | Required observations |
+| --- | --- |
+| Basic lifecycle | Create, source rotation, owned delete, protected and masked attributes, drift repair, metadata, reservations, status, and queue drain pass. |
+| File variables | Multiline values and `variable_raw=false` survive create and rotation; owned delete removes the variable. |
+| Hidden variables | Fixture-side hashes verify create and rotation. Stable plans use no-op and reconcile reports metadata verification. External value changes that preserve metadata remain undetected. Owned delete removes the variable. |
+| Visible-to-hidden change | Plan reports validation failure, queued upsert fails, and all remote fields remain unchanged. |
+| Independent scopes | Two associations manage the same key in different scopes. Updating or deleting one leaves the other unchanged. |
+| Same-source scopes | One source and destination use two scoped associations. Scoped updates preserve the other variable, unscoped lifecycle selection fails as ambiguous, and removal by association ID retains the other association and both remote variables. Later source changes affect only the remaining association. |
+| Ownership loss and foreign collision | Plan reports a collision. Upsert and delete fail with ownership errors and preserve the foreign value, description, and attributes. |
+| Retain and orphan | Source deletion queues no remote operation. The variable and ownership description remain unchanged. |
+| Credential refresh | Invalid replacement credentials block sync. Restoring valid credentials and manually syncing repairs the current source version. |
+
+The tests verify variable attributes through the
+[GitLab project variables API](https://docs.gitlab.com/api/project_level_variables/).
+Hidden values are unavailable through that API. The hidden scenario uses the
+local fixture administrator to compare stored value hashes through Rails. Only
+boolean results leave GitLab; this fixture check does not add administrator
+access or independent hidden-value readback to the plugin. It requires one
+running GitLab Compose service whose working-directory label matches this test
+directory.
+
+They do not start CI jobs or qualify runner-side masking, variable expansion,
+or file delivery. GitLab permits hidden variables only when creating them;
+see [Hide a CI/CD variable](https://docs.gitlab.com/ci/variables/#hide-a-cicd-variable).
+
+Compiling the tests does not qualify a provider version. Retain a successful
+real API run with its candidate commit and server versions before recording
+preview qualification.
 
 ## Run
 

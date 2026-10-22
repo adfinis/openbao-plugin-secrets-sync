@@ -33,7 +33,7 @@ const (
 	gitLabMetadataDescriptionPrefix = "OpenBao sync: "
 )
 
-func TestOpenBaoPluginSyncsToGitLabProjectVariables(t *testing.T) {
+func testGitLabBasicLifecycle(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
 	defer cancel()
 
@@ -49,7 +49,6 @@ func TestOpenBaoPluginSyncsToGitLabProjectVariables(t *testing.T) {
 		_ = gitLabClient.deleteVariable(context.Background(), variableKey)
 	})
 	for _, helperKey := range []string{"E2E_REFRESH_AX", "E2E_REFRESH_BX"} {
-		helperKey := helperKey
 		t.Cleanup(func() {
 			_ = gitLabClient.deleteVariable(context.Background(), helperKey)
 		})
@@ -158,7 +157,8 @@ func assertSecretKeyRenderedNameReservations(t *testing.T, client *api.Client) {
 	t.Helper()
 	writeSourceSyncEnabledAt(t, client, "reservation/left", "A", "left")
 	writeSourceSyncEnabledAt(t, client, "reservation/right", "A", "right")
-	write(t, client, mountPath+"/associations/reservation/left", reservationAssociationRequest("E2E_COLLISION_A{{ key }}", false))
+	write(t, client, mountPath+"/associations/reservation/left",
+		reservationAssociationRequest("E2E_COLLISION_A{{ key }}", false))
 	writeExpectError(
 		t,
 		client,
@@ -225,9 +225,9 @@ func enableSourceSyncAt(t *testing.T, client *api.Client, path string) {
 	write(t, client, mountPath+"/sources/"+path+"/enable", map[string]interface{}{})
 }
 
-func writeSourceAt(t *testing.T, client *api.Client, path string, key string, value string) {
+func writeSourceAt(t *testing.T, client *api.Client, path string, key string, value string) *api.Secret {
 	t.Helper()
-	write(t, client, mountPath+"/data/"+path, map[string]interface{}{
+	return write(t, client, mountPath+"/data/"+path, map[string]interface{}{
 		"data": map[string]interface{}{
 			key: value,
 		},
@@ -268,7 +268,7 @@ func registerPlugin(t *testing.T, client *api.Client) {
 	if err != nil {
 		t.Fatalf("resolve plugin path: %v", err)
 	}
-	pluginBytes, err := os.ReadFile(absPluginPath)
+	pluginBytes, err := os.ReadFile(absPluginPath) // #nosec G304 -- the operator selects the local e2e plugin binary.
 	if err != nil {
 		t.Fatalf("read plugin binary %s: %v", absPluginPath, err)
 	}
@@ -498,9 +498,11 @@ type gitLabVariable struct {
 	EnvironmentScope string `json:"environment_scope"`
 	Protected        bool   `json:"protected"`
 	Masked           bool   `json:"masked"`
+	Hidden           bool   `json:"hidden"`
 	VariableRaw      bool   `json:"raw"`
 	VariableType     string `json:"variable_type"`
 	Description      string `json:"description"`
+	valueUnavailable bool
 }
 
 type variableMetadata struct {
@@ -571,12 +573,19 @@ func (c gitLabClient) getVariable(ctx context.Context, key string) (*gitLabVaria
 		return nil, nil
 	}
 	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
-		body, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("gitlab get variable status %d: %s", resp.StatusCode, string(body))
+		return nil, fmt.Errorf("gitlab get variable status %d", resp.StatusCode)
 	}
-	var variable gitLabVariable
-	if err := json.NewDecoder(resp.Body).Decode(&variable); err != nil {
+	var wire struct {
+		gitLabVariable
+		Value *string `json:"value"`
+	}
+	if err := json.NewDecoder(io.LimitReader(resp.Body, 65536)).Decode(&wire); err != nil {
 		return nil, err
+	}
+	variable := wire.gitLabVariable
+	variable.valueUnavailable = wire.Value == nil
+	if wire.Value != nil {
+		variable.Value = *wire.Value
 	}
 	return &variable, nil
 }
@@ -612,24 +621,7 @@ func (c gitLabClient) updateVariableValue(ctx context.Context, key string, value
 	form.Set("raw", "true")
 	form.Set("variable_type", gitlab.VariableTypeEnvVar)
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodPut, c.variableURL(key), strings.NewReader(form.Encode()))
-	if err != nil {
-		return err
-	}
-	req.Header.Set("PRIVATE-TOKEN", c.token)
-	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	resp, err := c.httpClient.Do(req) //nolint:gosec // Opt-in e2e endpoint is local Docker/loopback GitLab.
-	if err != nil {
-		return err
-	}
-	defer func() {
-		_ = resp.Body.Close()
-	}()
-	_, _ = io.Copy(io.Discard, resp.Body)
-	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
-		return fmt.Errorf("gitlab update variable status %d", resp.StatusCode)
-	}
-	return nil
+	return c.sendVariableForm(ctx, http.MethodPut, c.variableURL(key), form)
 }
 
 func (c gitLabClient) variableURL(key string) string {
@@ -653,6 +645,19 @@ func assertGitLabVariable(
 	expectedVersion string,
 ) {
 	t.Helper()
+	assertGitLabVariableAt(t, ctx, client, "app/db", key, expectedValue, expectedVersion)
+}
+
+func assertGitLabVariableAt(
+	t *testing.T,
+	ctx context.Context,
+	client gitLabClient,
+	sourcePath string,
+	key string,
+	expectedValue string,
+	expectedVersion string,
+) {
+	t.Helper()
 	waitFor(t, ctx, func() error {
 		variable, err := client.getVariable(ctx, key)
 		if err != nil {
@@ -661,8 +666,8 @@ func assertGitLabVariable(
 		if variable == nil {
 			return fmt.Errorf("gitlab variable %s missing", key)
 		}
-		if variable.Value != expectedValue {
-			return fmt.Errorf("gitlab variable value = %q, want %q", variable.Value, expectedValue)
+		if (!variable.Hidden || !variable.valueUnavailable) && variable.Value != expectedValue {
+			return errors.New("gitlab variable value differs from the expected payload")
 		}
 		if variable.EnvironmentScope != client.environmentScope {
 			return fmt.Errorf("environment scope = %q, want %q", variable.EnvironmentScope, client.environmentScope)
@@ -674,7 +679,9 @@ func assertGitLabVariable(
 		if err := assertMetadataIdentity(metadata.ObjectID, metadata.ObjectIDHash, key, "object id"); err != nil {
 			return err
 		}
-		if err := assertMetadataIdentity(metadata.SourcePath, metadata.SourcePathHash, "app/db", "source path"); err != nil {
+		if err := assertMetadataIdentity(
+			metadata.SourcePath, metadata.SourcePathHash, sourcePath, "source path",
+		); err != nil {
 			return err
 		}
 		if metadata.PayloadFormat != "raw" {
@@ -959,11 +966,11 @@ func stringSlice(t *testing.T, raw interface{}) []string {
 		}
 		return out
 	}
-	strings, ok := raw.([]string)
+	slice, ok := raw.([]string)
 	if !ok {
 		t.Fatalf("value = %T, want string slice", raw)
 	}
-	return strings
+	return slice
 }
 
 func intFromSecret(t *testing.T, raw interface{}) int {
