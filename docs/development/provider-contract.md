@@ -465,6 +465,12 @@ Supported auth modes:
 - kubeconfig;
 - bearer token with API server and CA config.
 
+Token-auth API servers use the shared
+[endpoint address policy](../security/security-model.md#gitlab-and-kubernetes-endpoint-address-policy).
+IP literals, client-creation DNS answers, and every connection use the same
+classification. Restricted addresses require `allow_private_api_server=true`.
+In-cluster and kubeconfig auth do not use this policy.
+
 Supported association shapes:
 
 - `granularity=secret-path` with `format=json`;
@@ -505,8 +511,9 @@ destination config. `environment_scope`, `protected`, `masked`, `hidden`,
 are mutable desired state and an enabled association update enqueues the current
 source version.
 
-GitLab base URLs reject localhost, private, link-local, multicast, unspecified,
-and DNS-resolved private or local targets by default. Approved self-managed
-private endpoints require `allow_private_network=true`. Non-local `http://`
-GitLab base URLs also require `allow_insecure_http=true`, which is intended
-for local Docker or private test networks rather than production destinations.
+GitLab base URLs use the shared
+[endpoint address policy](../security/security-model.md#gitlab-and-kubernetes-endpoint-address-policy)
+for IP literals, client-creation DNS answers, and every connection. Restricted
+addresses require `allow_private_network=true`. Non-local `http://` GitLab base
+URLs also require `allow_insecure_http=true`, which is intended for local Docker
+or private test networks rather than production destinations.

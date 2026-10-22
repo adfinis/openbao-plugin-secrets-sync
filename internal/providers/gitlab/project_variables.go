@@ -47,7 +47,7 @@ const (
 	ConfigKeyVariableType = "variable_type"
 	// ConfigKeyAllowInsecureHTTP allows non-local http GitLab URLs for local test networks.
 	ConfigKeyAllowInsecureHTTP = "allow_insecure_http"
-	// ConfigKeyAllowPrivateNetwork allows GitLab base URLs on local or private networks.
+	// ConfigKeyAllowPrivateNetwork allows GitLab endpoints in restricted address ranges.
 	ConfigKeyAllowPrivateNetwork = "allow_private_network"
 	// ConfigKeyToken configures the GitLab API token.
 	ConfigKeyToken = "token"
@@ -549,8 +549,7 @@ func validateBaseURL(rawBaseURL string, allowInsecureHTTP bool, allowPrivateNetw
 	}
 	if !allowPrivateNetwork && endpointguard.IsRestrictedHost(host) {
 		return providerHelpers.ValidationError(
-			"gitlab base_url requires allow_private_network=true for localhost, private, link-local, " +
-				"multicast, or unspecified hosts",
+			"gitlab base_url requires allow_private_network=true for localhost or restricted network addresses",
 		)
 	}
 	switch parsed.Scheme {
@@ -603,7 +602,7 @@ func validateBaseURLResolution(
 	for _, addr := range addrs {
 		if endpointguard.IsRestrictedAddr(addr) {
 			return providerHelpers.ValidationError(
-				"gitlab base_url DNS must not resolve to localhost, private, link-local, multicast, or unspecified addresses",
+				"gitlab base_url DNS resolves to a restricted network address; requires allow_private_network=true",
 			)
 		}
 	}

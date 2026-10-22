@@ -131,11 +131,70 @@ func IsRestrictedHost(host string) bool {
 	return ok && IsRestrictedAddr(addr)
 }
 
+// specialPurposePrefixes supplements IsGlobalUnicast and IsPrivate with the
+// IANA IPv4 and IPv6 special-purpose registries, reviewed on 2026-10-22:
+// https://www.iana.org/assignments/iana-ipv4-special-registry/
+// https://www.iana.org/assignments/iana-ipv6-special-registry/
+// Entries without Globally Reachable=True are restricted. More specific
+// globally reachable assignments override their parent reservation.
+// Deprecated IPv4-compatible and site-local IPv6 addresses are also restricted
+// (RFC 4291 section 2.5.5.1 and RFC 3879).
+var specialPurposePrefixes = []struct {
+	prefix     netip.Prefix
+	restricted bool
+}{
+	{netip.MustParsePrefix("0.0.0.0/8"), true},        // This network.
+	{netip.MustParsePrefix("100.64.0.0/10"), true},    // Shared address space.
+	{netip.MustParsePrefix("192.0.0.0/24"), true},     // IETF protocol assignments.
+	{netip.MustParsePrefix("192.0.0.9/32"), false},    // PCP anycast.
+	{netip.MustParsePrefix("192.0.0.10/32"), false},   // TURN anycast.
+	{netip.MustParsePrefix("192.0.2.0/24"), true},     // Documentation.
+	{netip.MustParsePrefix("192.88.99.0/24"), true},   // Deprecated 6to4 relay.
+	{netip.MustParsePrefix("198.18.0.0/15"), true},    // Benchmarking.
+	{netip.MustParsePrefix("198.51.100.0/24"), true},  // Documentation.
+	{netip.MustParsePrefix("203.0.113.0/24"), true},   // Documentation.
+	{netip.MustParsePrefix("240.0.0.0/4"), true},      // Reserved, including broadcast.
+	{netip.MustParsePrefix("::/96"), true},            // Deprecated IPv4-compatible addresses.
+	{netip.MustParsePrefix("64:ff9b:1::/48"), true},   // Local-use IPv4/IPv6 translation.
+	{netip.MustParsePrefix("100::/64"), true},         // Discard-only.
+	{netip.MustParsePrefix("100:0:0:1::/64"), true},   // Dummy IPv6 prefix.
+	{netip.MustParsePrefix("2001::/23"), true},        // IETF assignments, including Teredo (N/A).
+	{netip.MustParsePrefix("2001:1::1/128"), false},   // PCP anycast.
+	{netip.MustParsePrefix("2001:1::2/128"), false},   // TURN anycast.
+	{netip.MustParsePrefix("2001:1::3/128"), false},   // DNS-SD service registration anycast.
+	{netip.MustParsePrefix("2001:3::/32"), false},     // AMT.
+	{netip.MustParsePrefix("2001:4:112::/48"), false}, // AS112-v6.
+	{netip.MustParsePrefix("2001:20::/28"), false},    // ORCHIDv2.
+	{netip.MustParsePrefix("2001:30::/28"), false},    // Drone remote ID tags.
+	{netip.MustParsePrefix("2001:db8::/32"), true},    // Documentation.
+	{netip.MustParsePrefix("2002::/16"), true},        // 6to4 (N/A).
+	{netip.MustParsePrefix("3fff::/20"), true},        // Documentation.
+	{netip.MustParsePrefix("5f00::/16"), true},        // Segment routing SIDs.
+	{netip.MustParsePrefix("fec0::/10"), true},        // Deprecated site-local addresses.
+}
+
+var wellKnownNAT64Prefix = netip.MustParsePrefix("64:ff9b::/96")
+
+// IsRestrictedAddr applies the default GitLab and token-auth Kubernetes address
+// policy. It classifies addresses, not the deployment's routes or translators.
 func IsRestrictedAddr(addr netip.Addr) bool {
-	addr = addr.Unmap()
-	return addr.IsLoopback() ||
-		addr.IsPrivate() ||
-		addr.IsLinkLocalUnicast() ||
-		addr.IsMulticast() ||
-		addr.IsUnspecified()
+	// Prefix.Contains rejects zoned addresses, so remove the zone for
+	// classification. GuardedDialContext retains it when dialing the address.
+	addr = addr.Unmap().WithZone("")
+	if !addr.IsGlobalUnicast() || addr.IsPrivate() {
+		return true
+	}
+	if wellKnownNAT64Prefix.Contains(addr) {
+		// RFC 6052 section 3.1 forbids non-global IPv4 destinations in this
+		// prefix. Apply the same policy to its embedded IPv4 address.
+		raw := addr.As16()
+		return IsRestrictedAddr(netip.AddrFrom4([4]byte{raw[12], raw[13], raw[14], raw[15]}))
+	}
+	restricted, longestMatch := false, -1
+	for _, rule := range specialPurposePrefixes {
+		if rule.prefix.Bits() > longestMatch && rule.prefix.Contains(addr) {
+			restricted, longestMatch = rule.restricted, rule.prefix.Bits()
+		}
+	}
+	return restricted
 }
