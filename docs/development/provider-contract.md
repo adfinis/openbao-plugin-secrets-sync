@@ -501,8 +501,18 @@ Supported association shapes:
 
 The provider writes project CI/CD variables, stores ownership metadata in the
 variable description, validates variable attributes and masked payloads,
-repairs value and attribute drift, supports owned update, owned delete, value
-readback, read-state, health checks, and HTTP error classification.
+repairs readable value and attribute drift, and supports owned update, owned
+delete, conditional value readback, read-state, health checks, and HTTP error
+classification.
+
+When an actual hidden variable has a missing or null API value, read-state
+reports `verification=metadata` and returns the owned payload-hash metadata.
+Plan and upsert can use that metadata for stable no-op decisions. This does not
+independently verify the payload or detect external value changes that preserve
+metadata. A present value, including an empty string, retains independent value
+comparison. Missing or null values on owned visible variables fail as
+unavailable. Read-state retains confirmed ownership loss for foreign objects
+whose values are unavailable.
 
 GitLab connection, project, credential, and endpoint policy fields are
 destination config. `environment_scope`, `protected`, `masked`, `hidden`,

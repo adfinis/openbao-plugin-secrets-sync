@@ -26,10 +26,23 @@ mount fields are `mount` and `mount_hash`; compact descriptions use `m` and
 If ownership cannot be proven, the provider returns an ownership error instead
 of mutating the variable.
 
-Plan, upsert no-op detection, and reconcile compare the GitLab API value
-readback with the desired payload hash. Manual value edits are detected even
-when the variable description still contains the previous payload hash, and the
-next manual sync or background `drift_repair=repair` pass repairs owned drift.
+When the GitLab API returns a variable value, plan, upsert no-op detection, and
+reconcile compare it with the desired payload. Manual value edits are detected
+even when the description still contains the previous payload hash. The next
+manual sync or background `drift_repair=repair` pass repairs owned value drift.
+
+GitLab returns `value=null` for hidden variables. When a hidden value is
+unavailable, the provider uses ownership and payload-hash metadata for
+convergence and reports `verification=metadata` during reconcile. A present
+empty value remains independently readable; it is not treated as an unavailable
+value. An unavailable value on an owned visible variable reports an availability
+error. A confirmed foreign object retains its ownership-loss result.
+
+Metadata verification does not independently prove the hidden value. External
+value changes that preserve the description cannot be detected or repaired by
+reconcile. To replace such a hidden value, write a new source version. Source
+rotation and owned delete still require matching ownership and source-version
+guards. Visible variables retain independent value verification.
 
 Connection and credential settings belong to the GitLab destination. Variable
 attributes belong to each association. Plan an attribute change when desired,

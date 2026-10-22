@@ -205,8 +205,12 @@ func (r destinationRuntime) Plan(ctx context.Context, req providers.PlanRequest)
 	if err := validateMaskedPayloadForPlan(options.association, req); err != nil {
 		return blockedValidationPlan(err.Error()), nil
 	}
+	payloadHash, _, err := variableReadback(variable, metadata)
+	if err != nil {
+		return providerHelpers.BlockedPlan(providers.ErrorClassUnavailable), nil
+	}
 	if metadata.PayloadSHA256 == req.PayloadSHA256 &&
-		variablePayloadSHA256(variable) == req.PayloadSHA256 &&
+		payloadHash == req.PayloadSHA256 &&
 		variableMatchesAssociationOptions(variable, options.association) &&
 		variable.Description == variableDescriptionFromPlan(req) {
 		return &providers.PlanResult{Action: providers.PlanActionNoop}, nil
@@ -215,11 +219,8 @@ func (r destinationRuntime) Plan(ctx context.Context, req providers.PlanRequest)
 }
 
 func (r destinationRuntime) Upsert(ctx context.Context, req providers.UpsertRequest) (*providers.SyncResult, error) {
-	if err := validateVariableKey(req.ResolvedName); err != nil {
+	if err := validateUpsertRequest(req); err != nil {
 		return nil, err
-	}
-	if len(req.Payload) > variableValueMaxBytes {
-		return nil, providerHelpers.ProviderError(providers.ErrorClassCapacity)
 	}
 	options, err := r.variableOptions(req.Association)
 	if err != nil {
@@ -253,6 +254,9 @@ func (r destinationRuntime) Upsert(ctx context.Context, req providers.UpsertRequ
 	if err := validateMaskedPayloadForUpsert(options.association, req); err != nil {
 		return nil, err
 	}
+	if _, _, err := variableReadback(variable, metadata); err != nil {
+		return nil, err
+	}
 	if metadata.PayloadSHA256 == req.PayloadSHA256 && variableMatchesInput(variable, input) {
 		return &providers.SyncResult{RemoteVersion: remoteVersion(variable)}, nil
 	}
@@ -261,6 +265,16 @@ func (r destinationRuntime) Upsert(ctx context.Context, req providers.UpsertRequ
 		return nil, providerHelpers.ProviderError(classifyGitLabError(err))
 	}
 	return &providers.SyncResult{RemoteVersion: remoteVersion(updated)}, nil
+}
+
+func validateUpsertRequest(req providers.UpsertRequest) error {
+	if err := validateVariableKey(req.ResolvedName); err != nil {
+		return err
+	}
+	if len(req.Payload) > variableValueMaxBytes {
+		return providerHelpers.ProviderError(providers.ErrorClassCapacity)
+	}
+	return nil
 }
 
 func (r destinationRuntime) Delete(ctx context.Context, req providers.DeleteRequest) (*providers.SyncResult, error) {
@@ -310,14 +324,22 @@ func (r destinationRuntime) ReadState(
 		return nil, providerHelpers.ProviderError(classifyGitLabError(err))
 	}
 	metadata, owned := ownershipMetadata(variable)
+	owned = ownedByRequest(metadata, owned, req.OwnershipIdentity())
+	payloadHash, verification, err := variableReadback(variable, metadata)
+	if err != nil {
+		if owned {
+			return nil, err
+		}
+		verification = providers.RemoteStateVerificationMetadata
+	}
 	return &providers.RemoteState{
 		Exists:         true,
 		OwnershipKnown: true,
-		Owned:          ownedByRequest(metadata, owned, req.OwnershipIdentity()),
-		PayloadSHA256:  variablePayloadSHA256(variable),
+		Owned:          owned,
+		PayloadSHA256:  payloadHash,
 		SourceVersion:  metadata.SourceVersion,
 		RemoteVersion:  remoteVersion(variable),
-		Verification:   providers.RemoteStateVerificationValue,
+		Verification:   verification,
 	}, nil
 }
 
@@ -697,7 +719,9 @@ func variableMatchesAssociationOptions(variable *gitlabVariable, options gitlabA
 }
 
 func variableMatchesInput(variable *gitlabVariable, input gitlabVariableInput) bool {
-	return variable.Value == input.Value &&
+	// The caller checks owned payload-hash metadata. Hidden null values cannot be compared independently.
+	payloadMatches := variable.Value == input.Value || (variable.Hidden && variable.valueUnavailable)
+	return payloadMatches &&
 		variable.Protected == input.Protected &&
 		variable.Masked == input.Masked &&
 		variable.VariableRaw == input.VariableRaw &&
@@ -1163,6 +1187,16 @@ func variablePayloadSHA256(variable *gitlabVariable) string {
 	return payloadSHA256([]byte(variable.Value))
 }
 
+func variableReadback(variable *gitlabVariable, metadata variableMetadata) (string, string, error) {
+	if variable.valueUnavailable {
+		if !variable.Hidden {
+			return "", "", providerHelpers.ProviderError(providers.ErrorClassUnavailable)
+		}
+		return metadata.PayloadSHA256, providers.RemoteStateVerificationMetadata, nil
+	}
+	return variablePayloadSHA256(variable), providers.RemoteStateVerificationValue, nil
+}
+
 func payloadSHA256(payload []byte) string {
 	sum := sha256.Sum256(payload)
 	return "sha256:" + hex.EncodeToString(sum[:])
@@ -1186,6 +1220,24 @@ type gitlabVariable struct {
 	VariableRaw      bool   `json:"raw"`
 	VariableType     string `json:"variable_type"`
 	Description      string `json:"description"`
+	valueUnavailable bool
+}
+
+func (variable *gitlabVariable) UnmarshalJSON(data []byte) error {
+	type plainVariable gitlabVariable
+	var decoded struct {
+		plainVariable
+		Value *string `json:"value"`
+	}
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		return err
+	}
+	*variable = gitlabVariable(decoded.plainVariable)
+	variable.valueUnavailable = decoded.Value == nil
+	if decoded.Value != nil {
+		variable.Value = *decoded.Value
+	}
+	return nil
 }
 
 type gitlabVariableInput struct {

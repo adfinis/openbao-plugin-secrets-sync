@@ -1463,6 +1463,7 @@ func (c *memoryProjectVariableClient) UpdateVariable(
 	existing := c.variables[storageKey]
 	variable := variableFromInput(input)
 	variable.Hidden = existing.Hidden
+	variable.valueUnavailable = existing.valueUnavailable
 	c.variables[storageKey] = variable
 	copy := *variable
 	return &copy, nil

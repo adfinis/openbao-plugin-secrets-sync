@@ -44,7 +44,7 @@ state does not match OpenBao desired state. Use the
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | AWS Secrets Manager | AWS SDK default chain; STS assume role; STS web identity | Yes | No | No | Yes | No | Yes | Opt-in | Yes | AWS tags | LocalStack | Manual AWS |
 | Kubernetes Secrets | In-cluster; kubeconfig; bearer token | Yes | No | No | Yes | Yes | Yes | Yes | Yes | Labels and annotations | kind | No |
-| GitLab project variables | GitLab API token | Yes | Yes | Yes | Yes | No | Yes | Yes | Yes | Human-readable variable description | Dockerized GitLab CE | No |
+| GitLab project variables | GitLab API token | Yes | Yes | Yes | Yes | No | Yes | [Conditional](gitlab-project-variables/operations.md#ownership-and-delete-behavior) | Yes | Human-readable variable description | Dockerized GitLab CE | No |
 
 ## Provider documents
 
