@@ -97,6 +97,34 @@ func TestVersionPolicyDiscoversNewCallSites(t *testing.T) {
 			"services:\n  openbao-new:\n    image: wrong-image\n", "services.openbao-new",
 		},
 		{
+			"nested fixture", "test/e2e/new/scenario/compose.yaml",
+			"services:\n  openbao:\n    image: ghcr.io/openbao/openbao:0.0.0\n", "services.openbao",
+		},
+		{
+			"renamed OpenBao service with tag", "test/e2e/new/compose.yaml",
+			"services:\n  bao:\n    image: ghcr.io/openbao/openbao:0.0.0\n", "services.bao",
+		},
+		{
+			"renamed OpenBao service with digest", "test/e2e/new/compose.yaml",
+			"services:\n  bao:\n    image: ghcr.io/openbao/openbao@sha256:" + strings.Repeat("0", 64) + "\n", "services.bao",
+		},
+		{
+			"renamed GitLab service with digest", "test/e2e/new/compose.yaml",
+			"services:\n  gitlab-ce:\n    image: gitlab/gitlab-ce@sha256:" + strings.Repeat("0", 64) + "\n", "services.gitlab-ce",
+		},
+		{
+			"Docker Hub GitLab reference", "test/e2e/new/compose.yaml",
+			"services:\n  gitlab-ce:\n    image: docker.io/gitlab/gitlab-ce:0.0.0-ce.0\n", "services.gitlab-ce",
+		},
+		{
+			"unqualified default image", "test/e2e/new/compose.yaml",
+			"services:\n  bao:\n    image: ghcr.io/openbao/openbao\n", "services.bao",
+		},
+		{
+			"renamed service with mismatched fallback", "test/e2e/new/compose.yaml",
+			"services:\n  bao:\n    image: ${E2E_OPENBAO_IMAGE:-ghcr.io/openbao/openbao:0.0.0}\n", "services.bao",
+		},
+		{
 			"aliased unreviewed action", ".github/workflows/new.yml",
 			"env:\n  ACTION: &action " + unknown + "\n" + workflowProbe("*action"), "policy pin",
 		},
@@ -116,6 +144,30 @@ func TestVersionPolicyDiscoversNewCallSites(t *testing.T) {
 		{
 			"new matching fixture", "test/e2e/new/compose.yaml",
 			"services:\n  openbao-new:\n    image: ${E2E_OPENBAO_IMAGE:-" + p.Validation.OpenBao.Image + "}\n", "",
+		},
+		{
+			"nested matching fixture", "test/e2e/new/scenario/compose.yml",
+			"services:\n  openbao-new:\n    image: ${E2E_OPENBAO_IMAGE:-" + p.Validation.OpenBao.Image + "}\n", "",
+		},
+		{
+			"renamed matching OpenBao service", "test/e2e/new/compose.yaml",
+			"services:\n  bao:\n    image: ${E2E_OPENBAO_IMAGE:-" + p.Validation.OpenBao.Image + "}\n", "",
+		},
+		{
+			"renamed matching GitLab service", "test/e2e/new/compose.yaml",
+			"services:\n  gitlab-ce:\n    image: ${E2E_GITLAB_IMAGE:-" + p.Validation.GitLab.Image + "}\n", "",
+		},
+		{
+			"different registry", "test/e2e/new/compose.yaml",
+			"services:\n  bao:\n    image: registry.example.test/openbao/openbao:0.0.0\n", "",
+		},
+		{
+			"different OpenBao repository", "test/e2e/new/compose.yaml",
+			"services:\n  helper:\n    image: ghcr.io/openbao/openbao-tools:0.0.0\n", "",
+		},
+		{
+			"different GitLab repository", "test/e2e/new/compose.yaml",
+			"services:\n  helper:\n    image: gitlab/gitlab-ce-tools:0.0.0\n", "",
 		},
 	}
 	for _, tt := range tests {

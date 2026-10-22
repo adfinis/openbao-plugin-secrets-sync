@@ -141,7 +141,16 @@ func checkDefaults(root string, p versionPolicy) error {
 }
 
 func checkCompose(root string, p versionPolicy) error {
-	paths, err := filepath.Glob(filepath.Join(root, "test/e2e/*/compose.y*ml"))
+	var paths []string
+	err := filepath.WalkDir(filepath.Join(root, "test/e2e"), func(path string, entry os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if !entry.IsDir() && (entry.Name() == "compose.yaml" || entry.Name() == "compose.yml") {
+			paths = append(paths, path)
+		}
+		return nil
+	})
 	if err != nil {
 		return err
 	}
@@ -163,11 +172,13 @@ func checkCompose(root string, p versionPolicy) error {
 		for name, service := range compose.Services {
 			expected := ""
 			switch {
-			case name == "gitlab" || strings.Contains(service.Image, "gitlab/gitlab-ce:"):
+			case name == "gitlab" || referencesImage(service.Image,
+				"gitlab/gitlab-ce", "docker.io/gitlab/gitlab-ce", "index.docker.io/gitlab/gitlab-ce"):
 				expected = "${E2E_GITLAB_IMAGE:-" + p.Validation.GitLab.Image + "}"
 				gitlabCount++
 			case strings.HasPrefix(name, "openbao") || name == "plugin-dir" ||
-				strings.Contains(service.Image, "openbao/openbao:"):
+				referencesImage(service.Image, "ghcr.io/openbao/openbao", "openbao/openbao",
+					"docker.io/openbao/openbao", "index.docker.io/openbao/openbao"):
 				expected = "${E2E_OPENBAO_IMAGE:-" + p.Validation.OpenBao.Image + "}"
 				baoCount++
 			default:
@@ -182,6 +193,26 @@ func checkCompose(root string, p versionPolicy) error {
 		problems = append(problems, errors.New("version policy requires OpenBao and GitLab Compose fixtures"))
 	}
 	return errors.Join(problems...)
+}
+
+func referencesImage(image string, repositories ...string) bool {
+	if strings.HasPrefix(image, "${") && strings.HasSuffix(image, "}") {
+		expansion := strings.TrimSuffix(strings.TrimPrefix(image, "${"), "}")
+		_, fallback, ok := strings.Cut(expansion, ":-")
+		if !ok {
+			_, fallback, ok = strings.Cut(expansion, "-")
+		}
+		if !ok {
+			return false
+		}
+		image = fallback
+	}
+	for _, repository := range repositories {
+		if image == repository || strings.HasPrefix(image, repository+":") || strings.HasPrefix(image, repository+"@") {
+			return true
+		}
+	}
+	return false
 }
 
 func checkWorkflows(root string, p versionPolicy) error {

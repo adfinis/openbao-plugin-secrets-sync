@@ -7,11 +7,12 @@ release automation.
 
 ## Compatibility
 
-OpenBao `2.6.0` is the minimum supported server and the only version qualified
-for this preview release. OpenBao `2.5.x` is unsupported; later OpenBao releases
-remain unqualified until tested. Preview releases do not establish API, storage,
-provider-metadata, upgrade, downgrade, or migration compatibility across
-versions.
+The plugin requires the OpenBao `2.6.0` APIs. The preview qualification
+baseline is OpenBao `2.6.4` and GitLab CE `19.5.1`, as pinned in
+`.ci/versions.yaml`. OpenBao `2.5.x` is unsupported. Other server versions
+remain unqualified until their test lanes pass. Preview releases do not
+establish API, storage, provider-metadata, upgrade, downgrade, or migration
+compatibility across versions.
 
 ## Artifact set
 
