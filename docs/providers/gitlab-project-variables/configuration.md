@@ -24,10 +24,12 @@ bao write secret-sync/destinations/gitlab/prod \
 `base_url` must include a host and must not include userinfo, query strings, or
 fragments. A path prefix is allowed and is kept before `/api/v4`.
 
-GitLab base URLs that target localhost, private addresses, link-local
-addresses, multicast, unspecified addresses, or DNS names that resolve to those
-ranges are rejected by default. Set `allow_private_network=true` only for an
-approved self-managed GitLab endpoint on a private or local network.
+GitLab base URLs reject localhost and
+[restricted address ranges](../../security/security-model.md#gitlab-and-kubernetes-endpoint-address-policy)
+by default, for both IP literals and DNS answers. These include private,
+shared, link-local, documentation, benchmarking, and reserved ranges in IPv4
+and IPv6. Set `allow_private_network=true` only for an approved self-managed
+GitLab endpoint that requires these ranges.
 
 Non-local `http://` GitLab URLs are rejected by default. For a non-local Docker
 or private test network that intentionally uses HTTP, set both

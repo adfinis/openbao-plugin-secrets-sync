@@ -44,7 +44,7 @@ const (
 	ConfigKeyKubeContext = "context"
 	// ConfigKeyAPIServer configures the Kubernetes API server for token auth.
 	ConfigKeyAPIServer = "api_server"
-	// ConfigKeyAllowPrivateAPIServer allows token auth api_server on local or private networks.
+	// ConfigKeyAllowPrivateAPIServer allows token-auth endpoints in restricted address ranges.
 	ConfigKeyAllowPrivateAPIServer = "allow_private_api_server"
 	// ConfigKeyToken configures the Kubernetes bearer token for token auth.
 	ConfigKeyToken = "token"
@@ -571,8 +571,7 @@ func validateAPIServer(apiServer string, allowPrivateAPI bool) error {
 	}
 	if !allowPrivateAPI && endpointguard.IsRestrictedHost(host) {
 		return providerHelpers.ValidationError(
-			"k8s api_server requires allow_private_api_server=true for localhost, private, link-local, " +
-				"multicast, or unspecified hosts",
+			"k8s api_server requires allow_private_api_server=true for localhost or restricted network addresses",
 		)
 	}
 	return nil
@@ -613,7 +612,7 @@ func validateAPIServerResolution(
 	for _, addr := range addrs {
 		if endpointguard.IsRestrictedAddr(addr) {
 			return providerHelpers.ValidationError(
-				"k8s api_server DNS must not resolve to localhost, private, link-local, multicast, or unspecified addresses",
+				"k8s api_server DNS resolves to a restricted network address; requires allow_private_api_server=true",
 			)
 		}
 	}

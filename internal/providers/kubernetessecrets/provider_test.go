@@ -263,6 +263,45 @@ func TestValidateDestinationConfig(t *testing.T) {
 			},
 		},
 		{
+			name: "token CGNAT api server rejected without opt in",
+			config: map[string]string{
+				ConfigKeyNamespace: testNamespace,
+				ConfigKeyAuthMode:  AuthModeToken,
+				ConfigKeyAPIServer: "https://100.64.0.1",
+				ConfigKeyToken:     "bearer-token",
+			},
+			errorClass: providers.ErrorClassValidation,
+		},
+		{
+			name: "token CGNAT api server with explicit opt in",
+			config: map[string]string{
+				ConfigKeyNamespace:             testNamespace,
+				ConfigKeyAuthMode:              AuthModeToken,
+				ConfigKeyAPIServer:             "https://100.64.0.1",
+				ConfigKeyAllowPrivateAPIServer: "true",
+				ConfigKeyToken:                 "bearer-token",
+			},
+		},
+		{
+			name: "token IPv6 documentation rejected without opt in",
+			config: map[string]string{
+				ConfigKeyNamespace: testNamespace,
+				ConfigKeyAuthMode:  AuthModeToken,
+				ConfigKeyAPIServer: "https://[2001:db8::1]",
+				ConfigKeyToken:     "bearer-token",
+			},
+			errorClass: providers.ErrorClassValidation,
+		},
+		{
+			name: "token globally reachable IETF exception allowed",
+			config: map[string]string{
+				ConfigKeyNamespace: testNamespace,
+				ConfigKeyAuthMode:  AuthModeToken,
+				ConfigKeyAPIServer: "https://192.0.0.9",
+				ConfigKeyToken:     "bearer-token",
+			},
+		},
+		{
 			name: "in cluster rejects private api server opt in",
 			config: map[string]string{
 				ConfigKeyNamespace:             testNamespace,
@@ -407,7 +446,7 @@ func TestValidateAPIServerResolution(t *testing.T) {
 		{
 			name: "public DNS allowed",
 			resolve: func(context.Context, string, string) ([]netip.Addr, error) {
-				return []netip.Addr{netip.MustParseAddr("203.0.113.10")}, nil
+				return []netip.Addr{netip.MustParseAddr("8.8.8.8")}, nil
 			},
 		},
 		{
@@ -432,12 +471,26 @@ func TestValidateAPIServerResolution(t *testing.T) {
 			errorClass: providers.ErrorClassUnavailable,
 		},
 		{
+			name: "CGNAT DNS rejected",
+			resolve: func(context.Context, string, string) ([]netip.Addr, error) {
+				return []netip.Addr{netip.MustParseAddr("100.64.0.1")}, nil
+			},
+			errorClass: providers.ErrorClassValidation,
+		},
+		{
+			name: "mixed public IPv4 and restricted IPv6 rejected",
+			resolve: func(context.Context, string, string) ([]netip.Addr, error) {
+				return []netip.Addr{netip.MustParseAddr("8.8.8.8"), netip.MustParseAddr("2001:db8::1")}, nil
+			},
+			errorClass: providers.ErrorClassValidation,
+		},
+		{
 			name: "private opt in skips DNS guard",
 			overrides: map[string]string{
 				ConfigKeyAllowPrivateAPIServer: "true",
 			},
 			resolve: func(context.Context, string, string) ([]netip.Addr, error) {
-				return []netip.Addr{netip.MustParseAddr("127.0.0.1")}, nil
+				return []netip.Addr{netip.MustParseAddr("100.64.0.1")}, nil
 			},
 		},
 	}
@@ -517,29 +570,38 @@ func TestTokenRESTConfig(t *testing.T) {
 }
 
 func TestTokenRESTConfigRejectsDNSRebindingAtDial(t *testing.T) {
-	resolverCalls := 0
-	resolver := func(context.Context, string, string) ([]netip.Addr, error) {
-		resolverCalls++
-		if resolverCalls == 1 {
-			return []netip.Addr{netip.MustParseAddr("203.0.113.10")}, nil
-		}
-		return []netip.Addr{netip.MustParseAddr("127.0.0.1")}, nil
-	}
-	options := kubernetesDestinationOptions{
-		authMode:  AuthModeToken,
-		apiServer: "https://kubernetes.example.com",
-	}
-	if err := validateAPIServerResolution(context.Background(), options, resolver); err != nil {
-		t.Fatalf("validate api server resolution: %v", err)
-	}
-	restConfig := restConfigForToken(options)
-	hardenRESTConfig(restConfig, options, resolver)
-	_, err := restConfig.Dial(context.Background(), "tcp", "kubernetes.example.com:443")
-	if err == nil || !strings.Contains(err.Error(), "endpoint address is not allowed") {
-		t.Fatalf("dial error = %v, want disallowed rebound address", err)
-	}
-	if resolverCalls != 2 {
-		t.Fatalf("resolver calls = %d, want validation and dial lookups", resolverCalls)
+	for _, reboundAddress := range []string{
+		"127.0.0.1", "100.64.0.1", "::ffff:100.64.0.1", "203.0.113.1",
+		"2001:db8::1", "2001:db8::1%test-zone", "64:ff9b::a00:1",
+	} {
+		t.Run(reboundAddress, func(t *testing.T) {
+			resolverCalls := 0
+			resolver := func(context.Context, string, string) ([]netip.Addr, error) {
+				resolverCalls++
+				if resolverCalls == 1 {
+					return []netip.Addr{netip.MustParseAddr("8.8.8.8")}, nil
+				}
+				return []netip.Addr{netip.MustParseAddr(reboundAddress)}, nil
+			}
+			options := kubernetesDestinationOptions{
+				authMode:  AuthModeToken,
+				apiServer: "https://kubernetes.example.com",
+			}
+			if err := validateAPIServerResolution(context.Background(), options, resolver); err != nil {
+				t.Fatalf("validate api server resolution: %v", err)
+			}
+			restConfig := restConfigForToken(options)
+			hardenRESTConfig(restConfig, options, resolver)
+			ctx, cancel := context.WithCancel(context.Background())
+			cancel() // A policy regression must not make a network connection.
+			_, err := restConfig.Dial(ctx, "tcp", "kubernetes.example.com:443")
+			if err == nil || !strings.Contains(err.Error(), "endpoint address is not allowed") {
+				t.Fatalf("dial error = %v, want disallowed rebound address", err)
+			}
+			if resolverCalls != 2 {
+				t.Fatalf("resolver calls = %d, want validation and dial lookups", resolverCalls)
+			}
+		})
 	}
 }
 
