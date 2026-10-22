@@ -1,0 +1,46 @@
+name: Export Release Public Key
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  export:
+    name: Export Public Signing Key
+    if: ${{ !github.event.repository.fork && github.ref == 'refs/heads/main' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    environment:
+      name: release-manual
+    steps:
+      - name: Checkout protected tooling
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Export public key
+        env:
+          OPENBAO_SECRET_SYNC_RELEASE_TAG_GPG_PRIVATE_KEY: ${{ secrets.OPENBAO_SECRET_SYNC_RELEASE_TAG_GPG_PRIVATE_KEY }}
+          PUBLIC_KEY_DIR: ${{ runner.temp }}/release-public-key
+        run: bash hack/ci/export-release-public-key.sh
+
+      - name: Upload public key and fingerprint
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: release-public-key
+          path: ${{ runner.temp }}/release-public-key/
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Record public fingerprint
+        env:
+          PUBLIC_KEY_DIR: ${{ runner.temp }}/release-public-key
+        run: |
+          {
+            echo 'Public release-signing key fingerprint:'
+            cat "${PUBLIC_KEY_DIR}/fingerprint.txt"
+            echo 'Review the public key artifact before adding it to the trust file.'
+          } >> "${GITHUB_STEP_SUMMARY}"
