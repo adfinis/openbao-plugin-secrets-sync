@@ -6,10 +6,11 @@ destinations.
 
 Secret Sync does not detect snapshot restore or cloning automatically. Config,
 queue records, and the restore epoch are stored in the restored timeline.
-A snapshot can contain `restore_guard=false` and `disabled=false`. Setting
-either field before taking or restoring a different snapshot does not fence
-the restored process. A restored or cloned mount can start dispatching as soon
-as it initializes and can retain ownership identity that matches live objects.
+A snapshot can contain `restore_guard=false` and `disabled=false`. Changing
+these fields in the current timeline does not change their values in an
+earlier or different snapshot. A restored or cloned mount can start dispatching
+as soon as it initializes and can retain ownership identity that matches live
+objects.
 
 **Prevent the affected instances from mutating real destinations before they
 start or receive restored storage.** Use an external network or provider
@@ -44,6 +45,9 @@ an upstream dependency.
    the snapshot timeline and scope it to the affected instances.
 3. Verify the control from the affected execution environment. A configuration
    record in OpenBao is not evidence that destination access is blocked.
+   Before an in-place restore, quiesce local writes and account for provider
+   requests already in progress. Pause and guard settings do not cancel
+   accepted provider requests or undo completed remote mutations.
 4. Start or restore the fenced environment. Arm and pause each Secret Sync
    mount before granting provider access:
 
@@ -94,9 +98,10 @@ Verify `restore_guard=true` and `disabled=true` after arming the mount. Keep the
 guard active until the local source versions, associations, queued work, and
 remote ownership state are understood.
 
-Do not acknowledge the guard as a first step. Setting `disabled=true` prevents
-background provider reads as well as dispatch. Manual reconcile can still read
-provider state when external authorization permits it.
+Do not acknowledge the guard as a first step. Setting `disabled=true` gates
+new background work, but does not cancel an existing reconciliation pass or
+provider request. It is not a quiescence barrier. Manual reconcile can still
+read provider state when external authorization permits it.
 
 ## Inventory local state
 

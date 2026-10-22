@@ -35,7 +35,7 @@ remote objects can then fail ownership checks and require operator remediation.
 
 ## Mount pause
 
-Set `disabled=true` to pause background provider traffic and remote mutation:
+Set `disabled=true` to block new background work and remote mutation dispatch:
 
 ```sh
 bao write secret-sync/config disabled=true
@@ -45,6 +45,9 @@ bao write secret-sync/config disabled=false
 Manual reconcile remains available while disabled because it does not write
 destination secrets. Manual queue drains and remote mutation remain blocked
 until the mount is enabled again.
+
+Pause does not cancel a reconciliation pass or provider request already in
+progress. Use external destination fencing for restore or clone isolation.
 
 ## Security posture
 

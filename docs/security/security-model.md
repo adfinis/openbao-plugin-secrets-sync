@@ -322,7 +322,8 @@ The plugin uses a restore guard:
 The plugin does not detect restore or cloning. A snapshot can restore an
 inactive guard and the earlier ownership identity. Follow
 [Restore and clone review](../operations/restore-and-clone.md) for external
-fencing, epoch rotation, and ownership remediation.
+fencing, epoch rotation, and ownership remediation. Pause and guard settings
+do not cancel provider requests already in progress.
 
 ## Metrics
 

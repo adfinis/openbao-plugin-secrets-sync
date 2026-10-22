@@ -90,6 +90,10 @@ current source version.
 Association `delete_mode` defaults to `retain`. Remote delete is enqueued only
 when `delete_mode=delete`.
 
+The accepted value `delete_mode=orphan` is an alias of `retain`. Both modes
+preserve remote values and ownership metadata. Neither mode detaches ownership
+or transfers the remote object to another association.
+
 Provider delete must prove ownership before mutating the remote object. Missing
 owned objects are treated idempotently. Provider-specific delete behavior is
 documented in the provider operations pages.
