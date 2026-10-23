@@ -49,7 +49,8 @@ posture write, `VALIDATION_ERROR`.
 | `NO_ASSOCIATION` | No work is queued and no object status exists. In a write response, the write queued no work. | Create or enable an association. In hardened posture, check source sync. |
 | `PENDING` | Work for the path is queued. Top-level only. | Wait for dispatch. If it does not progress, read `queue` and check the [mutation gates](../concepts/ownership-and-drift.md#mutation-gates). |
 | `SYNCED` | After dispatch, the provider accepted the write for this version. After reconcile, the remote evidence matches the desired payload hash. | None. Check `verification` for the strength of the evidence. |
-| `DRIFTED` | The owned remote object has a different payload hash or source version. Dispatch failures of class `drift` or `collision` also record this state. | Run reconcile plan, then manual sync or background repair. If `last_error_class=collision`, treat it as an ownership conflict. |
+| `DRIFTED` | The owned remote object has a different payload hash or source version, or dispatch failed with class `drift`. | Run reconcile plan, then manual sync or background repair. |
+| `REMOTE_CONFLICT` | A remote object conflicts with the association's resolved name (`collision`). | Inspect the association plan and resolve the name conflict before running manual sync. |
 | `REMOTE_MISSING` | The remote object does not exist. This is the expected state after a successful remote delete. | Run manual sync if the object should exist. |
 | `REMOTE_OWNERSHIP_LOST` | A remote object exists, but its ownership metadata does not match this mount, association, object, and restore epoch. | Inspect or remove the remote object, then run manual sync. |
 | `DESTINATION_AUTH_ERROR` | The provider rejected the credentials (`authn`). | Fix the destination credentials, check destination health, then retry the operation. |
@@ -138,7 +139,7 @@ state and the retry behavior.
 | `authz` | Permission was denied. | `DESTINATION_POLICY_ERROR` | No |
 | `validation` | A local or provider validation rule rejected the request. | `VALIDATION_ERROR` | No |
 | `ownership` | The remote object is not owned by this association. | `REMOTE_OWNERSHIP_LOST` | No |
-| `collision` | An object already exists at the remote name. | `DRIFTED` | No |
+| `collision` | An object already exists at the remote name. | `REMOTE_CONFLICT` | No |
 | `drift` | The remote object changed or carries a newer source version. | `DRIFTED` | No |
 | `capacity` | The payload is too large for the provider. | `QUEUE_BLOCKED` | No |
 | `internal` | Plugin-internal or unclassified failure. | `INTERNAL_ERROR` | No |
@@ -196,9 +197,13 @@ Each action has these fields:
 The plugin emits these actions: `manual_sync`, `retry_operation`, and
 `drain_queue` (all `mutates_remote=true`); `enable_source`,
 `enable_association`, `enable_destination`, `enable_secret_sync`, and
-`acknowledge_restore_guard`; and the read actions `inspect_association_plan`,
+`acknowledge_restore_guard`; `inspect_association_plan` (a write operation
+that does not mutate remote objects); and the read actions
 `read_destination`, `check_destination_health`, `read_queue`, and
 `read_config`. The unsafe replication diagnostic has a hint but no actions.
+
+Older stored collision failures can still report `DRIFTED` with
+`last_error_class=collision`. Their diagnostic uses the conflict guidance.
 
 > [!WARNING]
 > `acknowledge_restore_guard` and `enable_secret_sync` report

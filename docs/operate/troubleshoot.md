@@ -68,7 +68,8 @@ meanings and retry behavior are defined in
 | `UNKNOWN` | The path spelling, and `bao read secret-sync/metadata/<path>`. | Write the source data. |
 | `NO_ASSOCIATION` | `bao read secret-sync/associations/<path>`. | Create an association. |
 | `PENDING` | Queue summary, and `disabled`, `restore_guard`, and `event_dispatch_enabled` in config. | Wait for dispatch, resolve the pause or guard, or drain the queue. |
-| `DRIFTED` | Reconcile plan and the remote ownership metadata. Collisions with foreign objects also report `DRIFTED`. | Manual sync for owned drift. For a foreign object, see [Recover ownership loss](#recover-ownership-loss). |
+| `DRIFTED` | Reconcile plan and the remote ownership metadata. | Manual sync for owned drift. |
+| `REMOTE_CONFLICT` | The association plan and the object at the resolved remote name. | Resolve the name conflict before running manual sync. |
 | `REMOTE_MISSING` | Reconcile plan. | Manual sync recreates the object. |
 | `REMOTE_OWNERSHIP_LOST` | The remote ownership metadata. | [Recover ownership loss](#recover-ownership-loss). |
 | `DESTINATION_AUTH_ERROR` | Destination health, credential material, workload identity. | Fix or rotate the credential, then retry the operation. |
@@ -76,7 +77,7 @@ meanings and retry behavior are defined in
 | `DESTINATION_RATE_LIMITED` | `retry_wait` in the queue summary. | Let automatic retry continue. Use smaller drain batches. |
 | `DESTINATION_UNAVAILABLE` | Destination health, DNS, proxy, and network path. | Retry the operation after the destination recovers. |
 | `VALIDATION_ERROR` | `last_error`, the association plan, destination config, remote name rules, payload size, and hardened posture requirements. | Fix the cause, then run manual sync. |
-| `QUEUE_BLOCKED` | Payload size against the provider limit on the provider page. The state's built-in hint suggests queue actions, which do not help here. | Reduce the payload or split the source path, then run manual sync. |
+| `QUEUE_BLOCKED` | Payload size against the provider limit on the provider page. | Reduce the payload or split the source path, then run manual sync. |
 | `DISABLED` | Whether the association or the destination is disabled. | Enable the disabled object. |
 | `INTERNAL_ERROR` | Plugin logs in the OpenBao server log. | Fix the cause, then retry the operation. |
 

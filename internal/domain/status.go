@@ -12,6 +12,7 @@ const (
 	SyncStateDrifted                SyncState = "DRIFTED"
 	SyncStateRemoteMissing          SyncState = "REMOTE_MISSING"
 	SyncStateRemoteOwnershipLost    SyncState = "REMOTE_OWNERSHIP_LOST"
+	SyncStateRemoteConflict         SyncState = "REMOTE_CONFLICT"
 	SyncStateDestinationAuthError   SyncState = "DESTINATION_AUTH_ERROR"
 	SyncStateDestinationPolicyError SyncState = "DESTINATION_POLICY_ERROR"
 	SyncStateDestinationRateLimited SyncState = "DESTINATION_RATE_LIMITED"
