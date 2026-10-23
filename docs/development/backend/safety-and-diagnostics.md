@@ -101,7 +101,7 @@ payload hash, and restore epoch where supported. The contract is in
 Providers refuse to overwrite a remote object owned by another mount,
 association, or restore epoch, or by an unmanaged owner, and return an
 `ownership` or `collision` error. The backend treats both as terminal: they
-never retry automatically and map to `REMOTE_OWNERSHIP_LOST` and `DRIFTED`.
+never retry automatically and map to `REMOTE_OWNERSHIP_LOST` and `REMOTE_CONFLICT`.
 Background repair never selects these objects. Recovery is an operator
 action; see
 [Ownership and drift](../../concepts/ownership-and-drift.md#collisions-and-stale-objects).

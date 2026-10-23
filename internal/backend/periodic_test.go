@@ -454,7 +454,7 @@ func TestPeriodicMapsProviderMutationErrorClasses(t *testing.T) {
 			name:         "collision",
 			resolvedName: "prod/collision/app/db",
 			errorClass:   providers.ErrorClassCollision,
-			state:        domain.SyncStateDrifted,
+			state:        domain.SyncStateRemoteConflict,
 		},
 		{
 			name:         "validation",

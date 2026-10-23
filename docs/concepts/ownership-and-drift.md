@@ -200,9 +200,9 @@ Providers check an existing remote object before they write:
 - An upsert against an existing object that this association does not own
   fails with class `ownership`, and status reports `REMOTE_OWNERSHIP_LOST`.
 - A create that loses a race with another writer fails with class
-  `collision`. Status records this as `DRIFTED` with
-  `last_error_class=collision`. Check `last_error_class` before you follow the
-  manual sync hint.
+  `collision`. Status records this as `REMOTE_CONFLICT` with
+  `last_error_class=collision`. Inspect the association plan and resolve the
+  name conflict before running manual sync.
 
 Some providers keep a recoverable tombstone, such as an AWS secret scheduled
 for deletion. The provider restores it only when this association owns it. The

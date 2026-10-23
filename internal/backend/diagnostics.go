@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/adfinis/openbao-plugin-secrets-sync/internal/domain"
+	"github.com/adfinis/openbao-plugin-secrets-sync/internal/providers"
 	"github.com/openbao/openbao/sdk/v2/logical"
 )
 
@@ -214,9 +215,15 @@ func queueCapacityDiagnostic(mount string) diagnostic {
 }
 
 func statusDiagnosticForRecord(mount string, record statusRecord) diagnostic {
+	state := domain.SyncState(record.State)
+	// Older collision failures were stored as DRIFTED. Give those records the
+	// same conflict guidance without treating them as repairable payload drift.
+	if state == domain.SyncStateDrifted && record.LastErrorClass == string(providers.ErrorClassCollision) {
+		state = domain.SyncStateRemoteConflict
+	}
 	return syncStateDiagnostic(
 		mount,
-		domain.SyncState(record.State),
+		state,
 		record.Path,
 		record.DestinationRef,
 		record.LastOperationID,
@@ -244,6 +251,14 @@ func syncStateDiagnostic(
 	message string,
 ) diagnostic {
 	switch state {
+	case domain.SyncStateRemoteConflict:
+		return diagnostic{
+			Hint: "A remote object conflicts with this association's resolved name. Inspect the association plan " +
+				"and resolve the name conflict before running manual sync.",
+			NextActions: []diagnosticAction{
+				associationPlanAction(mount, sourcePath, destinationRef),
+			},
+		}
 	case domain.SyncStateRemoteOwnershipLost:
 		return diagnostic{
 			Hint: "Remote object ownership does not match this association. Inspect or remove the remote " +
@@ -270,18 +285,13 @@ func syncStateDiagnostic(
 	case domain.SyncStateValidationError:
 		return validationDiagnostic(mount, sourcePath, destinationRef, message)
 	case domain.SyncStateQueueBlocked:
-		diagnostic := diagnostic{
-			Hint: "Sync work is blocked by queue or provider capacity. Inspect queue/config state and retry " +
-				"the operation after capacity is available.",
+		return diagnostic{
+			Hint: "The encoded payload exceeds the provider's payload or request size limit. Reduce the payload " +
+				"or adjust the association mapping, then run manual sync for the current source version.",
 			NextActions: []diagnosticAction{
-				readQueueAction(mount),
-				readConfigAction(mount),
+				associationPlanAction(mount, sourcePath, destinationRef),
 			},
 		}
-		if operationID != "" {
-			diagnostic.NextActions = append(diagnostic.NextActions, retryOperationAction(mount, operationID))
-		}
-		return diagnostic
 	case domain.SyncStateDisabled:
 		return diagnostic{
 			Hint: "Association or destination is disabled. Enable the disabled object before retrying sync.",
@@ -373,7 +383,7 @@ func enableAssociationAction(mount, sourcePath, destinationRef string) diagnosti
 func associationPlanAction(mount, sourcePath, destinationRef string) diagnosticAction {
 	return diagnosticAction{
 		Action:     "inspect_association_plan",
-		Operation:  "read",
+		Operation:  "write",
 		Path:       fmt.Sprintf("associations/%s/plan", sourcePath),
 		Mount:      mount,
 		Parameters: destinationParameter(destinationRef),

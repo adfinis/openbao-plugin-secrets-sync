@@ -1094,7 +1094,9 @@ func syncStateForFailureClass(errorClass providers.ErrorClass) domain.SyncState 
 		return domain.SyncStateDestinationUnavailable
 	case providers.ErrorClassOwnership:
 		return domain.SyncStateRemoteOwnershipLost
-	case providers.ErrorClassDrift, providers.ErrorClassCollision:
+	case providers.ErrorClassCollision:
+		return domain.SyncStateRemoteConflict
+	case providers.ErrorClassDrift:
 		return domain.SyncStateDrifted
 	case providers.ErrorClassValidation:
 		return domain.SyncStateValidationError
