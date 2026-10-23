@@ -62,7 +62,14 @@ func (b *secretSyncBackend) enqueueAssociationsCurrentVersion(
 			return nil, err
 		}
 		if existing != nil {
+			// Re-enqueueing queued work is idempotent. Preserve its claim and
+			// retry schedule while a dispatcher may still be using the record.
+			if isQueuedOutboxState(existing.State) {
+				operations[index] = *existing
+				continue
+			}
 			operation.CreatedTime = existing.CreatedTime
+			operation.ClaimAttempt = existing.ClaimAttempt
 			operations[index] = operation
 		}
 	}

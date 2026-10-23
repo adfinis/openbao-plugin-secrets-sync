@@ -60,8 +60,8 @@ func TestProviderMutationDeadlineExceededRetriesAsUnavailable(t *testing.T) {
 	if got := operation.Attempts; got != 1 {
 		t.Fatalf("attempts = %d, want 1", got)
 	}
-	if operation.ClaimOwner != "" || operation.ClaimExpiresTime != "" || operation.ClaimAttempt != 0 {
-		t.Fatalf("claim fields after provider timeout = %#v, want cleared", operation)
+	if operation.ClaimOwner != "" || operation.ClaimExpiresTime != "" || operation.ClaimAttempt != 1 {
+		t.Fatalf("claim fields after provider timeout = %#v, want released lease and retained attempt", operation)
 	}
 	assertFutureNotBefore(t, operation.NotBefore)
 	assertStatusObjectErrorClass(t, env.b, env.storage, providers.ErrorClassUnavailable)
