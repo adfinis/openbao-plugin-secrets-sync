@@ -1,116 +1,131 @@
-# Reconcile And Drift
+---
+verifiedBy:
+  - internal/backend/path_reconcile.go
+  - internal/backend/periodic_reconcile.go
+  - internal/backend/association_enqueue.go
+  - internal/backend/storage_status.go
+  - internal/backend/backend.go
+  - internal/backend/path_reconcile_test.go
+  - internal/backend/periodic_test.go
+---
 
-Reconcile and drift work both use provider read-state capability, but they have
-different contracts.
+# Reconcile and drift
 
-Manual reconcile is an operator-requested API operation for one source path.
-Periodic drift work is background work controlled by mount config.
+Manual reconcile and periodic drift work share one read path,
+`reconcileAssociationObject`, and differ in candidate selection and in what
+they do with the result. User-facing semantics, including plan versus apply
+and drift modes, are in
+[Ownership and drift](../../concepts/ownership-and-drift.md#reconcile).
 
-## Manual Reconcile
+## Read path
 
-Manual reconcile has two paths:
+For one association object, the backend:
 
-- `reconcile/<path>/plan` reads provider state and returns computed object
-  state without changing local status.
-- `reconcile/<path>` reads provider state and writes local status from the
-  result.
+1. Fails with `DISABLED` when the association or destination is disabled, and
+   with `VALIDATION_ERROR` when the provider is unknown or the destination is
+   missing.
+2. Resolves public and sensitive destination config and the runtime identity.
+3. Resolves the remote name and checks destination policy for the object. A
+   policy failure is `VALIDATION_ERROR` and skips the provider read.
+4. Builds the canonical payload and enforces `MaxPayloadBytes`.
+5. Calls `ReadState` on the cached runtime with the payload hash, never the
+   payload bytes.
+6. Maps the remote state with `reconcileStateForRemoteState`.
 
-Manual reconcile does not write destination secrets and does not enqueue repair
-work. It remains available when `disabled=true` because it is not a remote
-mutation path.
+The mapping checks, in order:
 
-Manual reconcile still calls providers, so destination source and remote-name
-constraints, response redaction, and provider error classification rules apply.
+1. `Exists=false` is `REMOTE_MISSING`.
+2. Known ownership with `Owned=false` is `REMOTE_OWNERSHIP_LOST`.
+3. A remote source version that differs from the current version is
+   `DRIFTED`.
+4. A remote payload hash that differs from the desired hash is `DRIFTED`.
+5. A matching hash is `SYNCED`.
+6. Anything else is `UNKNOWN`.
 
-## Reconcile Result Mapping
+A provider error maps to a state through its error class. State meanings are
+in [Status and diagnostics](../../reference/status-and-diagnostics.md#sync-states).
 
-For each association object, reconcile compares the current OpenBao source
-version with provider remote state.
+## Manual reconcile
 
-Typical outcomes are:
+`reconcile/<path>/plan` (read) and `reconcile/<path>` (update) both require a
+live current version and read every association at the path, enabled or not.
+Only the update operation writes status, through `putReconcileStatus`.
 
-- `SYNCED`: remote payload and ownership match current local source state.
-- `DRIFTED`: remote object is owned by this association but differs from the
-  current local source state.
-- `REMOTE_MISSING`: the expected remote object does not exist.
-- `REMOTE_OWNERSHIP_LOST`: a remote object exists but is not owned by this
-  association or mount identity.
-- `VALIDATION_ERROR`: local association or destination state cannot be used for
-  provider read-state.
-- `DISABLED`: association or destination is disabled.
-- provider error states: provider read-state returned classified transport,
-  auth, authorization, capacity, validation, or internal failure.
+`putReconcileStatus` sets `last_reconcile_time`, the verification marker,
+remote version, and error fields; sets `last_drift_detected_time` for
+`DRIFTED`; and keeps the stored last operation ID and success time. The
+version-ordering rule in `putStatus` still applies.
 
-Responses include object-level diagnostics where the state has a useful
-operator recovery path.
+Manual reconcile does not check the replication state, `disabled`, or
+`restore_guard`, because it never writes destination secrets or enqueues
+work. Destination policy still applies before each provider read.
 
-## Periodic Drift Work
+## Periodic drift work
 
-Background drift work is controlled by `drift_repair`:
+`periodicDriftReconcile` runs from the periodic callback after enqueue-intent
+recovery and before the restore guard return. It does nothing when
+`drift_repair=off`. Configuration fields and defaults are in
+[Runtime settings](../../configure/runtime.md#enable-drift-detection-or-repair).
 
-```text
-off
-detect
-repair
-```
+### Candidate selection
 
-The default `off` performs no periodic provider reads for drift.
+`driftReconcileCandidates` scans every key under `associations/` and keeps an
+association object when:
 
-`detect` periodically reads provider state and refreshes local status. It does
-not enqueue repair work.
+- the association is enabled;
+- the source has a current version that is not deleted or destroyed;
+- the object IDs resolve from the current payload;
+- the object's status is missing, has no parseable `last_reconcile_time`, or
+  was last reconciled at least `drift_reconcile_interval` ago; and
+- when `drift_repair=repair` and `restore_guard=false`, the object has no
+  queued upsert for the current version or newer.
 
-`repair` periodically reads provider state, refreshes local status, and
-enqueues normal queued repair for repairable `DRIFTED` objects.
+With `drift_repair=detect`, or while the restore guard is active, objects with
+queued upserts stay candidates so operators can inspect them. In repair mode
+the queued upsert is already the repair path.
 
-Periodic drift work also uses:
+Destination state is not a selection filter. A disabled destination produces a
+`DISABLED` result when the object is read.
 
-- `drift_reconcile_interval`
-- `drift_reconcile_batch`
+### Batch order
 
-Candidates are enabled associations with a live current source version and due
-or missing reconcile status. The batch is sorted by oldest reconcile time, then
-source path, association ID, and object ID.
+Candidates sort by `last_reconcile_time` ascending, with never-reconciled
+objects first, then by source path, association ID, and object ID. The first
+`drift_reconcile_batch` candidates are processed in order. For each one, the
+backend reads remote state, records a reconcile metric, writes status with
+`putReconcileStatus`, and then considers repair.
 
-## Repair Eligibility
+The configuration snapshot is read once at the start of the periodic callback.
+A `config` write during the batch does not stop the batch.
 
-Periodic repair is intentionally narrower than manual sync. A drift result is
-repairable only when:
+### Repair
 
-- the state is `DRIFTED`;
-- the remote object exists;
-- ownership metadata is known;
-- the remote object is owned by this mount and association;
-- the provider returned a payload hash;
-- the provider returned a verification marker.
+Repair is considered only when `drift_repair=repair`. `isRepairableDrift`
+requires all of the following:
 
-Periodic repair does not take over `REMOTE_OWNERSHIP_LOST` objects, recreate
-`REMOTE_MISSING` objects, or repair objects when ownership cannot be verified.
-Use manual sync after operator review for those states.
+- state `DRIFTED`;
+- a remote state with `Exists=true`, `OwnershipKnown=true`, and `Owned=true`;
+- a non-empty remote payload hash;
+- a non-empty verification marker.
 
-Periodic repair enqueues regular outbox work with trigger `drift-repair`.
-Dispatch still performs the normal source-version, destination-policy,
-capability, ownership, and provider checks before mutating the remote object.
+`REMOTE_MISSING`, `REMOTE_OWNERSHIP_LOST`, and drift without verified
+ownership are never repaired in the background. User-facing rules are in
+[Ownership and drift](../../concepts/ownership-and-drift.md#repair-eligibility).
 
-## Mutation Gates
+For a repairable result, `enqueuePeriodicDriftRepair`:
 
-Replication safety is checked before periodic drift or dispatch work. Unsafe
-replication states block background provider traffic.
+1. Skips the object and records a restore guard block when
+   `restore_guard=true`.
+2. Skips enqueue when the association already has a queued upsert for the
+   current version or newer.
+3. Enqueues salted upserts with trigger `drift-repair` for every object of the
+   association, not only the drifted one. Later drifted objects of the same
+   association then hit step 2.
+4. Skips the object and records a capacity block when the queue is full.
 
-`disabled=true` blocks background provider traffic entirely. Periodic drift
-detection, periodic repair enqueue, and periodic dispatch all stop while the
-mount is disabled. Manual reconcile remains available.
-
-Restore guard has narrower semantics. Periodic drift detection can still run
-while restore guard is active so operators can inspect remote state. Restore
-guard blocks periodic repair enqueue, event dispatch, queue drain, and queued
-remote mutation until acknowledged.
-
-Manual reconcile and periodic drift detection validate destination constraints
-before provider read-state. Tightening `allowed_source_path_prefixes` or
-`allowed_resolved_name_prefixes` therefore blocks both future mutation and
-future remote-state reads for disallowed association objects.
-
-`drift_repair=detect` and active restore guard can inspect objects that already
-have queued upserts. `drift_repair=repair` avoids selecting objects that
-already have current-version queued upsert work, because queued mutation is
-already the repair path.
+Repair enqueue does not signal event dispatch. The same periodic callback
+dispatches it in its final step, and dispatch repeats the source version,
+eligibility, destination policy, and provider ownership checks before any
+mutation. A successful repair sets `last_repair_time` and increments
+`repair_count`. When the count exceeds 3, the backend logs a warning with the
+destination type, granularity, and count.

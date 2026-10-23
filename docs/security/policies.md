@@ -1,35 +1,57 @@
+---
+verifiedBy:
+  - internal/backend/backend.go
+  - internal/backend/path_info.go
+  - internal/backend/path_config.go
+  - internal/backend/path_data.go
+  - internal/backend/path_metadata.go
+  - internal/backend/path_versions.go
+  - internal/backend/path_sources.go
+  - internal/backend/path_destinations.go
+  - internal/backend/path_associations.go
+  - internal/backend/path_queue.go
+  - internal/backend/path_reconcile.go
+  - internal/backend/path_status.go
+  - internal/backend/existence_checks.go
+---
+
 # Policy examples
 
-These examples show common OpenBao policy shapes for a Secret Sync mount at
-`secret-sync/`. Adapt path prefixes, destination names, and OpenBao policy
-wildcards to the deployment.
+These OpenBao policies cover common roles for a Secret Sync mount at
+`secret-sync/`. Each example uses `apps/team-a` as the delegated source prefix.
+Adapt the prefixes and wildcards to your deployment.
 
-The examples use `apps/team-a/*` as the delegated source prefix.
+Keep these path rules in mind when you adapt a policy:
 
-OpenBao enforces `create` and `update` independently for `data/<path>`,
-`metadata/<path>`, `destinations/<type>/<name>`, and `associations/<path>`.
-`create` permits a missing logical resource but not an overwrite; `update`
-permits an existing resource but not creation. Grant both capabilities to roles
-that manage the full lifecycle. Source data and metadata share the metadata
-record for this decision, matching KV-v2 semantics. Association existence is
-resolved from the normalized destination and provider identity selector.
-
-Source paths can be nested, so the examples use prefix grants such as
-`sources/apps/team-a/*` rather than trying to match route suffixes like
-`*/enable`. Use fixed-depth `+` segments only when your source path layout is
-known and intentionally shallow.
+- OpenBao checks `create` and `update` separately for `data/<path>`,
+  `metadata/<path>`, `destinations/<type>/<name>`, and `associations/<path>`.
+  Grant both to roles that manage the full lifecycle. See
+  [Create and update capabilities](../reference/api.md#create-and-update-capabilities).
+- Lifecycle actions are `update` requests: `sources/<path>/enable`,
+  `sources/<path>/disable`, `associations/<path>/plan`, association `enable`,
+  `disable`, and `sync`, `reconcile/<path>`, `queue/drain`, and
+  `queue/<operation-id>/retry` and `cancel`.
+- Inspection is `read`: `sources/<path>/check`, `reconcile/<path>/plan`,
+  `destinations/<type>/<name>/check`, `status/<path>`, and `queue`.
+- Source paths can be nested, so grant prefixes such as
+  `sources/apps/team-a/*` instead of matching suffixes such as `*/enable`. Use
+  fixed-depth `+` segments only when your source path layout is known and
+  intentionally shallow.
 
 ## Platform operator
 
 Platform operators manage destinations, associations, queue operations,
 restore guard acknowledgement, reconcile, and status. This policy does not
-grant source payload reads.
+grant source payload reads or source sync enablement.
 
-This role combines `destinations/*` and `associations/*`. That combination is
-full exfiltration authority for source paths the role can associate, because it
-can create a destination and bind sources to it. Use it only for trusted
-platform operators, or split destination administration from association
-administration when the deployment requires two-person control.
+> [!WARNING]
+> This role combines write access to `destinations/*` and `associations/*`.
+> That combination is full exfiltration authority for every source path the
+> role can associate, because the role can create a destination and bind
+> sources to it. Use it only for trusted platform operators, or split it as
+> shown in [Split platform roles](#split-platform-roles) when the deployment
+> requires two-person control. See
+> [Authorization boundaries](threat-model.md#authorization-boundaries).
 
 ```hcl
 path "secret-sync/info" {
@@ -52,12 +74,12 @@ path "secret-sync/associations/*" {
   capabilities = ["create", "read", "update", "delete", "list"]
 }
 
-path "secret-sync/queue" {
+path "secret-sync/sources/*" {
   capabilities = ["read"]
 }
 
-path "secret-sync/queue/drain" {
-  capabilities = ["update"]
+path "secret-sync/queue" {
+  capabilities = ["read"]
 }
 
 path "secret-sync/queue/*" {
@@ -77,9 +99,12 @@ path "secret-sync/metadata/*" {
 }
 ```
 
+`queue/*` with `update` includes `queue/drain`, which runs due remote
+mutations for every source in the mount.
+
 ## Split platform roles
 
-Destination administrators can manage destination config without binding source
+Destination administrators manage destination config without binding source
 paths:
 
 ```hcl
@@ -92,8 +117,12 @@ path "secret-sync/destinations/*" {
 }
 ```
 
-Association administrators can bind approved destinations to source paths but
-cannot create new destinations:
+Destination write access still controls the plugin's network targets,
+credential files, and ambient credentials. Grant it only to trusted platform
+operators.
+
+Association administrators bind approved destinations to source paths but
+cannot create destinations:
 
 ```hcl
 path "secret-sync/info" {
@@ -115,9 +144,9 @@ path "secret-sync/metadata/*" {
 
 ## App writer
 
-App writers manage source payloads and source metadata for their own prefix.
-Grant `sources/<path>/enable` when app writers may enable sync for their own
-source path.
+App writers manage source payloads, versions, and source metadata for their
+own prefix. The `sources` grant lets them check readiness and enable or
+disable source sync for their own paths.
 
 ```hcl
 path "secret-sync/info" {
@@ -126,6 +155,14 @@ path "secret-sync/info" {
 
 path "secret-sync/data/apps/team-a/*" {
   capabilities = ["create", "read", "update", "delete"]
+}
+
+path "secret-sync/delete/apps/team-a/*" {
+  capabilities = ["update"]
+}
+
+path "secret-sync/undelete/apps/team-a/*" {
+  capabilities = ["update"]
 }
 
 path "secret-sync/metadata/apps/team-a/*" {
@@ -140,6 +177,9 @@ path "secret-sync/status/apps/team-a/*" {
   capabilities = ["read"]
 }
 ```
+
+Add `update` on `secret-sync/destroy/apps/team-a/*` only when writers may
+permanently destroy source versions. Destroy cannot be undone.
 
 ## App reader
 
@@ -167,20 +207,14 @@ path "secret-sync/status/apps/team-a/*" {
 ## Delegated association owner
 
 Delegated association owners create and manage associations for their own
-source prefix. Combine this policy with app reader or app writer access when
-the delegated owner also needs source payload access.
+source prefix. Before you grant this policy, enable hardened posture and
+constrain every destination that the owner may use, as described in
+[Delegate to application owners](../configure/delegate.md).
 
-Before granting this policy, enable hardened posture:
-
-```sh
-bao write secret-sync/config security_posture=hardened
-```
-
-Constrain every delegated destination with `allowed_source_path_prefixes` and
-`allowed_resolved_name_prefixes` so delegated owners cannot use a shared
-destination for unrelated source paths or remote names. In hardened posture,
-the backend rejects association create, enable, manual sync, reconcile, and
-queued dispatch through unconstrained destinations.
+The policy grants `read` on `sources/apps/team-a/*`, so the owner can check
+source readiness but cannot opt a source in to sync. The app writer or another
+source owner enables source sync. Combine this policy with app reader or app
+writer access only when the owner also needs the source payload.
 
 ```hcl
 path "secret-sync/info" {
@@ -208,8 +242,13 @@ path "secret-sync/reconcile/apps/team-a/*" {
 }
 ```
 
-Do not grant delegated owners write access to `destinations/*`, `queue/drain`,
-or association paths outside their source prefix.
+The `associations` grant includes `update` on `associations/<path>/plan`, which
+plans an association without creating it. The `reconcile` grant allows only
+`reconcile/<path>/plan`, which reads provider state without changing local
+status.
+
+Do not grant delegated owners write access to `destinations/*`, `queue/*`, or
+association paths outside their source prefix.
 
 ## Auditor
 
@@ -250,34 +289,6 @@ path "secret-sync/metadata/*" {
 }
 ```
 
-## Destination constraints
-
-Use destination constraints with delegated association owners. In delegated
-mode, both lists are required:
-
-```sh
-bao write secret-sync/destinations/PROVIDER_TYPE/NAME \
-  PROVIDER_SPECIFIC_FIELDS \
-  allowed_source_path_prefixes=apps/team-a \
-  allowed_resolved_name_prefixes=openbao-plugin-secrets-sync/team-a/
-```
-
-Delegated association writes should use the compact destination selector:
-
-```sh
-bao write secret-sync/associations/apps/team-a/db \
-  destination=PROVIDER_TYPE/NAME \
-  name_template='openbao-plugin-secrets-sync/team-a/{{ path }}' \
-  granularity=secret-path
-```
-
-The backend checks these constraints during association plan, association
-activation, manual sync, enable, manual reconcile, background drift read-state,
-and queued dispatch.
-
-Destination checks report `destination_unconstrained` when hardened posture is
-enabled and either constraint list is empty:
-
-```sh
-bao read secret-sync/destinations/PROVIDER_TYPE/NAME/check
-```
+These reads expose operational metadata such as source paths, remote names,
+and, in status records, payload hashes. See
+[Secret and credential protection](threat-model.md#secret-and-credential-protection).

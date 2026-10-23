@@ -1,147 +1,157 @@
-# Safety And Diagnostics
+---
+verifiedBy:
+  - internal/backend/backend.go
+  - internal/backend/dispatcher.go
+  - internal/backend/event_dispatch.go
+  - internal/backend/path_queue.go
+  - internal/backend/periodic_reconcile.go
+  - internal/backend/path_config.go
+  - internal/backend/path_associations.go
+  - internal/backend/path_destinations.go
+  - internal/backend/diagnostics.go
+  - internal/backend/storage_status.go
+  - internal/backend/redaction_test.go
+  - internal/backend/diagnostics_test.go
+  - internal/backend/dispatcher_global_guard_test.go
+---
 
-Backend safety rules keep OpenBao as the source of truth without silently
-taking over unrelated remote objects or leaking source payloads into
-operational records.
+# Safety and diagnostics
 
-## Safety Invariants
+Backend safety rules keep the mount the source of truth without taking over
+unrelated remote objects or leaking source payloads into operational records.
+Change these rules only with matching tests.
 
-Preserve these invariants:
+## Safety invariants
 
-- Source payload values appear only in source read responses and provider
-  mutation requests.
-- Destination sensitive config is stored separately from public destination
-  metadata and is redacted on reads.
-- Providers mutate only through prepared payloads and resolved destination
-  config.
-- Association activation requires destination authority and, in hardened
-  posture, source eligibility.
-- Association activation rolls back persisted enabled state when initial enqueue
-  fails, so an error response does not leave a newly active association behind.
-- Queue capacity errors occur before a new source version is accepted.
-- Remote deletes require `delete_mode=delete` and provider-owned delete
-  support.
-- Restore guard blocks remote mutation until an operator acknowledges it.
-- `disabled=true` blocks background provider traffic and remote mutation.
-- Manual reconcile can still read provider state while disabled because it does
-  not write destination secrets.
-- Event-triggered dispatch is only a low-latency wakeup for durable queued
-  work; periodic processing remains the fallback.
-- Manual reconcile reads provider state and updates local status only.
-- Periodic drift repair enqueues normal outbox work only for verified owned
-  drift.
-- Older operations cannot overwrite newer per-object status.
+- Source payload values appear only in source data read responses and in
+  provider upsert requests. Plan and read-state requests carry the payload
+  hash, size, and data-map key names, not values.
+- Sensitive destination config is stored only under `destinations_secrets/`
+  and is redacted on destination reads.
+- Request handlers never mutate remote state. Only the dispatcher calls
+  provider `Upsert` and `Delete`, and only for a claimed operation.
+- A dispatcher commits a result only while it still holds the claim.
+- Association activation requires an existing, enabled destination whose
+  policy allows the path and every resolved name, and, in hardened posture,
+  source eligibility and constrained destinations.
+- Association activation restores the previous record when the initial
+  enqueue fails, so an error never leaves a newly active association behind.
+- A queue capacity error rejects a source write before the version is stored.
+- Remote delete requires `delete_mode=delete`. Association writes accept that
+  mode only when the provider reports delete-if-owned support, and dispatch
+  rechecks the mode before every delete.
+- Dispatch rechecks association and destination state, source eligibility,
+  and destination policy before every provider call.
+- Background drift repair enqueues normal outbox work only for drift with
+  verified ownership.
+- An older operation cannot overwrite newer per-object status.
 - Provider capability flags must match implemented and tested behavior.
 
-## Restore Guard
+## Gate enforcement points
 
-Restore guard is a mutation gate for restored or cloned mounts. When active,
-it blocks queue drain, event dispatch, periodic dispatch, and periodic repair
-enqueue.
+User-facing gate semantics are in
+[Ownership and drift](../../concepts/ownership-and-drift.md#mutation-gates).
+The backend checks them at these points:
 
-Periodic drift detection can still refresh status while restore guard is
-active. This gives operators evidence for the restore or clone review before
-acknowledging the guard.
+| Code path | Replication state | `disabled` | `restore_guard` |
+| --- | --- | --- | --- |
+| Periodic callback | Returns before any work | Returns after terminal pruning | Returns after drift work, before dispatch |
+| Periodic repair enqueue | Covered by the callback | Covered by the callback | Skipped per object |
+| Event dispatch pass | Stops | Stops | Stops |
+| `queue/drain` | Error response | Error response | Error response |
+| Outbox claim | Not checked | Claim skipped | Claim skipped |
+| Manual reconcile, association plan, destination check and health | Not checked | Not checked | Not checked |
+| Source writes, version mutations, association enqueue, manual sync | Not checked | Not checked | Not checked |
 
-Acknowledging an active restore guard rotates the restore epoch. Provider
-requests carry the current restore epoch where the destination supports
-ownership metadata.
+The claim check reads `config` for every operation, so a `config` write that
+sets `disabled` or `restore_guard` stops further claims in a running batch. It
+does not cancel a provider call already in flight or a drift batch that
+already read the previous configuration. Pause is not a quiescence barrier.
 
-The guard defaults to false and is stored in the snapshot timeline. Initialize
-does not detect a restore or arm the guard. Operators must fence destinations
-outside the restored storage before startup. Epoch rotation does not rewrite
-remote ownership metadata or provide automatic adoption. See
-[Restore and clone review](../../operations/restore-and-clone.md).
+Request-path enqueue is not gated. It writes durable local intent, and
+dispatch stays blocked until the gate clears.
 
-## Disabled Mounts
+## Replication check
 
-`disabled=true` is a mount pause. It gates new background provider work and
-remote mutation dispatch. Periodic work returns before drift detection or
-dispatch, and event dispatch does not process queue work.
+`remoteMutationAllowed` returns true for a local mount. Otherwise it returns
+false when the replication state has any of these flags: performance
+secondary, performance standby, performance bootstrapping, DR secondary, or DR
+bootstrapping. The check covers the periodic callback, event dispatch, and
+queue drain, which together are every path that claims outbox work.
 
-Configuration writes do not cancel provider requests or a reconciliation pass
-that already read the previous configuration. Pause is not a quiescence
-barrier.
+## Restore guard
 
-Manual reconcile remains available because it does not write destination
-secrets. Destination source and remote-name constraints still apply before
-provider read-state. Manual sync can still enqueue durable work when the
-association is valid, but queue drain and dispatch provider mutation remain
-blocked until the mount is enabled again.
+`restore_guard` is a field of the `config` record. It defaults to `false`, so
+it travels with snapshots like any other config. Initialization never detects
+a restore and never arms the guard; operators must fence destinations outside
+the restored storage before the plugin starts. Clearing an active guard,
+through `config/restore-guard/acknowledge` or `restore_guard=false`, rotates
+`identity/restore-epoch`, records `restore_guard_acknowledged_time`, and wakes
+event dispatch. Rotation does not rewrite remote ownership metadata or adopt
+remote objects. The procedure is in
+[Review a restore or clone](../../operate/restore-and-clone.md).
 
-## Replication Safety
+## Ownership checks
 
-Remote mutation is allowed on local mounts and on active nodes that are safe to
-own provider writes.
+Providers that store ownership metadata must write and verify enough state to
+distinguish the mount, source path, association, object, source version,
+payload hash, and restore epoch where supported. The contract is in
+[Provider contract](../provider-contract.md#ownership-metadata).
 
-Remote mutation is blocked on unsafe replication states, including performance
-secondary, performance standby, performance bootstrapping, DR secondary, and DR
-bootstrapping states.
+Providers refuse to overwrite a remote object owned by another mount,
+association, or restore epoch, or by an unmanaged owner, and return an
+`ownership` or `collision` error. The backend treats both as terminal: they
+never retry automatically and map to `REMOTE_OWNERSHIP_LOST` and `DRIFTED`.
+Background repair never selects these objects. Recovery is an operator
+action; see
+[Ownership and drift](../../concepts/ownership-and-drift.md#collisions-and-stale-objects).
 
-The same replication check protects periodic drift work, event dispatch, queue
-drain, and queued provider mutation.
+## Response diagnostics
 
-## Ownership Checks
+Responses carry `hint` and `next_actions` when the next operator action is
+known. `diagnostics.go` builds them. Each action has:
 
-Providers that can store ownership metadata must write and verify enough state
-to distinguish this mount, source path, association object, source version,
-payload hash, and restore epoch where supported.
+- `action`: a stable action name;
+- `operation`: the `bao` subcommand, such as `read` or `write`;
+- `path`: the mount-relative path;
+- `mutates_remote`: whether the action can mutate remote state;
+- `command`: a ready-to-run `bao` command for the request's mount;
+- `parameters`: suggested parameters, when any;
+- `force`: `true` when the command needs `-force`.
 
-The backend treats ownership loss as a terminal safety state. It does not
-overwrite a remote object that appears to belong to another mount, association,
-restore epoch, or unmanaged owner. Operators can remove or inspect the remote
-object, then run manual sync to recreate owned state from OpenBao.
+`errorResponseWithDiagnostic` keeps the OpenBao error shape. It appends the
+hint and the first action's command to the error text, so the CLI shows them,
+and puts the structured fields under `data`.
 
-## Response Diagnostics
-
-Responses use `hint` and `next_actions` when the next operator action is known.
-Diagnostic actions include:
-
-- action name;
-- OpenBao operation;
-- path;
-- suggested parameters;
-- force flag when the API path should be called with `-force`;
-- `mutates_remote` to distinguish read/status operations from remote mutation.
-
-Diagnostics are intentionally action-oriented. They should not repeat generic
-error text when the response can point to a concrete recovery command.
-
-Common diagnostics include:
-
-- already-enabled association update with no queued work;
-- disabled association;
-- disabled destination;
-- active restore guard;
-- disabled mount;
-- queue capacity exhaustion;
-- unsafe replication node;
-- remote missing;
-- remote drift;
-- remote ownership loss;
-- source sync enablement failure in hardened posture;
-- destination policy or validation failure.
+Builders exist for: already-enabled association update without enqueue,
+disabled association, active restore guard, disabled mount, unsafe
+replication node, queue capacity, validation failures (hardened source
+eligibility, unconstrained destination, disabled destination, and a generic
+plan action), and each sync state from status or reconcile. Diagnostics
+must point to a concrete next command instead of repeating generic error text.
+The user-facing table is in
+[Status and diagnostics](../../reference/status-and-diagnostics.md#hints-and-next-actions).
 
 ## Redaction
 
-Do not put source payload values, destination sensitive config, provider
-tokens, provider secret values, or unredacted provider request bodies into:
+Never put source payload values, sensitive destination config, provider
+tokens, provider secret values, or provider request or response bodies into:
 
-- status records;
-- queue records;
-- association records;
-- destination public records;
-- logs;
-- metrics;
-- hints;
-- `next_actions`;
-- reconcile responses;
-- plan responses.
+- status, queue, association, or public destination records;
+- logs or metrics;
+- `hint` or `next_actions`;
+- plan, reconcile, status, or queue responses.
 
-Source paths, resolved remote names, object IDs, source versions, payload
-hashes, and destination-native key names are operational metadata, not payload
-values. Keep them scoped to the documented plan, status, reconcile, queue, and
-audit surfaces, and never include the corresponding source values.
+Dispatch stores a fixed message such as `provider upsert failed` and the error
+class, never provider error text. Validation messages can include source
+paths, destination references, and resolved names.
 
-Redaction tests should cover every response path that reads provider state or
-includes failure context.
+Source paths, resolved remote names, object IDs, versions, payload hashes, and
+destination-native key names are operational metadata, not payload values.
+Keep them in the documented plan, status, reconcile, queue, and audit surfaces
+and never next to the corresponding values. Metric attribute rules are in
+[Observability internals](../observability.md).
+
+Add a redaction test for every new response path that reads provider state or
+includes failure context. `redaction_test.go` holds the current boundary
+tests.

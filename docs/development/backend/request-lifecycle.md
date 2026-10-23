@@ -1,185 +1,213 @@
-# Request Lifecycle
+---
+verifiedBy:
+  - internal/backend/backend.go
+  - internal/backend/write_locks.go
+  - internal/backend/storage_transactions.go
+  - internal/backend/existence_checks.go
+  - internal/backend/path_data.go
+  - internal/backend/path_versions.go
+  - internal/backend/path_metadata.go
+  - internal/backend/path_sources.go
+  - internal/backend/path_associations.go
+  - internal/backend/association_enqueue.go
+  - internal/backend/association_policy.go
+  - internal/backend/path_queue.go
+  - internal/backend/enqueue.go
+  - internal/payload/payload.go
+  - internal/backend/existence_checks_test.go
+  - internal/backend/storage_transactions_test.go
+---
 
-The logical backend is path-oriented. Each path handler validates request
-input, loads durable state, enforces local policy, and either returns local
-state or writes durable queue/status records. Provider calls happen only from
-dispatch and reconcile paths after the backend has resolved destination config
-and runtime identity.
+# Request lifecycle
 
-## Path Ownership
+Each path handler validates input, takes the locks it needs, checks local
+policy, and commits local records. Handlers never mutate remote state. The
+public path table is in [API reference](../../reference/api.md#paths).
 
-`backend.go` registers these path groups:
+## Request entry
 
-- `info`: defaults, registered providers, and provider capability summaries.
-- `config`: mount-wide security posture, pause, restore guard, queue capacity,
-  drift work, and event dispatch settings.
-- `destinations`: destination configuration, destination checks, provider
-  defaults, provider capabilities, and destination policy fields.
-- `associations`: association plan, create/update/read/list/delete, enable,
-  disable, and manual sync.
-- `metadata`: source metadata create/update/read/list/delete.
-- `sources`: source eligibility check and source sync enable/disable helpers.
-- `data`: source data create/update/read/delete.
-- `delete`, `undelete`, `destroy`: source version lifecycle mutations.
-- `status`: per-source sync status summary.
-- `reconcile`: manual provider read-state checks and local status refresh.
-- `queue`: queue summary, drain, read, retry, and cancel.
+`HandleRequest` runs `ensureRuntimeState` before every non-help request. A
+schema compatibility error becomes an error response before any handler runs.
+See [Storage model](storage-model.md#schema-state).
 
-Path code should stay close to the ownership above. Shared helpers belong in
-focused backend files only when multiple path groups depend on the same rule.
+## Locks
 
-## Create And Update ACL Classification
+`write_locks.go` uses striped `locksutil` locks keyed by:
 
-OpenBao calls the backend existence check before ACL evaluation for paths that
-advertise both create and update operations. The backend provides checks for
-source data, source metadata, destinations, and associations so OpenBao can
-require the capability that matches current storage state.
+- `source:<path>` for every source, metadata, version, source sync, and
+  association lifecycle mutation;
+- `association-name:<destination-ref>:<reservation>` for association writes
+  and deletes;
+- `destination:<destination-ref>` for destination writes and deletes, and for
+  association writes so a destination cannot be deleted while an association
+  for it is being created.
 
-- data and metadata exist when the normalized source path has a metadata
-  record;
-- destinations exist when their canonical destination record exists;
-- associations exist when the normalized destination and provider identity
-  selector matches one or more records at the source path.
+`lockWriteKeys` acquires the stripes for all keys in stripe order, once each,
+and releases them in reverse order.
 
-An ambiguous association selector is classified as existing. The association
-write then returns its normal ambiguity error after ACL evaluation, and a
-create-only token cannot use ambiguity to overwrite an existing record.
-Read-only or setup-read-only storage errors are treated as missing, following
-the native KV existence-check pattern; other storage errors fail the request.
+`enqueueMu` serializes queue mutations inside the process. Code that needs
+both acquires the striped locks first. Source writes, source deletes, and version
+mutations run through `withEnqueueMutationTransaction`: on storage that
+implements `logical.TransactionalStorage` the mutation runs in one native
+transaction without `enqueueMu`; otherwise it holds `enqueueMu` and writes
+keys in the order below. Association enqueue, queue retry and cancel, claims,
+commits, recovery, and terminal pruning hold `enqueueMu`.
 
-## HA Request Forwarding
+## Create and update classification
 
-OpenBao can serve read-only plugin requests from HA standbys. The `queue/drain`
-update operation is marked `ForwardPerformanceStandby`, which is the SDK's
-operation-level signal that OpenBao must forward the request to the active node
-before invoking the drain callback. This avoids dispatching against an
-eventually consistent standby queue view.
+OpenBao calls an existence check before ACL evaluation on paths that support
+both create and update. `existence_checks.go` reports:
 
-The backend replication guard remains in the callback and in periodic and
-event-triggered dispatch. Background work has no client request to forward, and
-remote mutation remains blocked on HA standbys, performance secondaries, DR
-secondaries, and replication bootstrapping states. The plugin does not enable
+- source data and metadata exist when `metadata/<path>` exists;
+- a destination exists when `destinations/<type>/<name>` exists;
+- an association exists when the destination and provider identity selector
+  matches one or more records at the source path.
+
+An ambiguous selector counts as existing, so a create-only token cannot use
+ambiguity to overwrite a record; the write then returns its ambiguity error. An
+invalid path or malformed selector counts as missing and fails validation in
+the handler. Read-only storage errors count as missing, as in the KV engine;
+other storage errors fail the request. User-facing capability rules are in
+[API reference](../../reference/api.md#create-and-update-capabilities).
+
+## HA request forwarding
+
+`queue/drain` sets `ForwardPerformanceStandby`, so OpenBao forwards it to the
+active node before the callback runs. This prevents dispatch against an
+eventually consistent standby view. The drain callback still runs the
+replication check, as do the periodic callback and event dispatch, because
+background work has no request to forward. The plugin does not enable
 `ForwardPerformanceSecondary` or `WriteForwardedStorage`.
 
-## Source Writes
+## Source writes
 
-Source data writes are KV-v2-like. A write creates a new version record and
-updates source metadata. The backend is not wire-compatible with the OpenBao
-KV-v2 engine, and source data is local to this plugin mount.
+`pathDataWrite` stores a new version and enqueues upserts in this order:
 
-Before committing a source write that can enqueue sync work, the backend:
+1. Normalize the source path and parse the payload.
+2. Acquire `source:<path>`.
+3. Open the enqueue mutation transaction.
+4. Load metadata, or start a new record with a new generation, and apply CAS.
+5. List enabled associations whose destination exists and is enabled.
+6. In hardened posture, check source eligibility. If it fails, drop all
+   associations from this write and keep the error for the response.
+7. Render concrete secret-key reservation names and reject conflicts with
+   other associations.
+8. Build `pending` upsert records for the next version.
+9. Find unclaimed queued upserts for older versions of the same association
+   objects.
+10. Check queue capacity, counting those stale upserts as replaced.
+11. Write associations whose concrete reservations changed.
+12. Write `enqueue_intent/<path>/<version>`, including the stale upsert IDs.
+13. Write the version record.
+14. Write metadata and prune excess versions.
+15. Delete the stale upserts.
+16. Write the outbox records.
+17. Delete the enqueue intent.
+18. Commit, release locks, and signal event dispatch when operations were
+    written.
 
-1. normalizes the source path;
-2. locks the source path;
-3. loads metadata and applies CAS rules;
-4. identifies enabled associations for the path;
-5. checks source eligibility in hardened posture;
-6. checks queue capacity;
-7. writes enqueue intent;
-8. writes source version and metadata;
-9. writes outbox records;
-10. clears completed enqueue intent;
-11. signals event dispatch when configured.
+A capacity error rejects the write before the version is stored. A hardened
+eligibility failure does not reject the write: the version is stored, nothing
+is enqueued, and the response reports `sync_state=VALIDATION_ERROR` with a
+`hint`. Steps 12 and 17 are skipped when there are no operations.
 
-If queue capacity is exhausted, the write fails before accepting the new source
-version.
+## Source lifecycle mutations
 
-## Source Lifecycle Mutations
+`delete`, `undelete`, and `destroy` run each requested version in its own
+enqueue mutation transaction. Only a mutation of the current version
+participates in sync:
 
-Current-version delete and destroy operations participate in sync. They cancel
-stale queued upserts and enqueue remote deletes for enabled associations using
-`delete_mode=delete`.
+- Delete or destroy of the current version removes every queued upsert for
+  that version and enqueues `delete` operations for enabled associations with
+  `delete_mode=delete`. A claimed upsert for that version rejects the request.
+- Undelete of a soft-deleted current version removes queued deletes for that
+  version and enqueues upserts for enabled associations. A claimed delete
+  rejects the request.
 
-Undeleting the current source version enqueues replacement upserts for enabled
-associations. Deleted or destroyed versions are not used for upsert recovery.
+Both use the same intent, version, metadata, cancel, outbox, intent-delete
+order as a source write, and both check capacity first. `DELETE data/<path>`
+soft-deletes the current version through the same plan.
 
-Metadata delete removes local source state only when no associations remain for
-the path. It deletes source versions, source metadata, and status records for
-that path.
+Metadata delete requires that no association exists for the path. It then
+deletes `failed_terminal` outbox records, versions, status, and metadata under
+`enqueueMu`.
 
-## Association Writes
+`sources/<path>/enable` sets `source_sync_enabled` and enqueues the current
+version for enabled associations. If enqueue fails, the metadata change is
+rolled back.
 
-An association links one source path to one destination. It defines:
+## Association writes
 
-- destination reference;
-- resolved remote name or name template;
-- granularity;
-- payload format;
-- destination-native data mapping;
-- delete mode;
-- enabled state.
+The association write handler:
 
-The API accepts the compact `destination=<type>/<name>` selector. The backend
-stores normalized destination type, destination name, and destination reference
-on the association record.
+1. Builds the record from request fields and the selected existing record,
+   normalizes provider config through the provider, and resolves names.
+2. Validates provider capabilities: granularity, format, data mapping, and
+   `delete_mode=delete` support.
+3. Rejects changes to identity fields of an existing record.
+4. Acquires `source:<path>`, the name reservation lock, and the destination
+   lock.
+5. Requires a live current source version, renders concrete reservations, and
+   rejects reservation conflicts.
+6. When the record is enabled, checks hardened source eligibility.
+7. Checks that the destination exists, is enabled, and allows the path and
+   every resolved name.
+8. Writes the record, then enqueues when needed.
 
-Enabled associations require source eligibility in hardened posture. Mounts
-default `security_posture=standard`; in hardened posture, eligibility requires
-source sync to be explicitly enabled.
+The write enqueues the current version when the record is enabled and is new,
+was disabled, or changed desired state. Desired state is `format`,
+`data_mapping`, `data_key_template`, or provider config, except the AWS
+delete recovery window. A desired-state change uses a salted operation ID. An
+enabled record with no desired-state change enqueues nothing and returns a
+manual sync `hint` and `next_actions`. User-facing update rules are in
+[Associations](../../configure/associations.md#update-an-association).
 
-The backend validates association requests against provider capabilities before
-it accepts them. Capability checks cover secret-path support, secret-key
-support, destination-native data mapping, owned delete support, and provider
-payload limits.
+`enable` runs the same eligibility, destination, and reservation checks, writes
+the enabled record, and enqueues the current version if the record was
+disabled. If enqueue fails after the record was written, the previous record
+is restored, or the new record is deleted, so an error never leaves an active
+association behind.
 
-Association records reserve the destination and remote-name identity they
-manage. This prevents two associations from managing the same remote object for
-the same destination.
+`disable` removes queued operations for the association, writes
+`enabled=false`, and writes `DISABLED` status for its objects. Association
+delete removes every outbox record for the association, in any state, then
+the record and its indexes. Both reject the request while an operation for
+the association is claimed. Neither enqueues a remote delete.
 
-## Association Activation And Sync
+Manual `sync` requires an enabled association, a live current version,
+eligibility, and destination policy, then enqueues the current version with a
+salted operation ID. It does not cancel other queued work. Provider mutation
+still happens later in dispatch.
 
-Association create and disabled-to-enabled transitions enqueue current source
-state when the association is enabled and the source has a live current
-version.
+## Destination policy enforcement
 
-Updating an already enabled association does not automatically enqueue sync
-work. The response includes a hint and `next_actions` entry for manual sync
-when the update did not enqueue work. This keeps updates explicit and avoids
-surprising remote mutation.
+`validateDestinationPolicyForObject` checks `allowed_source_path_prefixes`,
+`allowed_resolved_name_prefixes`, and, in hardened posture, that both lists
+are set. It runs during association plan, write, enable, and manual sync, in
+dispatch before each provider call, and in manual and periodic reconcile
+before each provider read. A tightened policy therefore blocks queued work and
+remote reads for objects it no longer allows. User-facing rules are in
+[Delegate to application owners](../../configure/delegate.md#constrain-destinations).
 
-Manual sync always targets the current source version. It enqueues durable
-work; provider mutation still happens later through the normal dispatch path.
-It is the operator path for retrying a current version, recovering after
-terminal status, recreating a missing remote object, or pushing after an
-association update.
+Disabled destinations stay readable and checkable. Source writes skip their
+associations, and dispatch fails their queued operations with a `validation`
+error.
 
-## Destination Policy
+## Payload construction
 
-Destinations can restrict source paths and remote names through:
+`buildCanonicalPayloadForObject` builds the provider payload from the source
+version:
 
-- `allowed_source_path_prefixes`
-- `allowed_resolved_name_prefixes`
+- `format=json` with `secret-path` encodes the whole data map as JSON.
+- `format=json` with `secret-key` encodes `{<key>: <value>}` for one key.
+- `format=raw` with `secret-key` sends the key's string or byte value as is.
+- `data_mapping=source-keys` with `secret-path` renders each key through
+  `data_key_template` and sends a key-to-bytes map; values must be strings or
+  bytes.
 
-The backend checks destination policy during:
-
-- association planning;
-- association activation;
-- manual association sync;
-- association enable;
-- queued dispatch.
-
-This means a tightened destination policy blocks already queued work before the
-provider mutates remote state.
-
-Disabled destinations remain readable and checkable, but they cannot be used
-for sync mutation until enabled again.
-
-## Payload Model
-
-The core backend builds canonical payloads before calling a provider.
-
-Supported payload forms are:
-
-- `format=json` with `granularity=secret-path`, which sends the whole source
-  data map as deterministic JSON;
-- `format=json` with `granularity=secret-key`, which sends one deterministic
-  JSON object per top-level source key;
-- `format=raw` with `granularity=secret-key`, which sends the selected source
-  key as raw string or byte data;
-- `data_mapping=source-keys` with `granularity=secret-path`, which maps
-  top-level source keys into destination-native data keys when the provider
-  advertises data-map support.
-
-The payload hash is computed over the exact bytes that the provider receives.
-Providers must not reformat the payload before writing it when they also store
-or compare the payload hash.
+JSON is encoded with sorted keys and without HTML escaping or a trailing
+newline. The hash is `sha256:` plus the hex digest of the payload bytes. For a
+data map, the payload bytes are the canonical JSON of the map, and the
+provider also receives the map itself. Providers that store or compare the
+hash must not reformat the payload bytes. Dispatch and reconcile reject a
+payload larger than the provider's `MaxPayloadBytes` with a `capacity` error.

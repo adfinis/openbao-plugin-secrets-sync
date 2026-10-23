@@ -13,15 +13,9 @@ Secrets Manager secrets, Kubernetes Secrets, or GitLab project variables.
 
 This repository is in preview and is not production-ready. Use it for local
 evaluation, design feedback, provider development, and controlled testing.
-
-The plugin requires the OpenBao `2.6.0` APIs. The preview qualification
-baseline is OpenBao `2.6.4` and GitLab CE `19.5.1`, as pinned in
-`.ci/versions.yaml`. OpenBao `2.5.x` is unsupported. Other server versions
-remain unqualified until their test lanes pass.
-
-Before a stable release, APIs, response fields, storage records, provider
-behavior, defaults, and operational guidance can change. Do not rely on preview
-builds as a compatibility or migration boundary.
+APIs, response fields, storage records, provider behavior, and defaults can
+change before a stable release. See [Compatibility](docs/reference/compatibility.md)
+for supported OpenBao versions.
 
 ## Current shape
 
@@ -46,18 +40,12 @@ The plugin supports:
 
 ## Start here
 
-- Choose the right document: [docs/README.md](docs/README.md)
-- Use the plugin locally: [docs/guides/user-guide.md](docs/guides/user-guide.md)
-- Configure a destination provider:
-  [docs/providers/README.md](docs/providers/README.md)
-- Understand source, sync, drift, and safety concepts:
-  [docs/concepts/README.md](docs/concepts/README.md)
-- Operate and troubleshoot it:
-  [docs/operations/operator-runbook.md](docs/operations/operator-runbook.md)
-- Review security posture and policy examples:
-  [docs/security/README.md](docs/security/README.md)
-- Add or review a provider:
-  [docs/development/provider-implementation.md](docs/development/provider-implementation.md)
+- [Install the plugin](docs/get-started/install.md)
+- [Sync your first secret](docs/get-started/first-sync.md)
+- [Configure a destination](docs/README.md#configure)
+- [Troubleshoot sync](docs/operate/troubleshoot.md)
+- [Review the threat model](docs/security/threat-model.md)
+- [All documentation](docs/README.md)
 
 ## Development
 

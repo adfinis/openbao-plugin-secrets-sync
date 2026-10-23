@@ -1,139 +1,79 @@
-# OpenBao Secret Sync docs
+# Secret Sync documentation
 
+Secret Sync stores source secrets in its own OpenBao mount and pushes them to
+external destinations through explicit associations. Start with
+[Sync your first secret](get-started/first-sync.md), then configure the
+destination you need.
 
-These docs describe how to use, operate, secure, and maintain
-`openbao-plugin-secrets-sync`. Documents in this tree describe maintained
-behavior and contracts.
+## Get started
 
-## Documentation shape
+- [Install the plugin](get-started/install.md): verify release artifacts,
+  register the plugin, and mount the engine.
+- [Sync your first secret](get-started/first-sync.md): write a source secret,
+  create an association, and confirm convergence.
 
-Use the root [README](../README.md) as the short project front door. Use this
-page when you need to choose the right detailed document.
+## Configure
 
-### Get started
+| Destination | Type | Remote object |
+| --- | --- | --- |
+| [AWS Secrets Manager](configure/aws-secrets-manager.md) | `aws-sm` | One secret per association |
+| [Kubernetes Secrets](configure/kubernetes-secrets.md) | `k8s` | One `Opaque` Secret per association |
+| [GitLab project variables](configure/gitlab-project-variables.md) | `gitlab` | One CI/CD variable per association object |
 
-- [Get started](getting-started/README.md) points to the shortest local
-  validation paths.
-- [User guide](guides/user-guide.md) shows the first-success workflow for
-  installing, writing source data, creating one association, and checking
-  status.
-- [Secret shapes](guides/secret-shapes.md) explains how source paths become
-  AWS, Kubernetes, or GitLab remote objects.
-- [Delegated use](guides/delegated-use.md) explains hardened posture,
-  source sync enablement, and destination prefix constraints.
-- [Provider guides](providers/README.md) explain destination-specific
-  configuration for AWS Secrets Manager, Kubernetes Secrets, and GitLab project
-  variables.
+- [Configure associations](configure/associations.md): choose a secret shape,
+  name remote objects, update associations, and choose a delete mode.
+- [Delegate to application owners](configure/delegate.md): enable hardened
+  posture, constrain destinations, and enable source sync.
+- [Runtime settings](configure/runtime.md): pause the mount, set queue capacity,
+  and enable drift detection or repair.
 
-### Understand the model
+## Operate
 
-- [Concepts](concepts/README.md) collects the shared model behind user,
-  provider, and operator docs.
-- [Source model](concepts/source-model.md) explains why Secret Sync stores
-  source data in its own mount and how its KV-v2-like source API behaves.
-- [Sync model](concepts/sync-model.md) explains source state, associations,
-  destination selectors, provider object shapes, and the main safety model.
-- [Convergence](concepts/convergence.md) explains queued operations,
-  `sync_operation_ids`, event dispatch, `queue/drain`, status states, manual
-  sync, retry, and cancel.
-- [Reconcile and drift](concepts/reconcile-and-drift.md) explains reconcile
-  plan versus apply, background detect versus repair, verification, restore
-  guard behavior, and disabled behavior.
-- [Ownership and safety](concepts/ownership-and-safety.md) explains remote
-  ownership metadata, restore identity, drift, collisions, and safe recovery.
-- [Templating](concepts/templating.md) explains how `resolved_name`,
-  `name_template`, and `data_key_template` turn source paths and keys into
-  provider object names.
+- [Troubleshoot sync](operate/troubleshoot.md): diagnose blocked or failed sync
+  and manage queued operations.
+- [Review a restore or clone](operate/restore-and-clone.md): fence destinations
+  and review state before remote mutation resumes.
+- [Monitor sync](operate/monitor.md): poll queue, status, and readiness APIs.
 
-### Operate the plugin
+## Security
 
-- [Operations](operations/README.md) collects operator-facing procedures.
-- [Runtime configuration](operations/runtime-configuration.md) explains
-  mount-wide security posture, pause, restore guard, queue capacity, drift
-  work, and dispatch tuning.
-- [Operator runbook](operations/operator-runbook.md) gives operational checks,
-  troubleshooting flows, restore-guard handling, and failure response guidance.
-- [Observability](operations/observability.md) describes current inspection APIs,
-  the internal metric vocabulary, and the preview's lack of metric export.
-- [Install and verify release artifacts](operations/install-and-verify.md)
-  describes artifact verification and plugin installation.
-- [Restore and clone review](operations/restore-and-clone.md) describes the
-  restore guard review workflow before remote mutation resumes.
+- [Threat model](security/threat-model.md): assets, threats, authorization
+  boundaries, and implemented controls.
+- [Policy examples](security/policies.md): OpenBao policies for operator,
+  application, delegated-owner, and auditor roles.
 
-### Review security
+## Reference
 
-- [Security](security/README.md) collects security-facing documents.
-- [Security model](security/security-model.md) records the threat model,
-  authorization shape, redaction rules, restore safety, packaging, and
-  operational requirements.
-- [Policy examples](security/policies.md) provides OpenBao policy snippets for
-  common operator, app, delegated-owner, and auditor roles.
+- [API reference](reference/api.md): paths, source write forms, KV-v2
+  differences, and pagination.
+- [Status and diagnostics](reference/status-and-diagnostics.md): sync states,
+  queue states, error classes, and `next_actions`.
+- [Compatibility](reference/compatibility.md): supported OpenBao versions and
+  preview stability.
 
-### Build or review implementation
+## Concepts
 
-- [Development](development/README.md) collects implementation-facing
-  documents.
-- [Architecture](development/architecture.md) explains the plugin boundary,
-  component model, provider boundary, and consistency model.
-- [Backend](development/backend/README.md) explains backend storage, request
-  lifecycles, queueing, background work, safety gates, and diagnostics.
-- [Provider contract](development/provider-contract.md) defines the provider
-  interface, capability model, payload rules, ownership behavior, and
-  conformance expectations.
-- [Provider implementation guide](development/provider-implementation.md)
-  explains the practical steps and review checklist for adding a provider.
-- [Release engineering](development/release-engineering.md) describes the
-  maintainer release automation and artifact workflow.
-- [Testing and hardening](development/testing.md) defines unit, contract, model,
-  fuzz, e2e, and security test lanes.
-- [Documentation style](development/documentation-style.md) defines the
-  project documentation style baseline.
+- [Sync model](concepts/sync-model.md): source data, associations, and
+  asynchronous convergence.
+- [Ownership and drift](concepts/ownership-and-drift.md): ownership metadata,
+  reconcile, drift repair, and mutation gates.
 
-### Inspect references
+## Development
 
-- [Reference](reference/README.md) collects API and compatibility references.
-- [API surface](reference/api-surface.md) explains the Secret Sync API path
-  groups and conceptual contract.
-- [API compatibility](reference/api-compatibility.md) explains the KV-v2-like
-  source API claim and the intentional differences.
-- [Generated API inspection](reference/api/README.md) explains how to inspect
-  the OpenAPI document generated by OpenBao from the mounted backend.
-
-### Run provider e2e tests
-
-- [LocalStack e2e workflow](../test/e2e/localstack/README.md) covers AWS
-  Secrets Manager behavior against LocalStack.
-- [OpenBao lifecycle resilience e2e workflow](../test/e2e/resilience/README.md)
-  covers durable three-node Raft storage, static seal self-unseal, HA failover,
-  queued work, status persistence across OpenBao restart, and operator seal
-  recovery.
-- [Kind e2e workflow](../test/e2e/kind/README.md) covers Kubernetes Secrets
-  behavior in a disposable kind cluster.
-- [GitLab e2e workflow](../test/e2e/gitlab/README.md) covers GitLab project
-  variables in a Dockerized GitLab CE stack.
-- [Manual AWS e2e workflow](../test/e2e/aws/README.md) covers opt-in real AWS
-  testing with OpenTofu-managed IAM fixtures.
-
-## Documentation maintenance
-
-When behavior changes, update docs at the same ownership level as the code:
-
-- First-success workflow changes: update the user guide.
-- Source-model, source-shape, templating, ownership, or provider-object
-  changes: update secret shapes, provider guides, concepts, and the sync model
-  when the mental model changes.
-- Runtime, queue, convergence, drift, reconcile, restore, or dispatch changes:
-  update runtime configuration, concepts, and the runbook when recovery behavior
-  changes.
-- Delegated authorization, security posture, or source sync changes: update
-  delegated use, security policy examples, and the security model.
-- Provider configuration, naming, ownership, or capability changes: update the
-  affected provider guide.
-- Provider interface or capability changes: update the provider contract and
-  provider implementation guide.
-- Redaction changes: update security, testing, concepts, and the affected
-  response documentation.
-- New hardening evidence: update testing and the affected development or
-  operations document.
-- Documentation wording or structure changes: follow the project
-  [documentation style](development/documentation-style.md).
+- [Architecture](development/architecture.md): plugin boundary, components, and
+  code map.
+- Backend internals: [storage model](development/backend/storage-model.md),
+  [request lifecycle](development/backend/request-lifecycle.md),
+  [queue and dispatch](development/backend/queue-and-dispatch.md),
+  [reconcile and drift](development/backend/reconcile-and-drift.md), and
+  [safety and diagnostics](development/backend/safety-and-diagnostics.md).
+- [Provider contract](development/provider-contract.md) and
+  [Implement a provider](development/provider-implementation.md).
+- [Testing](development/testing.md): local gates, test lanes, and evidence by
+  change type.
+- [Release engineering](development/release-engineering.md): release approval,
+  signing, and artifact workflow.
+- [Observability internals](development/observability.md): metric instruments
+  and attribute policy.
+- [Documentation standard](development/documentation-style.md): how to write and
+  verify these docs.

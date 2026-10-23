@@ -1,134 +1,124 @@
+---
+verifiedBy:
+  - internal/backend/backend.go
+  - internal/backend/path_data.go
+  - internal/backend/path_versions.go
+  - internal/backend/path_associations.go
+  - internal/backend/enqueue.go
+  - internal/backend/association_enqueue.go
+  - internal/backend/dispatcher.go
+  - internal/backend/event_dispatch.go
+  - internal/backend/path_queue.go
+  - internal/backend/recovery.go
+  - internal/backend/storage_status.go
+  - internal/backend/redaction_test.go
+---
+
 # Sync model
 
-OpenBao Secret Sync separates desired state, queued remote work, and observed
-remote state. This separation keeps source writes local and durable while still
-making remote convergence visible to operators.
+Secret Sync pushes source data that lives in its own mount to external
+destinations. A request changes local state right away. Destinations converge
+later, through a durable queue.
 
-## Desired local state
+## Source data lives in the mount
 
-OpenBao stores source data in the plugin mount under `data/<path>` and
-`metadata/<path>`. Each source write creates a local source version. Source reads
-return source payloads; operational responses such as plan, queue, status, and
-reconcile must not expose source payload values.
+Secret Sync syncs only source data written to its own mount under
+`data/<path>`. It cannot read or mirror secrets from other OpenBao mounts, such
+as an existing KV-v2 engine.
 
-Use [Source model](source-model.md) for the own-mount source boundary,
-KV-v2-like behavior, source metadata, and source lifecycle semantics.
+This is an OpenBao plugin boundary. A secrets engine plugin receives a storage
+view scoped to its own mount and only the requests routed to its own paths. It
+cannot observe writes to other mounts. To sync a value, write it to
+`secret-sync/data/<path>` and create an association for that path.
 
-Destinations store provider configuration and sensitive provider credentials.
-Sensitive destination fields are seal-wrapped and redacted on reads.
+The source API is KV-v2-like: each write creates a version, and source metadata
+controls version retention, check-and-set, and custom metadata. The
+[API reference](../reference/api.md#source-write-forms) owns write forms and
+KV-v2 differences.
 
-Associations connect one source path to one destination. They define the remote
-object shape: destination reference, remote name template, granularity, payload
-format, data mapping, provider-specific object settings, delete behavior, and
-enabled state. Connection and credential settings remain destination-owned;
-settings that may differ per remote object are association-owned.
+Source values appear only in source reads and in provider requests. Plan,
+queue, status, and reconcile responses never contain them.
 
-## Secret shapes
+## Associations connect sources to destinations
 
-An association shape answers two questions: how many remote objects are written,
-and how the source payload is encoded for those objects.
+An association connects one source path to one destination, addressed as
+`<type>/<name>`. The association decides how the source becomes remote
+objects: secret shape, remote name, provider object settings, delete mode, and
+enabled state. The destination holds connection settings and credentials.
+[Configure associations](../configure/associations.md) owns shapes, naming,
+selection, and delete modes.
 
-| Shape | Remote result | Common fit |
+Only enabled associations on enabled destinations produce remote work. In
+hardened posture, the source path also needs source sync enabled; see
+[Enable source sync](../configure/delegate.md#enable-source-sync).
+
+## Accepted is not synced
+
+A successful request means OpenBao stored the local change and durably queued
+any remote work it needs. It does not mean the destination has the new value.
+
+These requests return the queued operation IDs in `sync_operation_ids`:
+
+- source writes and `DELETE data/<path>`, inside the response `metadata`
+  object next to `sync_state`;
+- association create, enable, and `associations/<path>/sync`;
+- `sources/<path>/enable`.
+
+The version paths `delete/<path>`, `undelete/<path>`, and `destroy/<path>`
+also queue work when they change the current version, but they return no IDs.
+
+An empty `sync_operation_ids` list is not always an error. For example,
+updating an association that is already enabled queues nothing and returns a
+`hint` to run manual sync.
+
+The plugin checks queue capacity before it accepts a change. If the work does
+not fit, the request fails and the new source version or association change is
+not stored. In hardened posture without source sync enabled, a source write
+stores the version, queues nothing, and returns `sync_state=VALIDATION_ERROR`
+with a hint.
+
+Use `status/<path>` as convergence evidence. Successful operations are removed
+from the queue, so their IDs stop resolving. [Status and
+diagnostics](../reference/status-and-diagnostics.md) defines every state and
+what `SYNCED` proves.
+
+## Dispatch paths
+
+Three paths run the same dispatcher over the same queue. Each one claims a due
+operation, rechecks the [mutation gates](ownership-and-drift.md#mutation-gates),
+calls the provider, and writes per-object status. None of them makes an API
+response wait for the provider.
+
+| Path | Runs when | Operations per pass |
 | --- | --- | --- |
-| `secret-path`, `format=json`, `data_mapping=payload` | One remote object containing the full canonical JSON source payload. | AWS Secrets Manager and simple Kubernetes Secrets. |
-| `secret-path`, `format=json`, `data_mapping=source-keys` | One remote object whose native data keys come from top-level source keys. | Kubernetes Secrets where applications read individual `.data` keys. |
-| `secret-key`, `format=raw` | One remote object per top-level source key, using the raw source value. | GitLab CI/CD variables. |
-| `secret-key`, `format=json` | One remote object per top-level source key, with each value wrapped as canonical JSON. | Provider-specific cases where separate objects should still carry JSON. |
+| Event dispatch | A request queued work, a queue operation was retried, a config write resumed dispatch, or a `retry_wait` operation became due. | `event_dispatch_max_operations` (default 16). Another pass runs while a pass reaches the limit. |
+| Periodic dispatch | OpenBao calls the mount's periodic function. | 100 |
+| `queue/drain` | An operator calls it. | `max_operations` (default 100) |
 
-Provider capabilities decide which shapes are valid. AWS supports only the
-first shape. Kubernetes supports the first shape and `source-keys` data mapping.
-GitLab supports both granularities and both `json` and `raw` formats, but
-`secret-key` with `format=raw` is the normal CI/CD variable shape.
+Event dispatch only lowers latency. Wakeups are coalesced and best-effort.
+Periodic dispatch is the recovery path for missed wakeups, restarts, and writes
+that were interrupted after recording their enqueue intent. Each path recovers
+such incomplete intents before it dispatches. To turn event dispatch off, see
+[Tune event dispatch](../configure/runtime.md#tune-event-dispatch).
 
-`raw` payloads and `source-keys` data maps require source values that can be
-represented as bytes, such as strings. JSON shapes can carry structured source
-values because the plugin renders canonical JSON before dispatch.
+`queue/drain` can mutate destinations, so restrict it to operators. It returns
+an error with a hint when the mount is disabled, the restore guard is active,
+or the node is in an unsafe replication state.
 
-## Association selectors
+## Ordering
 
-Use `destination=<type>/<name>` as the normal selector for association create,
-update, plan, disable, enable, and manual sync workflows. This selector matches
-the way operators think about the target provider and avoids copying opaque
-association IDs for common lifecycle work.
+Ordering is guaranteed per association object. Newer source state wins:
 
-Association IDs still exist. They are stable identifiers in responses and are
-used for exact association read/delete routes and rare ambiguity cases. Treat
-ID-addressed lifecycle routes as an escape hatch, not the normal workflow.
+- a source write replaces older queued upserts for the same object, unless a
+  dispatcher has already claimed them;
+- dispatch drops an upsert whose version is older than the current source
+  version;
+- a status write for an older version than the stored status is ignored;
+- providers that read ownership metadata refuse a write when the remote object
+  carries a newer source version, with error class `drift`.
 
-Some providers add an identity component. GitLab `environment_scope`, for
-example, allows one destination and resolved variable key to have separate
-associations per scope. Include provider identity fields when selecting among
-multiple associations for the same destination, and use the association ID for
-lifecycle operations when destination selection is ambiguous.
+Operations for different objects or destinations have no ordering guarantee.
 
-## Naming Templates
-
-Associations use `resolved_name`, `name_template`, and sometimes
-`data_key_template` to turn source paths and source keys into provider object
-names. The current template model is literal placeholder replacement, not a
-function language. Use [Templating](templating.md) for the exact placeholders,
-provider constraints, and reservation behavior.
-
-## Asynchronous remote mutation
-
-Requests that need provider mutation enqueue durable outbox operations and
-return `sync_operation_ids`. A successful write means OpenBao accepted desired
-local state and queued remote work where required. It does not mean the provider
-has already converged.
-
-Event-triggered dispatch, periodic dispatch, and `queue/drain` all process the
-same durable queue. Use [Convergence](convergence.md) for queued operation
-states, `sync_operation_ids`, event dispatch, manual sync, retry, cancel,
-drain, and status-state recovery.
-
-## Status and reconcile
-
-Status is the primary convergence view. `status/<path>` reports queued work,
-per-object state, last operation identifiers, error class, remote version, drift
-timestamps, and repair counters.
-
-Reconcile reads provider remote state and compares it with desired OpenBao
-state. Reconcile plan is read-only and does not update local status. Reconcile
-apply updates local status records but does not write destination secrets.
-
-Background drift detection uses the same read-state behavior. In `detect` mode,
-it refreshes status only. In `repair` mode, it also enqueues normal outbox
-upserts for owned `DRIFTED` objects.
-
-Use [Reconcile and drift](reconcile-and-drift.md) for plan versus apply,
-verification, background drift modes, repair eligibility, restore guard
-behavior, and disabled behavior.
-
-## Ownership and safety
-
-Providers attach ownership metadata to remote objects. Owned updates and deletes
-require matching metadata. If ownership cannot be proven, providers return an
-ownership error instead of overwriting remote state.
-
-An active restore guard blocks remote mutation until an operator reviews
-destination state and acknowledges the guard. The plugin does not detect
-restore or cloning; external fencing is required before startup. Follow
-[Restore and clone review](../operations/restore-and-clone.md).
-Mount-wide `disabled=true` also gates new background provider work and remote
-mutation dispatch. These settings do not cancel provider calls already in
-progress. Manual reconcile remains
-available because it only reads provider state and updates local status.
-
-Use [Ownership and safety](ownership-and-safety.md) for ownership metadata,
-restore identity, drift, collisions, stale remote objects, and recovery rules.
-
-## Diagnostics
-
-Blocked or terminal responses include a human-readable `hint` and may include
-structured `next_actions`. Follow `next_actions` before inventing recovery
-commands. Typical actions include:
-
-- acknowledge restore guard after restore review;
-- enable a source path when hardened posture blocks sync;
-- inspect queue/config when queue capacity is exhausted;
-- run manual association sync after resolving remote missing, drifted, or
-  ownership-lost state.
-
-OpenBao error responses keep the normal error shape. Diagnostic fields are
-nested under error `data` so clients can still recognize the response as an
-error.
+To push the current source version after a recovery, run manual sync instead of
+retrying an old operation. Dispatch drops a retried upsert that a newer source
+version has superseded.

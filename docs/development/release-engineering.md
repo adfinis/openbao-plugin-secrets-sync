@@ -1,16 +1,35 @@
+---
+verifiedBy:
+  - .github/workflows/release-please.yml
+  - .github/workflows/release-pr-gate.yml
+  - .github/workflows/release-review-event.yml
+  - .github/workflows/release-tag.yml
+  - .github/workflows/release.yml
+  - .github/workflows/release-public-key.yml
+  - .github/workflows/ci.yml
+  - .github/release-signing-keys.asc
+  - hack/ci
+  - mk/build.mk
+  - mk/config.mk
+  - mk/e2e.mk
+  - .ci/versions.yaml
+  - Dockerfile.oci-plugin
+  - release-please-config.json
+---
+
 # Release engineering
 
-This document describes the maintainer release workflow for
-`openbao-plugin-secrets-sync`. Use
-[Install and verify release artifacts](../operations/install-and-verify.md)
-for operator-facing artifact verification and plugin installation.
+Maintainers release `openbao-plugin-secrets-sync` through separate readiness,
+approval, tagging, artifact, and publication steps. Operators verify and
+install the result with
+[Verify release artifacts](../get-started/install.md#verify-release-artifacts).
 
 ## Release shape
 
 Release Please manages changelog and version bumps through
 `.release-please-manifest.json` and `CHANGELOG.md`. It opens release PRs only.
-Signed tag creation, draft GitHub Release creation, and release artifact
-dispatch are handled by the dedicated release-tag workflow.
+The release-tag workflow creates the signed tag and the draft GitHub Release,
+and dispatches the artifact workflow.
 
 The release artifact workflow builds Linux plugin binaries for:
 
@@ -33,9 +52,8 @@ checksums.txt.bundle
 provenance-index.json
 ```
 
-The release artifact workflow attaches these artifacts to the matching draft
-GitHub Release. The draft must already exist before artifacts are built. It
-also publishes a multi-platform OCI plugin distribution image to:
+The artifact workflow attaches these files to the matching draft GitHub
+Release and publishes a multi-platform OCI plugin distribution image to:
 
 ```text
 ghcr.io/adfinis/openbao-plugin-secrets-sync:v<version>
@@ -137,9 +155,10 @@ The release process separates release readiness, approval, and publication:
 2. `.github/workflows/release-pr-gate.yml` publishes the `Release Readiness`
    commit status on the exact PR head. Ordinary PRs pass without release
    approval. Release PRs must use the same-repository
-   `release-please--branches--main` branch, update both release metadata files,
-   and be ready for review. They require `release:ready` and current-head
-   approval from `OPENBAO_SECRET_SYNC_RELEASE_REQUIRED_APPROVER`.
+   `release-please--branches--main` branch, update both `CHANGELOG.md` and
+   `.release-please-manifest.json`, and be ready for review. They require the
+   `release:ready` label and current-head approval from the account named by
+   the `OPENBAO_SECRET_SYNC_RELEASE_REQUIRED_APPROVER` repository variable.
 3. `.github/workflows/release-tag.yml` inspects the merged candidate without
    signing secrets or GitHub writes. It reports the version, PR head, and merge
    commit before requesting approval through the protected `release-manual`
@@ -166,12 +185,14 @@ The evaluator job has a separate name so a job check does not collide with the
 commit-status context.
 
 The evaluator uses protected-branch tooling and reads PR metadata only. It does
-not execute PR code. A permissionless review-event notifier wakes the trusted
+not execute PR code. The permissionless
+`.github/workflows/release-review-event.yml` notifier wakes the trusted
 default-branch workflow, which resolves the live canonical release PR through
-the GitHub API. It reads no artifacts or event-provided commands. Label removal,
-review dismissal, changes requested, draft conversion, and source updates trigger reevaluation. Comments do not revoke an
-approval; a later dismissal or changes-requested review does. Approval on an
-older head does not qualify. API failures prevent a successful decision.
+the GitHub API. It reads no artifacts or event-provided commands. Label
+removal, review dismissal, changes requested, draft conversion, and source
+updates trigger reevaluation. Comments do not revoke an approval; a later
+dismissal or changes-requested review does. Approval on an older head does not
+qualify. API failures prevent a successful decision.
 Metadata events are asynchronous; a status is not an atomic lock on labels or
 reviews. The review consumer resolves GitHub-associated release heads before its
 serialized status writer marks them pending and performs live validation.
@@ -271,8 +292,9 @@ The workflow:
 - checks the tagged release manifest version and, for automatic dispatch,
   the expected commit;
 - checks out the verified commit ID for the build;
-- runs release source gates: lint, vulnerability checks, license checks,
-  filesystem scan, unit tests, race tests, and fuzz smoke tests;
+- runs release source gates (`make lint-ci security-ci test test-race fuzz`):
+  lint, vulnerability checks, license checks, filesystem scan, unit tests,
+  race tests, and fuzz smoke tests;
 - requires the matching GitHub Release to already exist and be a draft;
 - builds release binaries with deterministic build metadata derived from the
   tagged commit;
@@ -282,7 +304,9 @@ The workflow:
 - writes a reproducibility report and includes it in `checksums.txt`;
 - generates and verifies `checksums.txt`;
 - registers and mounts the built release binary in OpenBao and runs the
-  self-contained LocalStack smoke test;
+  self-contained LocalStack smoke test (`make test-e2e-release-localstack`);
+- runs the OCI plugin download smoke test against the release binary
+  (`make test-e2e-oci-release-localstack`);
 - publishes a minimal multi-platform OCI plugin image to GHCR using the
   `v`-prefixed OpenBao plugin version as the image tag;
 - scans, signs, and verifies the OCI plugin image by digest;
@@ -296,7 +320,8 @@ The workflow:
 - writes `provenance-index.json` with release identity, checksum evidence,
   binary assets, SBOMs, reproducibility status, OCI image digest, and
   attestation availability;
-- uploads the files as workflow artifacts;
+- uploads the files as the `release-plugin-artifacts-<version>` workflow
+  artifact;
 - uploads the files to the matching GitHub Release without replacing
   conflicting existing assets;
 - refuses to add missing assets to an already published release.
@@ -309,13 +334,14 @@ publishing:
 
 1. Verify the signed tag points to the release PR merge commit.
 2. Confirm the release workflow, source gates, LocalStack release-binary smoke
-   test, OCI e2e, image scan, reproducibility check, and upload steps passed.
+   test, OCI release smoke test, image scan, reproducibility check, and upload
+   steps passed.
 3. Compare the draft assets with `provenance-index.json`; confirm both binaries,
    both SBOMs, the license report, reproducibility report, checksums, signature
    bundle, and provenance index are present.
 4. Verify `checksums.txt`, its cosign bundle, the public build-provenance
    attestations, and the OCI image signature and attestation using
-   [Install and verify release artifacts](../operations/install-and-verify.md).
+   [Verify release artifacts](../get-started/install.md#verify-release-artifacts).
 5. Review the curated and generated release notes, and confirm preview releases
    are marked as prereleases.
 
