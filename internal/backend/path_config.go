@@ -155,13 +155,7 @@ func (b *secretSyncBackend) pathConfigWrite(
 		if cfg.RestoreGuard {
 			cfg.RestoreGuardAcknowledgedTime = ""
 		} else {
-			now := nowUTC().Format(timeFormatRFC3339)
-			cfg.RestoreGuardAcknowledgedTime = now
-			if previousRestoreGuard {
-				if _, err := rotateRestoreEpoch(ctx, req.Storage, now); err != nil {
-					return nil, err
-				}
-			}
+			cfg.RestoreGuardAcknowledgedTime = nowUTC().Format(timeFormatRFC3339)
 		}
 	}
 	if value, ok := data.GetOk("queue_capacity"); ok {
@@ -181,7 +175,7 @@ func (b *secretSyncBackend) pathConfigWrite(
 		return logical.ErrorResponse(err.Error()), nil
 	}
 	cfg.UpdatedTime = nowUTC().Format(timeFormatRFC3339)
-	if err := putGlobalConfig(ctx, req.Storage, cfg); err != nil {
+	if _, err := commitGlobalConfig(ctx, req.Storage, cfg, previousRestoreGuard && !cfg.RestoreGuard); err != nil {
 		return nil, err
 	}
 	b.observer.RestoreGuardActive(ctx, cfg.RestoreGuard)
@@ -291,21 +285,42 @@ func (b *secretSyncBackend) pathConfigRestoreGuardAcknowledgeWrite(
 		return nil, err
 	}
 	now := nowUTC().Format(timeFormatRFC3339)
-	if cfg.RestoreGuard {
-		state.RestoreEpoch, err = rotateRestoreEpoch(ctx, req.Storage, now)
-		if err != nil {
-			return nil, err
-		}
-	}
+	rotateEpoch := cfg.RestoreGuard
 	cfg.RestoreGuard = false
 	cfg.RestoreGuardAcknowledgedTime = now
 	cfg.UpdatedTime = now
-	if err := putGlobalConfig(ctx, req.Storage, cfg); err != nil {
+	epoch, err := commitGlobalConfig(ctx, req.Storage, cfg, rotateEpoch)
+	if err != nil {
 		return nil, err
+	}
+	if rotateEpoch {
+		state.RestoreEpoch = epoch
 	}
 	b.observer.RestoreGuardActive(ctx, cfg.RestoreGuard)
 	b.signalEventDispatch()
 	return &logical.Response{Data: configResponse(mountUUID, state, cfg)}, nil
+}
+
+func commitGlobalConfig(
+	ctx context.Context,
+	storage logical.Storage,
+	cfg globalConfig,
+	rotateEpoch bool,
+) (restoreEpochRecord, error) {
+	var epoch restoreEpochRecord
+	err := logical.WithTransaction(ctx, storage, func(storage logical.Storage) error {
+		// Without native transactions, write the epoch first so an epoch write
+		// failure cannot clear the restore guard.
+		if rotateEpoch {
+			var err error
+			epoch, err = rotateRestoreEpoch(ctx, storage, cfg.UpdatedTime)
+			if err != nil {
+				return err
+			}
+		}
+		return putGlobalConfig(ctx, storage, cfg)
+	})
+	return epoch, err
 }
 
 func putGlobalConfig(ctx context.Context, storage logical.Storage, cfg globalConfig) error {
