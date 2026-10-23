@@ -276,8 +276,8 @@ func TestCoreStateModelProviderFailureInvariants(t *testing.T) {
 			}
 			if testCase.retryable {
 				assertFutureNotBefore(t, operation.NotBefore)
-				if operation.ClaimOwner != "" || operation.ClaimExpiresTime != "" || operation.ClaimAttempt != 0 {
-					t.Fatalf("claim fields after retryable failure = %#v, want cleared", operation)
+				if operation.ClaimOwner != "" || operation.ClaimExpiresTime != "" || operation.ClaimAttempt != 1 {
+					t.Fatalf("claim fields after retryable failure = %#v, want released lease and retained attempt", operation)
 				}
 			} else if operation.NotBefore != "" {
 				t.Fatalf("not_before = %q, want empty for terminal failure", operation.NotBefore)

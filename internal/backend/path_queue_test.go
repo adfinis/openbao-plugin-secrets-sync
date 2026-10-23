@@ -372,8 +372,8 @@ func TestQueueDrainClearsClaimAfterRetryableFailure(t *testing.T) {
 
 	env.runPeriodicAllowed("periodic")
 	operation := assertOutboxOperation(t, env.storage, operationID, 1, outboxStateRetryWait)
-	if operation.ClaimOwner != "" || operation.ClaimExpiresTime != "" || operation.ClaimAttempt != 0 {
-		t.Fatalf("claim fields after retryable failure = %#v, want cleared", operation)
+	if operation.ClaimOwner != "" || operation.ClaimExpiresTime != "" || operation.ClaimAttempt != 1 {
+		t.Fatalf("claim fields after retryable failure = %#v, want released lease and retained attempt", operation)
 	}
 }
 

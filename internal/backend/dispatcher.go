@@ -195,7 +195,7 @@ func isOutboxClaimActive(record outboxRecord, now time.Time) bool {
 func clearOutboxClaim(record *outboxRecord) {
 	record.ClaimOwner = ""
 	record.ClaimExpiresTime = ""
-	record.ClaimAttempt = 0
+	// Keep the attempt generation so a later claim cannot match a stale worker.
 }
 
 func isSupportedOperation(record outboxRecord) bool {
@@ -1078,6 +1078,7 @@ func outboxClaimMatches(current *outboxRecord, claimed outboxRecord) bool {
 	return current != nil &&
 		claimed.ClaimOwner != "" &&
 		current.ClaimOwner == claimed.ClaimOwner &&
+		current.ClaimExpiresTime == claimed.ClaimExpiresTime &&
 		current.ClaimAttempt == claimed.ClaimAttempt
 }
 

@@ -10,6 +10,7 @@ verifiedBy:
   - internal/backend/storage_outbox.go
   - internal/backend/storage_status.go
   - internal/backend/dispatcher.go
+  - internal/backend/association_enqueue.go
   - internal/backend/backend.go
   - internal/backend/diagnostics.go
   - internal/backend/diagnostics_test.go
@@ -85,7 +86,10 @@ update. A missing `queue/<operation-id>` record therefore proves nothing; read
 Operation records include `trigger` (`user` or `drift-repair`), `attempts`,
 `not_before`, and claim fields. A dispatcher claims an operation with a
 five-minute lease. Retry and cancel reject an operation with an active claim.
-An expired claim can be claimed again.
+An expired claim can be claimed again. Re-enqueueing an existing queued
+operation preserves its claim, attempt count, and retry schedule. The claim
+attempt number increases across retries so an earlier worker cannot complete
+a later claim.
 
 `bao read secret-sync/queue` returns `pending`, `retry_wait`, `claimed`,
 `terminal`, `oldest_age_seconds`, `capacity`, and `utilization`. Only
