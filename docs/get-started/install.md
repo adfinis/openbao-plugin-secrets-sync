@@ -37,15 +37,15 @@ Each GitHub release contains these artifacts:
 | `go-licenses-report.csv` | Dependency license report. |
 | `reproducibility-report.md` | Result of the independent rebuild comparison. |
 | `checksums.txt`, `checksums.txt.bundle` | SHA-256 checksums and their keyless cosign signature bundle. |
-| `provenance-index.json` | Index of assets, checksums, attestations, and the OCI image digest. |
+| `provenance-index.json`, `provenance-index.json.bundle` | Index of assets, checksums, attestations, and the OCI image digest, with its keyless cosign signature bundle. |
 
 `<version>` is the release tag without a `v` prefix, for example
 `0.1.0-preview.1`. The plugin catalog version and the OCI image tag use the
 `v` prefix.
 
 1. Download the binary for your platform, `checksums.txt`,
-   `checksums.txt.bundle`, and `provenance-index.json` from the release into an
-   empty directory.
+   `checksums.txt.bundle`, `provenance-index.json`, and
+   `provenance-index.json.bundle` from the release into an empty directory.
 
 2. Set the release and the expected signer identity. The release workflow runs
    on `main`, so its certificate identity ends in `@refs/heads/main`:
@@ -77,9 +77,31 @@ Each GitHub release contains these artifacts:
    shasum -a 256 -c --ignore-missing checksums.txt
    ```
 
-   Each downloaded file reports `OK`.
+   Each downloaded artifact listed in `checksums.txt` reports `OK`. The index
+   and signature bundles are verified separately.
 
-5. Verify the build provenance attestation for the binary:
+5. Verify the index before using its release metadata or OCI image digest:
+
+   ```sh
+   cosign verify-blob \
+     --new-bundle-format=true \
+     --bundle provenance-index.json.bundle \
+     --certificate-identity "${WORKFLOW_IDENTITY}" \
+     --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+     provenance-index.json
+
+   gh attestation verify ./provenance-index.json \
+     --repo "${REPO}" \
+     --signer-workflow "${REPO}/.github/workflows/release.yml" \
+     --source-ref "${WORKFLOW_REF}" \
+     --cert-oidc-issuer https://token.actions.githubusercontent.com \
+     --deny-self-hosted-runners
+   ```
+
+   Stop if either verification fails. The index has a separate signature
+   because it records the checksum file and its signature bundle.
+
+6. Verify the build provenance attestation for the binary:
 
    ```sh
    gh attestation verify "./openbao-plugin-secrets-sync_${VERSION}_linux_${ARCH}" \
@@ -129,7 +151,7 @@ for `linux/amd64` and `linux/arm64`. The image is an extraction artifact for
 OpenBao, not a service container. It contains only the static plugin binary at
 `/openbao-plugin-secrets-sync`.
 
-1. Complete steps 1 to 4 of [Verify release artifacts](#verify-release-artifacts),
+1. Complete steps 1 to 5 of [Verify release artifacts](#verify-release-artifacts),
    using the binary for the platform OpenBao runs on.
 
 2. Read the image digest from the provenance index:

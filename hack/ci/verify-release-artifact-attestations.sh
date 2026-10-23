@@ -6,6 +6,7 @@ set -euo pipefail
 : "${VERSION:?VERSION is required}"
 
 CHECKSUMS_PATH="${CHECKSUMS_PATH:-dist/release/checksums.txt}"
+INDEX_PATH="${INDEX_PATH:-dist/release/provenance-index.json}"
 SIGNER_WORKFLOW="${SIGNER_WORKFLOW:-${REPO}/.github/workflows/release.yml}"
 SOURCE_REF="${SOURCE_REF:-refs/heads/main}"
 CERT_OIDC_ISSUER="${CERT_OIDC_ISSUER:-https://token.actions.githubusercontent.com}"
@@ -14,6 +15,10 @@ RETRY_SECONDS="${RETRY_SECONDS:-6}"
 
 if [[ ! -f "${CHECKSUMS_PATH}" ]]; then
   echo "checksums file not found: ${CHECKSUMS_PATH}" >&2
+  exit 1
+fi
+if [[ ! -f "${INDEX_PATH}" ]]; then
+  echo "provenance index not found: ${INDEX_PATH}" >&2
   exit 1
 fi
 
@@ -50,3 +55,5 @@ while read -r _ name; do
     verify_file_subject "${path}"
   fi
 done < "${CHECKSUMS_PATH}"
+
+verify_file_subject "${INDEX_PATH}"
