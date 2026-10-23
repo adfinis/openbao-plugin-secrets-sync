@@ -181,7 +181,7 @@ func TestEventDispatchSkipsUnsafeReplicationNode(t *testing.T) {
 
 func newEventDispatchTestEnv(t *testing.T, config *logical.BackendConfig) *backendTestEnv {
 	t.Helper()
-	env := newBackendTestEnv(t)
+	env, _ := newTransactionalBackendTestEnv(t)
 	if config == nil {
 		config = &logical.BackendConfig{}
 	}

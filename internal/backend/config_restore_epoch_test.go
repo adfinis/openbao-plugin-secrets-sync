@@ -3,12 +3,43 @@ package backend
 import (
 	"context"
 	"errors"
+	"net/http"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/openbao/openbao/sdk/v2/logical"
 	"github.com/openbao/openbao/sdk/v2/physical"
 )
+
+func TestRestoreGuardTransitionRequiresTransactions(t *testing.T) {
+	for _, path := range []string{configPath, "config/restore-guard/acknowledge"} {
+		t.Run(path, func(t *testing.T) {
+			env := newBackendTestEnv(t)
+			env.read(configPath)
+			rearmRestoreGuard(t, env)
+			before := snapshotLogicalStorage(t, env.storage)
+			dispatchCh := captureEventDispatchSignals(t, env.b)
+			_, err := env.b.HandleRequest(context.Background(), &logical.Request{
+				Operation: logical.UpdateOperation, Path: path, Storage: env.storage,
+				Data: map[string]interface{}{"restore_guard": false, "disabled": true, "queue_capacity": 42},
+			})
+			var coded logical.HTTPCodedError
+			if !errors.As(err, &coded) || coded.Code() != http.StatusBadRequest ||
+				!strings.Contains(err.Error(), "requires transactional storage") {
+				t.Fatalf("config error = %v, want transactional storage requirement with HTTP 400", err)
+			}
+			if !reflect.DeepEqual(snapshotLogicalStorage(t, env.storage), before) {
+				t.Fatal("rejected guard transition changed persistent state")
+			}
+			select {
+			case <-dispatchCh:
+				t.Fatal("rejected guard transition signaled event dispatch")
+			default:
+			}
+		})
+	}
+}
 
 func TestRejectedConfigWritePreservesRestoreEpoch(t *testing.T) {
 	invalidFields := map[string]interface{}{
@@ -35,6 +66,58 @@ func TestRejectedConfigWritePreservesRestoreEpoch(t *testing.T) {
 			select {
 			case <-dispatchCh:
 				t.Fatal("rejected config write signaled event dispatch")
+			default:
+			}
+		})
+	}
+}
+
+func TestInactiveRestoreGuardDoesNotRequireTransactions(t *testing.T) {
+	for _, path := range []string{configPath, "config/restore-guard/acknowledge"} {
+		t.Run(path, func(t *testing.T) {
+			env := newBackendTestEnv(t)
+			before := env.read(configPath).Data["restore_epoch"]
+			response := env.update(path, map[string]interface{}{"restore_guard": false})
+			if response != nil {
+				assertNoErrorResponse(t, response)
+			}
+			assertResponseValue(t, env.read(configPath), "restore_epoch", before)
+			rearmRestoreGuard(t, env)
+			response = env.update(configPath, map[string]interface{}{"queue_capacity": 42, "disabled": true})
+			if response != nil {
+				assertNoErrorResponse(t, response)
+			}
+			after := env.read(configPath)
+			assertResponseValue(t, after, "restore_guard", true)
+			assertResponseValue(t, after, "queue_capacity", 42)
+			assertResponseValue(t, after, "disabled", true)
+			assertResponseValue(t, after, "restore_epoch", before)
+		})
+	}
+}
+
+func TestRestoreGuardTransitionPropagatesTransactionBeginFailure(t *testing.T) {
+	for _, path := range []string{configPath, "config/restore-guard/acknowledge"} {
+		t.Run(path, func(t *testing.T) {
+			env, transactional := newTransactionalBackendTestEnv(t)
+			env.read(configPath)
+			rearmRestoreGuard(t, env)
+			before := snapshotLogicalStorage(t, env.storage)
+			dispatchCh := captureEventDispatchSignals(t, env.b)
+			_, err := env.b.HandleRequest(context.Background(), &logical.Request{
+				Operation: logical.UpdateOperation, Path: path,
+				Storage: beginFailureTransactionalStorage{TransactionalStorage: transactional},
+				Data:    map[string]interface{}{"restore_guard": false},
+			})
+			if !errors.Is(err, errInjectedTransactionBegin) {
+				t.Fatalf("config error = %v, want transaction begin failure", err)
+			}
+			if !reflect.DeepEqual(snapshotLogicalStorage(t, env.storage), before) {
+				t.Fatal("failed transaction begin changed persistent state")
+			}
+			select {
+			case <-dispatchCh:
+				t.Fatal("failed transaction begin signaled event dispatch")
 			default:
 			}
 		})
@@ -70,7 +153,7 @@ func TestRestoreGuardTransitionRollsBackFailedTransaction(t *testing.T) {
 }
 
 func TestConfigWriteRotatesRestoreEpochOnce(t *testing.T) {
-	env := newBackendTestEnv(t)
+	env, _ := newTransactionalBackendTestEnv(t)
 	before := env.read(configPath).Data["restore_epoch"]
 	rearmRestoreGuard(t, env)
 	write := func() {
@@ -94,12 +177,12 @@ func TestRestoreGuardStorageFailureKeepsGuardActive(t *testing.T) {
 	for _, path := range []string{configPath, "config/restore-guard/acknowledge"} {
 		for _, key := range []string{restoreEpochKey, configPath} {
 			t.Run(path+"/"+key, func(t *testing.T) {
-				env := newBackendTestEnv(t)
+				env, transactional := newTransactionalBackendTestEnv(t)
 				before := env.read(configPath).Data["restore_epoch"]
 				rearmRestoreGuard(t, env)
 				_, err := env.b.HandleRequest(context.Background(), &logical.Request{
 					Operation: logical.UpdateOperation, Path: path,
-					Storage: configWriteFailureStorage{Storage: env.storage, key: key},
+					Storage: configWriteFailureStorage{TransactionalStorage: transactional, key: key},
 					Data:    map[string]interface{}{"restore_guard": false},
 				})
 				if !errors.Is(err, errConfigWriteFailure) {
@@ -107,9 +190,7 @@ func TestRestoreGuardStorageFailureKeepsGuardActive(t *testing.T) {
 				}
 				after := env.read(configPath)
 				assertResponseValue(t, after, "restore_guard", true)
-				if key == restoreEpochKey {
-					assertResponseValue(t, after, "restore_epoch", before)
-				}
+				assertResponseValue(t, after, "restore_epoch", before)
 			})
 		}
 	}
@@ -118,15 +199,28 @@ func TestRestoreGuardStorageFailureKeepsGuardActive(t *testing.T) {
 var errConfigWriteFailure = errors.New("injected config write failure")
 
 type configWriteFailureStorage struct {
-	logical.Storage
+	logical.TransactionalStorage
 	key string
 }
 
-func (storage configWriteFailureStorage) Put(ctx context.Context, entry *logical.StorageEntry) error {
+func (storage configWriteFailureStorage) BeginTx(ctx context.Context) (logical.Transaction, error) {
+	tx, err := storage.TransactionalStorage.BeginTx(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return configWriteFailureTransaction{Transaction: tx, key: storage.key}, nil
+}
+
+type configWriteFailureTransaction struct {
+	logical.Transaction
+	key string
+}
+
+func (storage configWriteFailureTransaction) Put(ctx context.Context, entry *logical.StorageEntry) error {
 	if entry.Key == storage.key {
 		return errConfigWriteFailure
 	}
-	return storage.Storage.Put(ctx, entry)
+	return storage.Transaction.Put(ctx, entry)
 }
 
 func rearmRestoreGuard(t *testing.T, env *backendTestEnv) {

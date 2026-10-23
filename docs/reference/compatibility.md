@@ -35,6 +35,19 @@ local lane uses LocalStack, described in
 [the LocalStack e2e README](../../test/e2e/localstack/README.md). Other server
 versions are unqualified until their test lanes pass.
 
+## Storage transactions
+
+Clearing an active restore guard requires `logical.TransactionalStorage` at
+runtime. The plugin checks the storage interface supplied by OpenBao. It does
+not infer transaction support from the server version or backend name.
+
+OpenBao 2.6.4 exposes transactions for Raft and PostgreSQL storage, and for
+ordinary in-memory development storage unless transactions are disabled.
+The deprecated `file` backend does not expose transactions. A mount without
+transactions can arm its restore guard but cannot clear it. Use transactional
+storage before relying on the restore acknowledgement workflow. See
+[Review a restore or clone](../operate/restore-and-clone.md#resume-remote-mutation).
+
 ## Preview stability
 
 Before a stable release, APIs, response fields, storage records, provider

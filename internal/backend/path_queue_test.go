@@ -398,7 +398,7 @@ func TestQueueDrainSkipsFutureRetryWaitOperation(t *testing.T) {
 }
 
 func TestQueueDrainHonorsRestoreGuard(t *testing.T) {
-	env := newBackendTestEnv(t)
+	env, _ := newTransactionalBackendTestEnv(t)
 
 	env.writeAppDBSecret("initial")
 	env.createFakeDestination("default")

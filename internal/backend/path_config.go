@@ -3,6 +3,7 @@ package backend
 import (
 	"context"
 	"fmt"
+	"net/http"
 	"time"
 
 	"github.com/openbao/openbao/sdk/v2/framework"
@@ -308,9 +309,14 @@ func commitGlobalConfig(
 	rotateEpoch bool,
 ) (restoreEpochRecord, error) {
 	var epoch restoreEpochRecord
+	if rotateEpoch {
+		if _, ok := storage.(logical.TransactionalStorage); !ok {
+			return epoch, logical.CodedError(http.StatusBadRequest,
+				"clearing an active restore guard requires transactional storage; "+
+					"use an OpenBao storage backend that exposes transactions")
+		}
+	}
 	err := logical.WithTransaction(ctx, storage, func(storage logical.Storage) error {
-		// Without native transactions, write the epoch first so an epoch write
-		// failure cannot clear the restore guard.
 		if rotateEpoch {
 			var err error
 			epoch, err = rotateRestoreEpoch(ctx, storage, cfg.UpdatedTime)
