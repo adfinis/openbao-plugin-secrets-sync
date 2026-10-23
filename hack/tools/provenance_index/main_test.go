@@ -62,6 +62,7 @@ func TestBuildIndex(t *testing.T) {
 	}
 
 	assertEqual(t, "plugin version", idx.Release.PluginVersion, "v0.1.0")
+	assertEqual(t, "source ref", idx.Release.SourceRef, "refs/heads/main")
 	assertEqual(t, "generated_at_utc", idx.Release.GeneratedAtUTC, "2024-01-01T00:00:00Z")
 	assertEqual(t, "assets length", len(idx.Assets), 3)
 	assertEqual(t, "first asset", idx.Assets[0].Name, filepath.Base(binaryPath))

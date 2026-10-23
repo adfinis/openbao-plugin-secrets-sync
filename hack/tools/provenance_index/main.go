@@ -305,7 +305,7 @@ func effectiveSourceRef(cfg config) string {
 	if cfg.releaseSourceRef != "" {
 		return cfg.releaseSourceRef
 	}
-	return "refs/tags/" + cfg.version
+	return "refs/heads/main"
 }
 
 func effectiveReleaseWorkflow(cfg config) string {

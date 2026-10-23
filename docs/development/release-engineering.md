@@ -50,6 +50,7 @@ reproducibility-report.md
 checksums.txt
 checksums.txt.bundle
 provenance-index.json
+provenance-index.json.bundle
 ```
 
 The artifact workflow attaches these files to the matching draft GitHub
@@ -144,6 +145,15 @@ REPO=adfinis/openbao-plugin-secrets-sync OWNER=adfinis \
   SOURCE_DATE_EPOCH="${SOURCE_DATE_EPOCH}" \
   bash hack/ci/generate-provenance-index.sh
 ```
+
+`release.source_ref` records the attestation source ref, which defaults to
+`refs/heads/main`. `release.version` records the release tag. Set
+`RELEASE_SOURCE_REF` when generating evidence for another source ref.
+
+The index hashes `checksums.txt` and its signature bundle, so it cannot be
+included in those checksums. The release workflow signs the completed index
+separately as `provenance-index.json.bundle` and attests it as a separate
+subject. Verify that signature before using the index.
 
 ## Release flow
 
@@ -311,8 +321,8 @@ The workflow:
   `v`-prefixed OpenBao plugin version as the image tag;
 - scans, signs, and verifies the OCI plugin image by digest;
 - signs `checksums.txt` with a keyless cosign signature bundle;
-- creates GitHub build-provenance attestations for `checksums.txt` and the
-  release binaries on public repositories;
+- creates GitHub build-provenance attestations for `checksums.txt`, the
+  release binaries, and `provenance-index.json` on public repositories;
 - creates a registry-pushed provenance attestation for the OCI plugin image on
   public repositories;
 - verifies checksum signatures, public-repository artifact attestations, and
@@ -320,6 +330,7 @@ The workflow:
 - writes `provenance-index.json` with release identity, checksum evidence,
   binary assets, SBOMs, reproducibility status, OCI image digest, and
   attestation availability;
+- signs and verifies the index separately before upload;
 - uploads the files as the `release-plugin-artifacts-<version>` workflow
   artifact;
 - uploads the files to the matching GitHub Release without replacing
@@ -338,8 +349,8 @@ publishing:
    steps passed.
 3. Compare the draft assets with `provenance-index.json`; confirm both binaries,
    both SBOMs, the license report, reproducibility report, checksums, signature
-   bundle, and provenance index are present.
-4. Verify `checksums.txt`, its cosign bundle, the public build-provenance
+   bundles, and provenance index are present.
+4. Verify `checksums.txt`, the index, their cosign bundles, the public build-provenance
    attestations, and the OCI image signature and attestation using
    [Verify release artifacts](../get-started/install.md#verify-release-artifacts).
 5. Review the curated and generated release notes, and confirm preview releases

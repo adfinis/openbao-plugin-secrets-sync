@@ -33,6 +33,7 @@ type releaseControlJob struct {
 	Env   map[string]string `yaml:"env"`
 	Steps []struct {
 		Name string            `yaml:"name"`
+		If   string            `yaml:"if"`
 		Run  string            `yaml:"run"`
 		Uses string            `yaml:"uses"`
 		With map[string]string `yaml:"with"`
