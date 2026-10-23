@@ -181,6 +181,11 @@ Do not acknowledge the guard yet.
     `restore_epoch`. Writing `restore_guard=false` to `config` on a guarded
     mount has the same effect.
 
+    Config validation errors do not rotate the epoch. When storage supports
+    transactions, the epoch and config update commit together. Without
+    transactions, a config storage failure can leave the guard active with a
+    rotated epoch. Read `config` after a storage error before retrying.
+
     Acknowledgement rotates the restore epoch but does not update ownership
     metadata on existing remote objects. Objects written under the previous
     epoch can then report `REMOTE_OWNERSHIP_LOST`, and the plugin does not
