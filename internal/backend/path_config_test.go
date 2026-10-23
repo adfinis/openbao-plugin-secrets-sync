@@ -331,7 +331,7 @@ func TestConfigWriteValidatesDriftRepair(t *testing.T) {
 }
 
 func TestConfigRestoreGuardAcknowledge(t *testing.T) {
-	env := newBackendTestEnv(t)
+	env, _ := newTransactionalBackendTestEnv(t)
 
 	initialResp := env.read(configPath)
 	assertNoErrorResponse(t, initialResp)

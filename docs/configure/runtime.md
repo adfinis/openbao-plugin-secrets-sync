@@ -47,6 +47,12 @@ The integer fields have no upper bound. A config read also returns read-only
 fields: `restore_guard_acknowledged_time`, `restore_epoch`, `mount_uuid`,
 `storage_schema_version`, and `storage_schema_min_compatible_version`.
 
+Clearing an active `restore_guard` requires storage that exposes OpenBao's
+transaction API. This applies to both `restore_guard=false` and
+`config/restore-guard/acknowledge`. Without transactions, the request fails
+with HTTP 400 and leaves the epoch and config unchanged. Arming the guard and
+updating other config fields remain available.
+
 > [!WARNING]
 > The plugin does not detect restore or cloning. `restore_guard` and `disabled`
 > are restored with the snapshot, so neither guarantees that a restored or

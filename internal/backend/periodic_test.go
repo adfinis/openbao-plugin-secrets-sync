@@ -125,7 +125,7 @@ func TestPeriodicDropsUnsupportedOutboxOperation(t *testing.T) {
 }
 
 func TestPeriodicHonorsRestoreGuard(t *testing.T) {
-	env := newBackendTestEnv(t)
+	env, _ := newTransactionalBackendTestEnv(t)
 
 	env.writeAppDBSecret("initial")
 	env.createFakeDestination("default")
