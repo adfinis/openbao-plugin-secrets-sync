@@ -6,7 +6,7 @@ project:
   binary: openbao-plugin-secrets-sync
 
 toolchain:
-  go: "1.26.10"
+  go: "1.26.11"
   taskRunner: make
   qualityTools:
     actionlint: "1.7.11"
