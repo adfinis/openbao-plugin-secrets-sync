@@ -25,7 +25,7 @@ The preview qualification baseline is pinned in
 
 | Component | Qualified version |
 | --- | --- |
-| OpenBao | `2.6.4` |
+| OpenBao | `2.7.1` |
 | GitLab CE | `19.5.1` |
 | Kubernetes | `kindest/node:v1.35.0`, created with kind `v0.31.0` |
 
@@ -86,8 +86,7 @@ reproduces the server-side failure described above on both OpenBao 2.6.4 and
 2.7.1.
 
 These results cover the tested patch version and storage setups. The default
-CI baseline remains OpenBao 2.6.4; OpenBao 2.7.1 is an additional manual
-validation target.
+CI baseline is OpenBao 2.7.1. PostgreSQL storage remains unqualified.
 
 ## Preview stability
 
