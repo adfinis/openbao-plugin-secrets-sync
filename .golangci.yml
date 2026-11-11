@@ -29,6 +29,9 @@ linters:
     - unused
 
   settings:
+    goconst:
+      # Preserve the contexts checked before the Go 1.27 toolchain upgrade.
+      exclude-types: [Call, CompositeLit]
     dupl:
       threshold: 120
     forbidigo:

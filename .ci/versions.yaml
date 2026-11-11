@@ -6,16 +6,16 @@ project:
   binary: openbao-plugin-secrets-sync
 
 toolchain:
-  go: "1.26.11"
+  go: "1.27.4"
   taskRunner: make
   qualityTools:
     actionlint: "1.7.11"
     buildx: "0.31.1"
     gofumpt: "0.9.2"
     staticcheck: "0.7.0"
-    govulncheck: "1.2.0"
+    govulncheck: "1.9.0"
     semgrep: "1.157.0"
-    golangciLint: "2.11.4"
+    golangciLint: "2.14.0"
     goLicenses: "2.0.1"
     trivy: "0.69.3"
     cosign: "3.0.4"
