@@ -13,7 +13,7 @@ The GitLab fixture is opt-in for ordinary PRs and required for preview
 qualification. Record the candidate commit, resolved images, and server
 versions with the test results.
 
-The default GitLab image is pinned to `gitlab/gitlab-ce:19.5.1-ce.0` with a
+The default GitLab image is pinned to `gitlab/gitlab-ce:19.5.3-ce.0` with a
 manifest digest for repeatability. Override `E2E_GITLAB_IMAGE` when testing
 GitLab upgrades.
 
@@ -57,6 +57,16 @@ preview qualification.
 ```sh
 E2E_GITLAB_CONFIRM=1 make test-e2e-gitlab
 ```
+
+To run the same self-contained fixture on GitHub Actions, dispatch CI with the
+GitLab input enabled:
+
+```sh
+gh workflow run ci.yml --ref BRANCH -f gitlab=true
+```
+
+Replace `BRANCH` with the candidate branch. The opt-in `GitLab E2E` job uses
+the pinned fixture images. It does not contact an external GitLab instance.
 
 The default host ports are:
 

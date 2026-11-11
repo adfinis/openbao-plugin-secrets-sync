@@ -26,7 +26,7 @@ The preview qualification baseline is pinned in
 | Component | Qualified version |
 | --- | --- |
 | OpenBao | `2.7.1` |
-| GitLab CE | `19.5.1` |
+| GitLab CE | `19.5.3` |
 | Kubernetes | `kindest/node:v1.35.0`, created with kind `v0.31.0` |
 
 The end-to-end lanes in [`mk/e2e.mk`](../../mk/e2e.mk) run against these
