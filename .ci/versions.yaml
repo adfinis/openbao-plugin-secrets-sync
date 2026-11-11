@@ -35,9 +35,9 @@ toolchain:
 
 validation:
   openbao:
-    primary: "2.6.4"
-    image: ghcr.io/openbao/openbao:2.6.4@sha256:cf2340fc9a22cb9358ca0defd1f39b65673836bd23fe2bb8984a07e11fe13ef4
-    imageDigest: sha256:cf2340fc9a22cb9358ca0defd1f39b65673836bd23fe2bb8984a07e11fe13ef4
+    primary: "2.7.1"
+    image: ghcr.io/openbao/openbao:2.7.1@sha256:6d2b93856e3fcf7b18ad855a0b51eaba474dc8b79cf554379ea32034797d2acf
+    imageDigest: sha256:6d2b93856e3fcf7b18ad855a0b51eaba474dc8b79cf554379ea32034797d2acf
     digestStatus: pinned
   gitlab:
     primary: "19.5.1"
