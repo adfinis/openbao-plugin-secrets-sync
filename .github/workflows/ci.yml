@@ -7,6 +7,12 @@ on:
     branches:
       - main
   workflow_dispatch:
+    inputs:
+      gitlab:
+        description: Run the self-contained GitLab fixture tests
+        required: false
+        default: false
+        type: boolean
 
 permissions:
   contents: read
@@ -168,6 +174,24 @@ jobs:
 
       - name: Verify cosign executes
         run: cosign version
+
+  gitlab-e2e:
+    name: GitLab E2E
+    if: github.event_name == 'workflow_dispatch' && inputs.gitlab
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Setup repo tools
+        uses: ./.github/actions/setup-repo-tools
+        with:
+          cache-tools: "false"
+          bootstrap-tools: "false"
+
+      - name: Run self-contained GitLab e2e
+        run: make test-e2e-gitlab E2E_GITLAB_CONFIRM=1
 
   core:
     name: Core Quality
