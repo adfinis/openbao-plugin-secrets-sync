@@ -204,7 +204,13 @@ func TestExportReleasePublicKey(t *testing.T) {
 	exportEnv := append(env, "PUBLIC_KEY_DIR="+outDir, "OPENBAO_SECRET_SYNC_RELEASE_TAG_GPG_PRIVATE_KEY="+private)
 	runReleaseCommand(t, "", exportEnv, "", "bash", script)
 	public := readTestFile(t, filepath.Join(outDir, "release-signing-keys.asc"))
-	if public != keys[0].public || strings.Contains(public, "PRIVATE KEY") {
+	// Verify the public key, identities, and signing subkeys without requiring
+	// a particular ASCII armor representation.
+	keyInfo := func(material string) string {
+		return runReleaseCommand(t, "", env, material, "gpg", "--no-options", "--batch",
+			"--with-colons", "--with-fingerprint", "--with-subkey-fingerprint", "--show-keys")
+	}
+	if keyInfo(public) != keyInfo(keys[0].public) || strings.Contains(public, "PRIVATE KEY") {
 		t.Fatal("export did not contain only the expected public key")
 	}
 	if got := strings.TrimSpace(readTestFile(t, filepath.Join(outDir, "fingerprint.txt"))); got != keys[0].fingerprint {
