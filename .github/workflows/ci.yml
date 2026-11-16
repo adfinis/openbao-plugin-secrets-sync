@@ -228,6 +228,8 @@ jobs:
       - localstack-e2e
       - kind-e2e
       - resilience-e2e
+      - gitlab-e2e
+      - oci-e2e
     steps:
       - name: Validate required CI graph
         env:
@@ -238,6 +240,10 @@ jobs:
           LOCALSTACK_E2E: ${{ needs.localstack-e2e.result }}
           KIND_E2E: ${{ needs.kind-e2e.result }}
           RESILIENCE_E2E: ${{ needs.resilience-e2e.result }}
+          GITLAB_E2E: ${{ needs.gitlab-e2e.result }}
+          GITLAB_REQUESTED: ${{ github.event_name == 'workflow_dispatch' && inputs.gitlab }}
+          OCI_E2E: ${{ needs.oci-e2e.result }}
+          OCI_REQUESTED: ${{ github.event_name == 'workflow_dispatch' && inputs.oci }}
         run: |
           set -euo pipefail
 
@@ -259,6 +265,13 @@ jobs:
           kind-e2e=${KIND_E2E}
           resilience-e2e=${RESILIENCE_E2E}
           EOF
+
+          if [ "${GITLAB_REQUESTED}" = "true" ] && [ "${GITLAB_E2E}" != "success" ]; then
+            failures+=("gitlab-e2e:${GITLAB_E2E}")
+          fi
+          if [ "${OCI_REQUESTED}" = "true" ] && [ "${OCI_E2E}" != "success" ]; then
+            failures+=("oci-e2e:${OCI_E2E}")
+          fi
 
           if [ "${#failures[@]}" -gt 0 ]; then
             printf 'Required CI graph failures:\n' >&2

@@ -25,6 +25,7 @@ gh workflow run ci.yml --ref BRANCH -f oci=true
 Replace `BRANCH` with the branch to qualify. The job uses a disposable registry
 on the runner. It does not run the release workflow or push to the project
 registry.
+When selected, the OCI lane must pass before `Core Quality` passes.
 
 The default host ports are:
 
