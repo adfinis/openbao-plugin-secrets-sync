@@ -23,9 +23,9 @@ OpenBao `2.5.x` is unsupported.
 The preview qualification baseline is pinned in
 [`.ci/versions.yaml`](../../.ci/versions.yaml) under `validation`:
 
-| Component | Qualified version |
+| Component | Fixture version |
 | --- | --- |
-| OpenBao | `2.7.1` |
+| OpenBao | `2.7.2` |
 | GitLab CE | `19.5.3` |
 | Kubernetes | `kindest/node:v1.35.0`, created with kind `v0.31.0` |
 
@@ -57,9 +57,9 @@ See [OpenBao issue #4176](https://github.com/openbao/openbao/issues/4176).
 The fix is merged in
 [OpenBao PR #4177](https://github.com/openbao/openbao/pull/4177) and backported
 to `release/2.7.x` in
-[PR #4248](https://github.com/openbao/openbao/pull/4248), but is absent from
-2.7.1. Validate a server release containing the fix before qualifying
-PostgreSQL storage.
+[PR #4248](https://github.com/openbao/openbao/pull/4248).
+[OpenBao 2.7.2](https://github.com/openbao/openbao/releases/tag/v2.7.2) includes
+the fix. PostgreSQL storage still requires separate Secret Sync qualification.
 
 ## Additional server validation
 
@@ -86,7 +86,8 @@ reproduces the server-side failure described above on both OpenBao 2.6.4 and
 2.7.1.
 
 These results cover the tested patch version and storage setups. The default
-CI baseline is OpenBao 2.7.1. PostgreSQL storage remains unqualified.
+CI fixture baseline is OpenBao 2.7.2. The dated 2.7.1 results above do not
+qualify PostgreSQL storage.
 
 ## Preview stability
 
