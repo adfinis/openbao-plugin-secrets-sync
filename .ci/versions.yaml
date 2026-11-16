@@ -30,7 +30,7 @@ toolchain:
     aquasecurity/setup-trivy: 81e514348e19b6112ce2a7e3ecbafe19c1e1f567
     docker/setup-buildx-action: f87e5991a6d7451dcb8d9637bfbc97413f497069
     googleapis/release-please-action: 45996ed1f6d02564a971a2fa1b5860e934307cf7
-    kineticcafe/actions-dco: 5f160e3ee086af8fc0fb567b8add0937d074123e
+    kineticcafe/actions-dco: a52e56727ec21d6cdba26513826e1ae4a752d2fc
     sigstore/cosign-installer: 756fe2d284c7292c4e9b62c8a28f1e5629c59532
 
 validation:
