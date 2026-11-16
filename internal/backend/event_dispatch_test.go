@@ -89,6 +89,18 @@ func TestEventDispatchWakesWhenRetryBecomesDue(t *testing.T) {
 	if got := operation.Attempts; got != 1 {
 		t.Fatalf("attempts = %d, want 1", got)
 	}
+	// The outbox retry state is written before the failure status. Wait for
+	// both writes before asserting status or scheduling the next attempt.
+	waitForCondition(t, "initial retry failure status", func() bool {
+		status, err := getStatus(
+			context.Background(), env.storage, operation.Path, operation.AssociationID, operation.ObjectID,
+		)
+		if err != nil {
+			t.Fatalf("read retry failure status: %v", err)
+		}
+		return status != nil && status.LastOperationID == operationID &&
+			status.LastErrorClass == string(providers.ErrorClassUnavailable)
+	})
 	assertStatusObjectErrorClass(t, env.b, env.storage, providers.ErrorClassUnavailable)
 
 	operation.NotBefore = time.Now().UTC().Add(50 * time.Millisecond).Format(timeFormatRFC3339)
