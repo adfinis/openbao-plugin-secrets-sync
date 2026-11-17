@@ -13,7 +13,7 @@ The GitLab fixture is opt-in for ordinary PRs and required for preview
 qualification. Record the candidate commit, resolved images, and server
 versions with the test results.
 
-The default GitLab image is pinned to `gitlab/gitlab-ce:19.5.3-ce.0` with a
+The default GitLab image is pinned to `gitlab/gitlab-ce:19.5.5-ce.0` with a
 manifest digest for repeatability. Override `E2E_GITLAB_IMAGE` when testing
 GitLab upgrades.
 
