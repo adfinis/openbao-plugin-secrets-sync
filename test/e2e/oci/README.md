@@ -16,6 +16,17 @@ assertions used by the normal LocalStack e2e lane.
 make test-e2e-oci-localstack
 ```
 
+To run this lane on a hosted CI runner without publishing project artifacts:
+
+```sh
+gh workflow run ci.yml --ref BRANCH -f oci=true
+```
+
+Replace `BRANCH` with the branch to qualify. The job uses a disposable registry
+on the runner. It does not run the release workflow or push to the project
+registry.
+When selected, the OCI lane must pass before `Core Quality` passes.
+
 The default host ports are:
 
 - OpenBao: `127.0.0.1:18204`
