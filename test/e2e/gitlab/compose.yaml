@@ -1,6 +1,6 @@
 services:
   gitlab:
-    image: ${E2E_GITLAB_IMAGE:-gitlab/gitlab-ce:19.5.5-ce.0@sha256:392e6bd5bf118ae520e4038261a5ae39aea05de0d2299a162b4c822a9684cf9b}
+    image: ${E2E_GITLAB_IMAGE:-gitlab/gitlab-ce:19.6.0-ce.0@sha256:4fbd963ee9954ffeba81ba6a464ad5702006ded9e291f7fd2cbf073d0ece0b36}
     hostname: gitlab
     shm_size: "256m"
     environment:
