@@ -24,8 +24,8 @@ jobs:
         uses: KineticCafe/actions-dco@e9627100b7f566546e67cde54bfa7d3790ab649b # v4.0.0
         with:
           config: |
-            bot.policy = "allowlist"
-            bot.allow = ["dependabot[bot]"]
+            bots.policy = "none"
+            bots.allow = ["dependabot[bot]"]
 
             [alias-signoffs.aliases]
             "49699333+dependabot[bot]@users.noreply.github.com" = ["support@github.com"]
