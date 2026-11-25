@@ -24,13 +24,13 @@ toolchain:
     actions/attest-build-provenance: 4d101475d8b20a2381f78447822ac1eab6504dd8
     actions/cache: cdf6c1fa76f9f475f3d7449005a359c84ca0f306
     actions/checkout: 3d3c42e5aac5ba805825da76410c181273ba90b1
-    actions/dependency-review-action: a1d282b36b6f3519aa1f3fc636f609c47dddb294
+    actions/dependency-review-action: bbc44d14a204704ccc493733616cd1e93a0321ec
     actions/setup-go: 4b73464bb391d4059bd26b0524d20df3927bd417
     actions/upload-artifact: cf430e030ddbb5b0abf93d22962f4752f3646cd9
     aquasecurity/setup-trivy: 81e514348e19b6112ce2a7e3ecbafe19c1e1f567
     docker/setup-buildx-action: f87e5991a6d7451dcb8d9637bfbc97413f497069
     googleapis/release-please-action: 45996ed1f6d02564a971a2fa1b5860e934307cf7
-    kineticcafe/actions-dco: a52e56727ec21d6cdba26513826e1ae4a752d2fc
+    kineticcafe/actions-dco: e9627100b7f566546e67cde54bfa7d3790ab649b
     sigstore/cosign-installer: 756fe2d284c7292c4e9b62c8a28f1e5629c59532
 
 validation:
